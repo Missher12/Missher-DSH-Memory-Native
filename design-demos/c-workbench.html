@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>记忆 · 双栏工作台</title>
+  <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+  <div class="wrap" style="max-width:920px;">
+    <div class="crumbs">设置 <span>/</span> <b>记忆</b></div>
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">记忆</h1>
+        <p class="page-sub">助手自动捕获的记忆，可在这里审阅、修改或删除。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn ghost" type="button" data-action="theme">☾ 深色</button>
+      </div>
+    </div>
+
+    <div class="workbench">
+      <aside class="side">
+        <section class="card card-pad">
+          <div class="side-metrics">
+            <div class="side-metric"><span>生效</span><b>63</b></div>
+            <div class="side-metric"><span>待审</span><b>4</b></div>
+            <div class="side-metric"><span>总计</span><b>68</b></div>
+            <div class="side-metric"><span>项目</span><b>1</b></div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; margin-top:12px;">
+            <span class="chip on"><span class="dot"></span>自动捕获</span>
+            <span class="chip on"><span class="dot"></span>上下文注入</span>
+          </div>
+        </section>
+
+        <section class="card card-pad">
+          <div class="side-filters">
+            <select class="select"><option>当前项目</option><option>全局</option></select>
+            <select class="select"><option>全部状态</option><option>生效</option><option>待审</option></select>
+            <select class="select"><option>全部类型</option><option>偏好</option><option>事实</option><option>决策</option></select>
+            <label class="search"><span>⌕</span><input placeholder="搜索内容或标签"></label>
+          </div>
+          <div style="display:flex; gap:6px; margin-top:10px;">
+            <button class="btn" type="button" style="flex:1;">刷新</button>
+            <button class="btn" type="button" style="flex:1;">重建索引</button>
+          </div>
+        </section>
+
+        <section class="card card-pad">
+          <div class="side-metric"><span>近 7 天</span><b>67</b></div>
+          <div class="side-metric"><span>平均置信度</span><b>0.82</b></div>
+          <div class="side-metric"><span>连续天数</span><b>2</b></div>
+        </section>
+      </aside>
+
+      <main style="display:flex; flex-direction:column; gap:12px; min-width:0;">
+        <section class="card card-pad" data-activity data-accent-scope>
+          <div class="activity-head">
+            <div class="inline" style="gap:8px;">
+              <h2 class="activity-title">记忆活动</h2>
+              <div class="palette" data-palette>
+                <button class="palette-trigger" type="button"><span class="swatch"><i></i><i></i><i></i></span>配色</button>
+                <div class="palette-menu">
+                  <button data-color="theme" type="button"><i class="dot" style="background:var(--accent)"></i>跟随主题</button>
+                  <button data-color="violet" type="button"><i class="dot" style="background:#8b6ccf"></i>暮紫</button>
+                  <button data-color="blue" type="button"><i class="dot" style="background:#447fcb"></i>湖蓝</button>
+                  <button data-color="teal" type="button"><i class="dot" style="background:#369f97"></i>青绿</button>
+                  <button data-color="amber" type="button"><i class="dot" style="background:#c69749"></i>暖金</button>
+                  <button data-color="rose" type="button"><i class="dot" style="background:#ca758f"></i>烟粉</button>
+                </div>
+              </div>
+            </div>
+            <div class="tabs" role="tablist">
+              <button data-mode="daily" aria-selected="true" role="tab" type="button">每日</button>
+              <button data-mode="weekly" aria-selected="false" role="tab" type="button">每周</button>
+              <button data-mode="cumulative" aria-selected="false" role="tab" type="button">累计</button>
+            </div>
+          </div>
+          <div class="heat" data-heat></div>
+          <div class="months"></div>
+        </section>
+
+        <section class="card" style="padding:0 14px;">
+          <div class="row" style="border-top:0; padding:12px 0 10px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <strong style="font-size:13px; font-weight:600;">记忆列表</strong>
+            <span class="muted" style="font-size:12px;">显示 7 / 68 条</span>
+          </div>
+          <div class="row">
+            <div class="row-head">
+              <span class="kind" data-kind="decision">决策</span>
+              <span class="status" data-status="active">生效</span>
+              <span class="row-meta">0.92 · 10-30</span>
+            </div>
+            <p class="content">记忆采用 JSONL 作为权威存储，进程内 BM25 作为可重建的派生索引。</p>
+            <div class="row-line" style="justify-content:space-between; margin-top:8px;">
+              <div class="tags" style="margin:0;"><span class="tag">存储</span><span class="tag">JSONL</span></div>
+              <div class="row-actions" style="margin:0;"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-head">
+              <span class="kind" data-kind="fact">事实</span>
+              <span class="status" data-status="active">生效</span>
+              <span class="row-meta">0.88 · 10-30</span>
+            </div>
+            <p class="content">该仓库使用 pnpm，并要求 Node 22 以上。</p>
+            <div class="row-line" style="justify-content:space-between; margin-top:8px;">
+              <div class="tags" style="margin:0;"><span class="tag">pnpm</span><span class="tag">node</span></div>
+              <div class="row-actions" style="margin:0;"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-head">
+              <span class="kind" data-kind="preference">偏好</span>
+              <span class="status" data-status="active">生效</span>
+              <span class="row-meta">0.90 · 10-30</span>
+            </div>
+            <p class="content">用户偏好简洁直接的中文回答，能一行表达就不啰嗦。</p>
+            <div class="row-line" style="justify-content:space-between; margin-top:8px;">
+              <div class="tags" style="margin:0;"><span class="tag">偏好</span><span class="tag">风格</span></div>
+              <div class="row-actions" style="margin:0;"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-head">
+              <span class="kind" data-kind="fact">事实</span>
+              <span class="status" data-status="candidate">待审</span>
+              <span class="row-meta">0.62 · 10-31</span>
+            </div>
+            <p class="content">长对话按消息分块抽取，缓冲超 20k 字符时增量抽取。</p>
+            <div class="row-line" style="justify-content:space-between; margin-top:8px;">
+              <div class="tags" style="margin:0;"><span class="tag">长对话</span><span class="tag">捕获</span></div>
+              <div class="row-actions" style="margin:0;"><button class="btn primary sm" type="button">批准</button><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">删除</button></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="demo.js"></script>
+</body>
+</html>

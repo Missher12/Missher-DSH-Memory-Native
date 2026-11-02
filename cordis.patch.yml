@@ -1,0 +1,11 @@
+# Host-only rows for the DSH memory plugin. The client half is added together
+# with the settings panel (M4); until then this bundle activates the Host plugin
+# only, which captures memories and injects them at agent/pre-step.
+- insert:
+    - id: dsh-memory
+      name: '@missher/dsh-memory'
+      config:
+        capture:
+          enabled: true
+        inject:
+          enabled: true

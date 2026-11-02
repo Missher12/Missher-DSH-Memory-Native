@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>记忆 · 紧凑单行</title>
+  <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="crumbs">设置 <span>/</span> <b>记忆</b></div>
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">记忆</h1>
+        <p class="page-sub">助手自动捕获的记忆，可在这里审阅、修改或删除。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn ghost" type="button" data-action="theme">☾ 深色</button>
+      </div>
+    </div>
+
+    <div class="inline" style="align-items:stretch; gap:10px; margin-bottom:16px;">
+      <dl class="card metrics grow" style="margin:0;">
+        <div class="metric"><dt>生效</dt><dd>63</dd></div>
+        <div class="metric"><dt>待审</dt><dd>4</dd></div>
+        <div class="metric"><dt>总计</dt><dd>68</dd></div>
+        <div class="metric"><dt>项目</dt><dd>1</dd></div>
+      </dl>
+      <div style="display:flex; flex-direction:column; justify-content:center; gap:6px; flex:0 0 auto;">
+        <span class="chip on"><span class="dot"></span>自动捕获</span>
+        <span class="chip on"><span class="dot"></span>上下文注入</span>
+      </div>
+    </div>
+
+    <section class="card card-pad" data-activity data-accent-scope style="margin-bottom:12px;">
+      <div class="activity-head">
+        <div class="inline" style="gap:8px;">
+          <h2 class="activity-title">记忆活动</h2>
+          <div class="palette" data-palette>
+            <button class="palette-trigger" type="button">
+              <span class="swatch"><i></i><i></i><i></i></span>配色
+            </button>
+            <div class="palette-menu">
+              <button data-color="theme" type="button"><i class="dot" style="background:var(--accent)"></i>跟随主题</button>
+              <button data-color="violet" type="button"><i class="dot" style="background:#8b6ccf"></i>暮紫</button>
+              <button data-color="blue" type="button"><i class="dot" style="background:#447fcb"></i>湖蓝</button>
+              <button data-color="teal" type="button"><i class="dot" style="background:#369f97"></i>青绿</button>
+              <button data-color="amber" type="button"><i class="dot" style="background:#c69749"></i>暖金</button>
+              <button data-color="rose" type="button"><i class="dot" style="background:#ca758f"></i>烟粉</button>
+            </div>
+          </div>
+        </div>
+        <div class="tabs" role="tablist">
+          <button data-mode="daily" aria-selected="true" role="tab" type="button">每日</button>
+          <button data-mode="weekly" aria-selected="false" role="tab" type="button">每周</button>
+          <button data-mode="cumulative" aria-selected="false" role="tab" type="button">累计</button>
+        </div>
+      </div>
+      <div class="heat" data-heat></div>
+      <div class="months"></div>
+      <dl class="insights">
+        <div><dt>连续天数</dt><dd>2</dd></div>
+        <div><dt>活跃天数</dt><dd>112</dd></div>
+        <div><dt>近 7 天</dt><dd>67</dd></div>
+        <div><dt>平均置信度</dt><dd>0.82</dd></div>
+      </dl>
+    </section>
+
+    <div class="toolbar" style="margin-bottom:4px;">
+      <select class="select"><option>当前项目</option><option>全局</option></select>
+      <select class="select"><option>全部状态</option><option>生效</option><option>待审</option></select>
+      <select class="select"><option>全部类型</option><option>偏好</option><option>事实</option><option>决策</option><option>片段</option></select>
+      <label class="search grow"><span>⌕</span><input placeholder="搜索内容或标签"></label>
+      <button class="btn" type="button">刷新</button>
+      <button class="btn" type="button">重建索引</button>
+    </div>
+    <p class="count">显示 7 / 68 条</p>
+
+    <div class="card" style="padding:0 14px;">
+      <div class="row">
+        <div class="row-head">
+          <span class="kind" data-kind="decision">决策</span>
+          <span class="status" data-status="active">生效</span>
+          <span class="row-content">记忆采用 JSONL 作为权威存储，进程内 BM25 作为可重建的派生索引。</span>
+          <span class="row-meta">0.92 · 10-30</span>
+          <span class="row-actions inline-actions"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></span>
+        </div>
+        <div class="tags"><span class="tag">存储</span><span class="tag">JSONL</span></div>
+      </div>
+      <div class="row">
+        <div class="row-head">
+          <span class="kind" data-kind="fact">事实</span>
+          <span class="status" data-status="active">生效</span>
+          <span class="row-content">该仓库使用 pnpm，并要求 Node 22 以上。</span>
+          <span class="row-meta">0.88 · 10-30</span>
+          <span class="row-actions inline-actions"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></span>
+        </div>
+        <div class="tags"><span class="tag">pnpm</span><span class="tag">node</span></div>
+      </div>
+      <div class="row">
+        <div class="row-head">
+          <span class="kind" data-kind="fact">事实</span>
+          <span class="status" data-status="active">生效</span>
+          <span class="row-content">面板 RPC 走手写 Typert descriptor，不需要 codegen。</span>
+          <span class="row-meta">0.80 · 10-30</span>
+          <span class="row-actions inline-actions"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></span>
+        </div>
+        <div class="tags"><span class="tag">typert</span></div>
+      </div>
+      <div class="row">
+        <div class="row-head">
+          <span class="kind" data-kind="preference">偏好</span>
+          <span class="status" data-status="active">生效</span>
+          <span class="row-content">用户偏好简洁直接的中文回答，能一行表达就不啰嗦。</span>
+          <span class="row-meta">0.90 · 10-30</span>
+          <span class="row-actions inline-actions"><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">归档</button><button class="btn ghost sm" type="button">删除</button></span>
+        </div>
+        <div class="tags"><span class="tag">偏好</span><span class="tag">风格</span></div>
+      </div>
+      <div class="row">
+        <div class="row-head">
+          <span class="kind" data-kind="fact">事实</span>
+          <span class="status" data-status="candidate">待审</span>
+          <span class="row-content">长对话按消息分块抽取，缓冲超 20k 字符时增量抽取。</span>
+          <span class="row-meta">0.62 · 10-31</span>
+          <span class="row-actions inline-actions"><button class="btn ghost sm" type="button">批准</button><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">删除</button></span>
+        </div>
+        <div class="tags"><span class="tag">长对话</span><span class="tag">捕获</span></div>
+      </div>
+      <div class="row">
+        <div class="row-head">
+          <span class="kind" data-kind="decision">决策</span>
+          <span class="status" data-status="candidate">待审</span>
+          <span class="row-content">近重复语句使用 Jaccard ≥ 0.9 合并并提升置信度。</span>
+          <span class="row-meta">0.58 · 10-31</span>
+          <span class="row-actions inline-actions"><button class="btn ghost sm" type="button">批准</button><button class="btn ghost sm" type="button">编辑</button><button class="btn ghost sm" type="button">删除</button></span>
+        </div>
+        <div class="tags"><span class="tag">去重</span><span class="tag">阈值</span></div>
+      </div>
+    </div>
+  </div>
+  <script src="demo.js"></script>
+</body>
+</html>

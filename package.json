@@ -1,0 +1,62 @@
+{
+  "name": "@missher/dsh-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first long-term memory for DeepSeek Harness: automatic capture, context injection and a native management panel.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Missher12/Missher-DSH-Memory-Native.git"
+  },
+  "homepage": "https://github.com/Missher12/Missher-DSH-Memory-Native#readme",
+  "bugs": {
+    "url": "https://github.com/Missher12/Missher-DSH-Memory-Native/issues"
+  },
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "^0.2.1-rc.4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-typert-protocol": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "bench": "node scripts/bench-recall.mjs",
+    "eval": "node scripts/eval-recall.mjs"
+  }
+}

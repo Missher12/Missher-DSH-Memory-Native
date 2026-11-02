@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆设置 · 设计预览</title>
+<style>
+  :root {
+    --bg: #f3f4f6;
+    --card: #ffffff;
+    --card-border: rgba(17, 24, 39, .10);
+    --text: #17181a;
+    --muted: #6b7280;
+    --faint: #9aa1ab;
+    --accent: #2f6df6;
+    --accent-ink: #ffffff;
+    --track: rgba(17, 24, 39, .16);
+    --hover: rgba(17, 24, 39, .045);
+    --line: rgba(17, 24, 39, .08);
+    --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .04);
+    --toast-bg: rgba(23, 24, 26, .92);
+    --toast-ink: #ffffff;
+    --ring: rgba(47, 109, 246, .32);
+  }
+  [data-theme="dark"] {
+    --bg: #141517;
+    --card: #1d1e21;
+    --card-border: rgba(255, 255, 255, .10);
+    --text: #eceef1;
+    --muted: #9aa0a8;
+    --faint: #7a8089;
+    --accent: #6b9bff;
+    --accent-ink: #0e1526;
+    --track: rgba(255, 255, 255, .22);
+    --hover: rgba(255, 255, 255, .06);
+    --line: rgba(255, 255, 255, .08);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+    --toast-bg: rgba(240, 242, 245, .96);
+    --toast-ink: #17181a;
+    --ring: rgba(107, 155, 255, .4);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    justify-content: center;
+    padding: 28px 24px 64px;
+  }
+  .demo { width: 100%; max-width: 900px; display: flex; flex-direction: column; align-items: center; }
+  .demo-bar {
+    width: 100%; max-width: 760px; display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 16px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .demo-title { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+  .demo-title span { color: var(--faint); font-weight: 400; margin-left: 8px; font-size: 12px; }
+  .demo-tools { display: flex; align-items: center; gap: 8px; }
+  .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--hover); }
+  .seg button {
+    border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px;
+    padding: 3px 9px; border-radius: 6px; cursor: pointer;
+  }
+  .seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(16,24,40,.10); }
+  [data-theme="dark"] .seg button.on { background: rgba(255,255,255,.10); box-shadow: none; }
+  .ghost {
+    border: 1px solid var(--card-border); background: var(--card); color: var(--muted);
+    font: inherit; font-size: 11px; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+  }
+  .ghost:hover { color: var(--text); }
+  .frame {
+    width: 735px; max-width: 100%;
+    container-type: inline-size;
+    transition: width .18s ease;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .card-head h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 22px; letter-spacing: -.01em; }
+  .sub { margin: 3px 0 0; color: var(--faint); font-size: 11.5px; line-height: 16px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    height: 22px; padding: 0 9px; border-radius: 999px;
+    background: var(--hover); color: var(--muted); font-size: 11px; white-space: nowrap;
+  }
+  .badge i { width: 6px; height: 6px; border-radius: 50%; background: #34a26b; }
+  .badge.off i { background: var(--faint); }
+  .group { margin-top: 0; }
+  .card-head + .group { margin-top: 20px; }
+  .group + .group { padding-top: 22px; border-top: 1px solid var(--line); }
+  .group h3 {
+    margin: 0 0 2px; color: var(--faint); font-size: 11px; font-weight: 500;
+    letter-spacing: .02em; line-height: 16px;
+  }
+  .row {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    min-height: 48px;
+  }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .label { font-size: 13.5px; color: var(--text); min-width: 0; }
+  .switch {
+    position: relative; flex: 0 0 auto; width: 40px; height: 22px; padding: 0; border: 0;
+    border-radius: 999px; background: var(--track); cursor: pointer;
+    transition: background .18s ease;
+  }
+  .switch .knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 2px rgba(16,24,40,.24);
+    transition: transform .18s cubic-bezier(.3,.7,.3,1);
+  }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .switch[aria-checked="true"] .knob { transform: translateX(18px); }
+  .switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .num {
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+    height: 32px; padding: 0 9px 0 2px; border: 1px solid var(--card-border);
+    border-radius: 8px; background: var(--card);
+  }
+  .num:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .num input {
+    width: 66px; height: 30px; border: 0; background: transparent; color: var(--text);
+    font: inherit; font-size: 13px; text-align: right; outline: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .num em { color: var(--faint); font-style: normal; font-size: 11px; margin-left: 5px; }
+  .btns { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+  .btn {
+    height: 32px; padding: 0 12px; border: 1px solid var(--card-border); border-radius: 8px;
+    background: var(--card); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .btn:hover { background: var(--hover); }
+  .btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+  .card-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: 0; padding-top: 20px; border-top: 1px solid var(--line);
+  }
+  .state { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .state i { width: 6px; height: 6px; border-radius: 50%; background: #34a26b; }
+  .state.dirty i { background: #d97706; }
+  .primary {
+    height: 32px; padding: 0 16px; border: 0; border-radius: 8px;
+    background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 500;
+    cursor: pointer;
+  }
+  .primary:disabled { opacity: .45; cursor: default; }
+  .primary:not(:disabled):hover { filter: brightness(1.04); }
+  .primary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 8px);
+    max-width: calc(100vw - 48px); padding: 9px 14px; border-radius: 9px;
+    background: var(--toast-bg); color: var(--toast-ink); font-size: 12px;
+    box-shadow: 0 8px 24px rgba(16,24,40,.18);
+    opacity: 0; pointer-events: none; transition: opacity .16s ease, transform .16s ease;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  @container (max-width: 520px) {
+    .card { padding: 16px; border-radius: 12px; }
+    .card-head { gap: 10px; }
+    .row { gap: 12px; }
+    .num { height: 32px; }
+    .btns { max-width: 62%; }
+  }
+  @container (max-width: 430px) {
+    .card { padding: 14px; }
+    .row { min-height: 46px; }
+    .btns { gap: 6px; }
+    .btn { height: 30px; padding: 0 10px; }
+    .primary { height: 32px; padding: 0 14px; }
+  }
+</style>
+</head>
+<body>
+  <div class="demo">
+    <header class="demo-bar">
+      <div class="demo-title">记忆设置<span>重造预览 · 独立 demo</span></div>
+      <div class="demo-tools">
+        <div class="seg" role="group" aria-label="预览宽度">
+          <button type="button" data-width="735" class="on">735</button>
+          <button type="button" data-width="520">520</button>
+          <button type="button" data-width="430">430</button>
+        </div>
+        <button type="button" class="ghost" id="theme">深色</button>
+      </div>
+    </header>
+
+    <div class="frame" id="frame">
+      <section class="card" aria-label="记忆设置">
+        <header class="card-head">
+          <div>
+            <h2>记忆设置</h2>
+            <p class="sub" id="maint-sub">上次自维护 · 今天 09:12 · 归档 1 条 · 清理 0 份备份</p>
+          </div>
+          <span class="badge" id="badge"><i></i><span id="badge-text">自动维护中</span></span>
+        </header>
+
+        <div class="group">
+          <h3>捕获与注入</h3>
+          <div class="row">
+            <span class="label">自动捕获</span>
+            <button type="button" class="switch" role="switch" aria-checked="true" aria-label="自动捕获" data-key="capture"><span class="knob"></span></button>
+          </div>
+          <div class="row">
+            <span class="label">上下文注入</span>
+            <button type="button" class="switch" role="switch" aria-checked="true" aria-label="上下文注入" data-key="inject"><span class="knob"></span></button>
+          </div>
+          <div class="row">
+            <span class="label">注入预算</span>
+            <span class="num"><input id="budget" type="number" min="100" max="8000" step="50" value="600" aria-label="注入预算 token"><em>token</em></span>
+          </div>
+        </div>
+
+        <div class="group">
+          <h3>保留与维护</h3>
+          <div class="row">
+            <span class="label">片段保留</span>
+            <span class="num"><input id="retention" type="number" min="0" max="36500" step="10" value="90" aria-label="片段保留天数"><em>天</em></span>
+          </div>
+          <div class="row">
+            <span class="label">自维护</span>
+            <button type="button" class="switch" role="switch" aria-checked="true" aria-label="自维护" data-key="maintenance"><span class="knob"></span></button>
+          </div>
+        </div>
+
+        <div class="group">
+          <h3>数据</h3>
+          <div class="row">
+            <span class="label">导出、导入与备份</span>
+            <div class="btns">
+              <button type="button" class="btn" id="export">导出</button>
+              <button type="button" class="btn" id="import">导入</button>
+              <button type="button" class="btn" id="backup">立即备份</button>
+            </div>
+          </div>
+        </div>
+
+        <footer class="card-foot">
+          <div class="state" id="state"><i></i><span id="state-text">已保存 · 11:20</span></div>
+          <button type="button" class="primary" id="save" disabled>保存设置</button>
+        </footer>
+      </section>
+    </div>
+  </div>
+
+  <input type="file" id="file" accept="application/json" hidden>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+  var KEY = 'dsh-memory-settings-demo-v1';
+  var saved = { capture: true, inject: true, budget: 600, retention: 90, maintenance: true };
+  var state = Object.assign({}, saved);
+  var savedAt = null;
+
+  var frame = document.getElementById('frame');
+  var saveBtn = document.getElementById('save');
+  var stateBox = document.getElementById('state');
+  var stateText = document.getElementById('state-text');
+  var badge = document.getElementById('badge');
+  var badgeText = document.getElementById('badge-text');
+  var budget = document.getElementById('budget');
+  var retention = document.getElementById('retention');
+  var toast = document.getElementById('toast');
+  var toastTimer = null;
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        saved = {
+          capture: parsed.capture !== false,
+          inject: parsed.inject !== false,
+          budget: clamp(parsed.budget, 100, 8000, 600),
+          retention: clamp(parsed.retention, 0, 36500, 90),
+          maintenance: parsed.maintenance !== false
+        };
+        savedAt = typeof parsed.savedAt === 'string' ? parsed.savedAt : null;
+        state = Object.assign({}, saved);
+      }
+    } catch (error) { /* demo: corrupt storage is ignored */ }
+  }
+
+  function clamp(value, min, max, fallback) {
+    var number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(number)));
+  }
+
+  function timeNow() {
+    var now = new Date();
+    return String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  }
+
+  function isDirty() {
+    return state.capture !== saved.capture || state.inject !== saved.inject ||
+      state.budget !== saved.budget || state.retention !== saved.retention ||
+      state.maintenance !== saved.maintenance;
+  }
+
+  function render() {
+    document.querySelectorAll('.switch').forEach(function (node) {
+      var key = node.dataset.key;
+      node.setAttribute('aria-checked', state[key] ? 'true' : 'false');
+    });
+    budget.value = String(state.budget);
+    retention.value = String(state.retention);
+    var dirty = isDirty();
+    saveBtn.disabled = !dirty;
+    saveBtn.textContent = '保存设置';
+    stateBox.classList.toggle('dirty', dirty);
+    stateText.textContent = dirty
+      ? '有未保存的更改'
+      : (savedAt ? '已保存 · ' + savedAt : '已保存');
+    badge.classList.toggle('off', !state.maintenance);
+    badgeText.textContent = state.maintenance ? '自动维护中' : '自维护已关闭';
+    document.getElementById('maint-sub').textContent = state.maintenance
+      ? '上次自维护 · 今天 09:12 · 归档 1 条 · 清理 0 份备份'
+      : '自维护已关闭 · 历史备份仍保留在本地';
+  }
+
+  function showToast(text) {
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 2400);
+  }
+
+  document.querySelectorAll('.switch').forEach(function (node) {
+    node.addEventListener('click', function () {
+      var key = node.dataset.key;
+      state[key] = !state[key];
+      render();
+    });
+  });
+
+  [budget, retention].forEach(function (input) {
+    input.addEventListener('input', function () {
+      state[input === budget ? 'budget' : 'retention'] = input.value === '' ? 0 : Number(input.value);
+      render();
+    });
+    input.addEventListener('blur', function () {
+      if (input === budget) state.budget = clamp(input.value, 100, 8000, 600);
+      else state.retention = clamp(input.value, 0, 36500, 90);
+      render();
+    });
+  });
+
+  saveBtn.addEventListener('click', function () {
+    if (saveBtn.disabled) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+    setTimeout(function () {
+      saved = Object.assign({}, state);
+      savedAt = timeNow();
+      try {
+        localStorage.setItem(KEY, JSON.stringify(Object.assign({}, saved, { savedAt: savedAt })));
+      } catch (error) { /* demo: storage may be unavailable */ }
+      render();
+      showToast('设置已保存');
+    }, 520);
+  });
+
+  document.querySelectorAll('.seg button').forEach(function (node) {
+    node.addEventListener('click', function () {
+      document.querySelectorAll('.seg button').forEach(function (peer) { peer.classList.remove('on'); });
+      node.classList.add('on');
+      frame.style.width = node.dataset.width + 'px';
+    });
+  });
+
+  document.getElementById('theme').addEventListener('click', function () {
+    var root = document.documentElement;
+    var dark = root.getAttribute('data-theme') !== 'dark';
+    root.setAttribute('data-theme', dark ? 'dark' : 'light');
+    this.textContent = dark ? '浅色' : '深色';
+  });
+
+  document.getElementById('export').addEventListener('click', function () {
+    var payload = {
+      schemaVersion: 2,
+      exportedAt: new Date().toISOString(),
+      settings: Object.assign({}, state),
+      memories: [
+        { id: 'mem_demo_1', kind: 'preference', content: '用户偏好简洁直接的表达方式' },
+        { id: 'mem_demo_2', kind: 'fact', content: '这个仓库使用 pnpm 并要求 Node 24 以上' }
+      ]
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'dsh-memory-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    showToast('已导出 2 条记忆（示例）');
+  });
+
+  document.getElementById('import').addEventListener('click', function () {
+    document.getElementById('file').click();
+  });
+  document.getElementById('file').addEventListener('change', function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) return;
+    file.text().then(function (text) {
+      var count = 0;
+      try {
+        var parsed = JSON.parse(text);
+        count = Array.isArray(parsed.memories) ? parsed.memories.length : 0;
+      } catch (error) {
+        showToast('导入失败：不是有效的 JSON');
+        return;
+      }
+      showToast('已导入 ' + count + ' 条（示例，未写入真实库）');
+    });
+    event.target.value = '';
+  });
+
+  document.getElementById('backup').addEventListener('click', function () {
+    showToast('备份已创建 · backups/memories-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
+  });
+
+  load();
+  render();
+})();
+</script>
+</body>
+</html>

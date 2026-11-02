@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>记忆面板 · 设计候选</title>
+  <link rel="stylesheet" href="demo.css">
+  <style>
+    .wrap { max-width: 1080px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+    .demo-card { overflow: hidden; }
+    .demo-card header { padding: 14px 16px 10px; border-bottom: .5px solid var(--border); }
+    .demo-card h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .demo-card p { margin: 4px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+    .demo-card .shot { display: block; background: var(--bg); }
+    .demo-card .shot img { display: block; width: 100%; height: auto; }
+    .thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; border-top: .5px solid var(--border); }
+    .thumbs img { display: block; width: 100%; border-radius: 6px; border: .5px solid var(--border); }
+    .demo-card footer { display: flex; align-items: center; justify-content: space-between; padding: 9px 16px; border-top: .5px solid var(--border); }
+    .demo-card footer a { color: var(--accent); text-decoration: none; font-size: 12px; }
+    .demo-card footer a:hover { text-decoration: underline; }
+    .tag-best { color: var(--success); background: var(--success-soft); border-radius: 5px; padding: 1px 6px; font-size: 10.5px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">记忆面板 · 三个设计候选</h1>
+        <p class="page-sub">同一份数据（68 条记忆、63 生效）的三种排布。示意数据，配色与浅深色可切换。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn ghost" type="button" data-action="theme">☾ 深色</button>
+      </div>
+    </div>
+    <div class="grid">
+      <article class="card demo-card">
+        <header>
+          <h2>A · 紧凑单行 <span class="tag-best">推荐</span></h2>
+          <p>指标与开关同一行，过滤工具栏一行，列表条目单行展示，最省纵向空间。</p>
+        </header>
+        <a class="shot" href="a-compact.html" target="_blank" rel="noreferrer"><img src="shots/a-light.png" alt="紧凑单行布局"></a>
+        <footer><span class="muted">760px 内容宽</span><a href="a-compact.html" target="_blank" rel="noreferrer">打开交互版 →</a></footer>
+      </article>
+      <article class="card demo-card">
+        <header>
+          <h2>B · 卡片分区</h2>
+          <p>每个区域独立成卡，列表条目带类型色条，信息层级更清晰、更有呼吸感。</p>
+        </header>
+        <a class="shot" href="b-cards.html" target="_blank" rel="noreferrer"><img src="shots/b-light.png" alt="卡片分区布局"></a>
+        <footer><span class="muted">760px 内容宽</span><a href="b-cards.html" target="_blank" rel="noreferrer">打开交互版 →</a></footer>
+      </article>
+      <article class="card demo-card">
+        <header>
+          <h2>C · 双栏工作台</h2>
+          <p>左侧固定指标与筛选，右侧活动与列表；适合更宽的设置页，一屏看到更多。</p>
+        </header>
+        <a class="shot" href="c-workbench.html" target="_blank" rel="noreferrer"><img src="shots/c-light.png" alt="双栏工作台布局"></a>
+        <footer><span class="muted">920px 内容宽</span><a href="c-workbench.html" target="_blank" rel="noreferrer">打开交互版 →</a></footer>
+      </article>
+    </div>
+    <p class="hint" style="margin-top:16px;">说明：热力图使用示意数据（约 112 个活跃日），便于比较视觉；真实面板在数据稀少时会显示「随记忆积累逐渐点亮」提示。</p>
+  </div>
+  <script src="demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆面板 · 指标区方案 Demo</title>
+<style>
+  :root{
+    --bg:#fff; --panel:#fff; --layer1:#fafafa; --layer2:#f2f3f5; --layer3:#fbfbfc;
+    --border:rgba(20,22,26,.10); --border2:rgba(20,22,26,.14);
+    --text:#1f2328; --text2:#6b7280; --text3:#9ca0a6;
+    --brand:#2f6df6; --success:#22c55e; --success-bg:rgba(34,197,94,.10);
+    --pref:#2f6df6; --fact:#0d7f8c; --dec:#6d4aff; --epi:#b7791f;
+    --shadow:0 1px 2px rgba(16,24,40,.04);
+    --card-radius:12px; --card-border:.5px solid var(--border2);
+    --card-bg:var(--layer3); --card-pad:14px; --gap:14px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Segoe UI",sans-serif;
+  }
+  html[data-theme="dark"]{
+    --bg:#17181a; --panel:#1b1c1f; --layer1:#1f2023; --layer2:#26272b; --layer3:#202124;
+    --border:rgba(255,255,255,.08); --border2:rgba(255,255,255,.12);
+    --text:#e8e9eb; --text2:#9ca0a6; --text3:#7f848a;
+    --brand:#7a8cff; --success:#4ade80; --success-bg:rgba(74,222,128,.12);
+    --pref:#7a8cff; --fact:#4fd1c5; --dec:#a78bfa; --epi:#e0b056;
+    --shadow:0 1px 2px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased}
+  .topbar{max-width:820px;margin:0 auto;padding:16px 24px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .topbar h1{font-size:14px;font-weight:600;margin:0 auto 0 0}
+  .btn{font:inherit;font-size:12px;line-height:20px;padding:4px 10px;border-radius:7px;border:.5px solid var(--border2);background:var(--panel);color:var(--text);cursor:pointer}
+  .btn[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+  .wrap{max-width:820px;margin:0 auto;padding:16px 24px 40px}
+  .panel{display:flex;flex-direction:column;gap:var(--gap)}
+  .page-head h2{margin:0;font-size:16px;font-weight:500;line-height:24px}
+  .page-head p{margin:4px 0 0;font-size:14px;line-height:22px;color:var(--text3)}
+  .card{background:var(--card-bg);border:var(--card-border);border-radius:var(--card-radius);padding:var(--card-pad);box-shadow:var(--shadow)}
+  .hero{display:flex;flex-direction:column;gap:10px}
+  .metric{display:flex;align-items:baseline;gap:6px;min-width:0;white-space:nowrap}
+  .metric b{font-size:24px;font-weight:600;letter-spacing:-.02em;line-height:32px;font-variant-numeric:tabular-nums}
+  .metric span{color:var(--text3);font-size:12px;line-height:18px}
+  .metric.sm b{font-size:15px;line-height:20px;font-variant-numeric:tabular-nums}
+  .metric.sm span{font-size:11px;line-height:16px}
+  .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:baseline}
+  .hero-a .insights{padding-top:10px;border-top:.5px solid var(--border2)}
+  .hero-b{flex-direction:row;align-items:center;gap:14px}
+  .hero-b .grid4{flex:1 1 auto}
+  .hero-b .divider{width:.5px;align-self:stretch;background:var(--border2);flex:0 0 auto}
+  .hero-b .grid4.sm{flex:0 0 auto;grid-template-columns:repeat(4,auto);gap:16px}
+  .hero-c{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:var(--gap);background:none;border:0;padding:0;box-shadow:none}
+  .hero-c .card{display:flex;flex-direction:column;gap:10px;justify-content:center}
+  .hero-c .insight-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+  .hero-a,.hero-b,.hero-c{display:none !important}
+  body[data-variant="a"] .hero-a{display:flex !important}
+  body[data-variant="b"] .hero-b{display:flex !important}
+  body[data-variant="c"] .hero-c{display:grid !important}
+  .activity-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+  .activity-title{display:flex;align-items:center;gap:10px}
+  .activity-title h3{margin:0;font-size:13px;font-weight:500;line-height:20px}
+  .palette{display:inline-flex;align-items:center;gap:5px;color:var(--text3);font-size:11px;line-height:16px;padding:4px 6px;border-radius:6px}
+  .swatch{display:inline-flex;align-items:center;gap:2px}
+  .swatch i{width:4px;height:11px;border-radius:2px;background:var(--brand)}
+  .swatch i:first-child{opacity:.35}.swatch i:nth-child(2){opacity:.65}
+  .tabs{display:inline-flex;gap:2px}
+  .tabs button{font:inherit;font-size:11px;line-height:18px;padding:3px 7px;border:0;border-radius:5px;background:0 0;color:var(--text3);cursor:pointer}
+  .tabs button[aria-selected="true"]{background:var(--layer2);color:var(--text)}
+  .heatmap{display:grid;grid-template-rows:repeat(7,minmax(0,1fr));grid-template-columns:repeat(53,minmax(0,1fr));grid-auto-flow:column;gap:3px}
+  .cell{width:100%;aspect-ratio:1;border-radius:2px;background:var(--layer2)}
+  .cell[data-level="1"]{background:color-mix(in srgb,var(--brand) 22%,transparent)}
+  .cell[data-level="2"]{background:color-mix(in srgb,var(--brand) 38%,transparent)}
+  .cell[data-level="3"]{background:color-mix(in srgb,var(--brand) 60%,transparent)}
+  .cell[data-level="4"]{background:color-mix(in srgb,var(--brand) 82%,transparent)}
+  .cell[data-level="5"]{background:var(--brand)}
+  .months{display:grid;grid-template-columns:repeat(53,minmax(0,1fr));gap:3px;margin-top:7px;font-size:9px;line-height:14px;color:var(--text3)}
+  .months span{white-space:nowrap}
+  .profile-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+  .profile-head h3{margin:0;font-size:13px;font-weight:500;line-height:20px}
+  .count{color:var(--text3);font-size:11px}
+  .profile-list{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+  .profile-item{display:flex;align-items:center;gap:8px;min-width:0}
+  .kind{flex:0 0 auto;white-space:nowrap;font-size:11px;line-height:18px;padding:0 5px;border-radius:5px;color:var(--pref);background:color-mix(in srgb,var(--pref) 12%,transparent)}
+  .kind[data-kind="decision"]{color:var(--dec);background:color-mix(in srgb,var(--dec) 12%,transparent)}
+  .profile-text{flex:1 1 auto;min-width:0;font-size:13px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .profile-meta{flex:0 0 auto;color:var(--text3);font-size:11.5px;white-space:nowrap}
+  .toolbar{display:grid;grid-template-columns:auto auto auto minmax(0,1.6fr) auto auto;gap:8px;align-items:end}
+  .field{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .field span{font-size:11px;color:var(--text3);line-height:16px}
+  .control{height:28px;border:.5px solid var(--border2);border-radius:7px;background:var(--bg);color:var(--text);font:inherit;font-size:12px;padding:0 8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .control::after{content:"⌄";color:var(--text3)}
+  .search{height:28px;border:.5px solid var(--border2);border-radius:7px;display:flex;align-items:center;padding:0 9px;color:var(--text3);font-size:12px;background:var(--bg)}
+  .primary{height:28px;border:0;border-radius:7px;background:var(--brand);color:#fff;font:inherit;font-size:12px;padding:0 12px;cursor:pointer}
+  .tabrow{display:flex;align-items:center;gap:6px;margin-top:2px}
+  .chipbtn{font:inherit;font-size:12px;line-height:20px;padding:3px 9px;border-radius:999px;border:.5px solid var(--border2);background:var(--panel);color:var(--text2);cursor:pointer}
+  .chipbtn[aria-selected="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+  .chipbtn em{font-style:normal;font-size:11px;opacity:.7;margin-left:4px}
+  .list{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+  .row{background:var(--card-bg);border:var(--card-border);border-radius:var(--card-radius);padding:12px 14px;position:relative;overflow:hidden}
+  .row::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--dec)}
+  .row[data-kind="preference"]::before{background:var(--pref)}
+  .row[data-kind="fact"]::before{background:var(--fact)}
+  .row-head{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .status{font-size:11px;line-height:18px;padding:0 5px;border-radius:5px;color:var(--success);background:var(--success-bg)}
+  .row-meta{margin-left:auto;color:var(--text3);font-size:11px;display:flex;gap:10px}
+  .row-body{font-size:13px;line-height:1.6}
+  .row-foot{display:flex;align-items:center;gap:6px;margin-top:8px}
+  .tag{font-size:11px;line-height:18px;padding:0 6px;border-radius:5px;color:var(--text2);background:var(--layer2)}
+  .row-foot .acts{margin-left:auto;display:flex;gap:6px}
+  .ghost{font:inherit;font-size:12px;line-height:20px;padding:2px 8px;border:.5px solid var(--border2);border-radius:6px;background:var(--panel);color:var(--text2);cursor:pointer}
+  .note{color:var(--text3);font-size:11px;line-height:18px;margin:10px 0 0}
+  @media (max-width:560px){
+    .grid4{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:8px}
+    .hero-b{flex-wrap:wrap}
+    .hero-c{grid-template-columns:1fr}
+    .toolbar{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .toolbar .search{grid-column:1/-1}
+  }
+</style>
+</head>
+<body data-variant="a">
+  <div class="topbar">
+    <h1>记忆面板 · 指标区方案</h1>
+    <button class="btn" data-v="a" aria-pressed="true">A 双行 4+4</button>
+    <button class="btn" data-v="b" aria-pressed="false">B 单行 8</button>
+    <button class="btn" data-v="c" aria-pressed="false">C 主次分卡</button>
+    <button class="btn" id="theme">深色</button>
+  </div>
+  <div class="wrap">
+    <div class="panel">
+      <div class="page-head">
+        <h2>长期记忆</h2>
+        <p>助手自动捕获的记忆，可在这里审阅、修改或删除。</p>
+      </div>
+
+      <!-- A: two rows -->
+      <section class="card hero hero-a">
+        <div class="grid4">
+          <div class="metric"><b>112</b><span>生效</span></div>
+          <div class="metric"><b>10</b><span>待审</span></div>
+          <div class="metric"><b>123</b><span>总计</span></div>
+          <div class="metric"><b>1</b><span>项目</span></div>
+        </div>
+        <div class="grid4 insights">
+          <div class="metric sm"><b>2</b><span>连续天数</span></div>
+          <div class="metric sm"><b>2</b><span>活跃天数</span></div>
+          <div class="metric sm"><b>117</b><span>近 7 天</span></div>
+          <div class="metric sm"><b>0.81</b><span>平均置信度</span></div>
+        </div>
+      </section>
+
+      <!-- B: one row -->
+      <section class="card hero hero-b">
+        <div class="grid4">
+          <div class="metric"><b>112</b><span>生效</span></div>
+          <div class="metric"><b>10</b><span>待审</span></div>
+          <div class="metric"><b>123</b><span>总计</span></div>
+          <div class="metric"><b>1</b><span>项目</span></div>
+        </div>
+        <i class="divider"></i>
+        <div class="grid4 sm">
+          <div class="metric sm"><b>2</b><span>连续天数</span></div>
+          <div class="metric sm"><b>2</b><span>活跃天数</span></div>
+          <div class="metric sm"><b>117</b><span>近 7 天</span></div>
+          <div class="metric sm"><b>0.81</b><span>平均置信度</span></div>
+        </div>
+      </section>
+
+      <!-- C: split cards -->
+      <section class="hero hero-c">
+        <div class="card">
+          <div class="grid4">
+            <div class="metric"><b>112</b><span>生效</span></div>
+            <div class="metric"><b>10</b><span>待审</span></div>
+            <div class="metric"><b>123</b><span>总计</span></div>
+            <div class="metric"><b>1</b><span>项目</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="insight-grid">
+            <div class="metric sm"><b>2</b><span>连续天数</span></div>
+            <div class="metric sm"><b>2</b><span>活跃天数</span></div>
+            <div class="metric sm"><b>117</b><span>近 7 天</span></div>
+            <div class="metric sm"><b>0.81</b><span>平均置信度</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="activity-head">
+          <div class="activity-title">
+            <h3>记忆活动</h3>
+            <span class="palette"><span class="swatch"><i></i><i></i><i></i></span>配色</span>
+          </div>
+          <div class="tabs"><button aria-selected="true">每日</button><button>每周</button><button>累计</button></div>
+        </div>
+        <div class="heatmap" id="heatmap"></div>
+        <div class="months" id="months"></div>
+      </section>
+
+      <section class="card">
+        <div class="profile-head"><h3>用户画像</h3><span class="count">共 4 条</span></div>
+        <ul class="profile-list">
+          <li class="profile-item"><span class="kind">偏好</span><span class="profile-text">用户偏好简洁、直接的表达方式。</span><span class="profile-meta">1 条证据 · 0.85</span></li>
+          <li class="profile-item"><span class="kind">偏好</span><span class="profile-text">用户偏好视觉上紧凑、美观的布局：工具栏元素能一行排下就不折行。</span><span class="profile-meta">1 条证据 · 0.80</span></li>
+          <li class="profile-item"><span class="kind" data-kind="decision">决策</span><span class="profile-text">界面设计先用可交互的 HTML demo 出方案预览，再落到真实面板。</span><span class="profile-meta">1 条证据 · 0.75</span></li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <div class="toolbar">
+          <label class="field"><span>范围</span><div class="control">当前项目</div></label>
+          <label class="field"><span>状态</span><div class="control">全部状态</div></label>
+          <label class="field"><span>类型</span><div class="control">全部类型</div></label>
+          <label class="field"><span>搜索</span><div class="search">搜索内容或标签</div></label>
+          <button class="ghost">刷新</button>
+          <button class="primary">重建索引</button>
+        </div>
+      </section>
+
+      <div class="tabrow">
+        <button class="chipbtn" aria-selected="true">全部类型<em>123</em></button>
+        <button class="chipbtn">偏好<em>4</em></button>
+        <button class="chipbtn">事实<em>55</em></button>
+        <button class="chipbtn">决策<em>19</em></button>
+        <button class="chipbtn">片段<em>23</em></button>
+        <span style="margin-left:auto;color:var(--text3);font-size:11px">共 123 条</span>
+      </div>
+
+      <div class="list">
+        <article class="row" data-kind="decision">
+          <div class="row-head"><span class="kind" data-kind="decision">决策</span><span class="status">生效</span><span class="row-meta"><span>置信度 0.92</span><span>更新于 2026-10-30 23:51</span></span></div>
+          <div class="row-body">记忆采用 JSONL 作为权威存储，进程内 BM25 作为可重建的派生索引。</div>
+          <div class="row-foot"><span class="tag">存储</span><span class="tag">JSONL</span><span class="acts"><button class="ghost">编辑</button><button class="ghost">归档</button><button class="ghost">删除</button></span></div>
+        </article>
+        <article class="row" data-kind="fact">
+          <div class="row-head"><span class="kind" data-kind="fact">事实</span><span class="status">生效</span><span class="row-meta"><span>置信度 0.88</span><span>更新于 2026-10-29 23:51</span></span></div>
+          <div class="row-body">该仓库使用 pnpm，并要求 Node 22 以上。</div>
+          <div class="row-foot"><span class="tag">pnpm</span><span class="tag">node</span><span class="acts"><button class="ghost">编辑</button><button class="ghost">归档</button><button class="ghost">删除</button></span></div>
+        </article>
+      </div>
+      <p class="note">Demo 数据为模拟；A/B/C 只改指标区，其余组件保持一致。</p>
+    </div>
+  </div>
+<script>
+  const heat = document.getElementById('heatmap')
+  const months = document.getElementById('months')
+  let seed = 7
+  function rnd(){ seed = (seed * 16807) % 2147483647; return seed / 2147483647 }
+  const CELLS = 53 * 7
+  for (let i = 0; i < CELLS; i++) {
+    const cell = document.createElement('span')
+    cell.className = 'cell'
+    const r = rnd()
+    const level = r > 0.82 ? 4 : r > 0.68 ? 3 : r > 0.5 ? 2 : r > 0.3 ? 1 : 0
+    cell.dataset.level = String(level)
+    cell.title = '记忆活动'
+    heat.appendChild(cell)
+  }
+  const labels = ['11月','12月','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月']
+  labels.forEach((m, i) => {
+    const s = document.createElement('span')
+    s.textContent = m
+    s.style.gridColumn = String(1 + Math.round(i * 52 / 11))
+    months.appendChild(s)
+  })
+  const buttons = document.querySelectorAll('.topbar .btn[data-v]')
+  buttons.forEach((button) => button.addEventListener('click', () => {
+    document.body.dataset.variant = button.dataset.v
+    buttons.forEach((other) => other.setAttribute('aria-pressed', String(other === button)))
+  }))
+  document.getElementById('theme').addEventListener('click', (event) => {
+    const dark = document.documentElement.dataset.theme !== 'dark'
+    document.documentElement.dataset.theme = dark ? 'dark' : ''
+    event.currentTarget.textContent = dark ? '浅色' : '深色'
+  })
+</script>
+</body>
+</html>
