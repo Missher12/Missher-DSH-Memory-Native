@@ -49,6 +49,7 @@ import {
   knowledgeNote,
   knowledgePromote,
   knowledgeSave,
+  knowledgeSync,
   memoryHistory,
   mergeTopics,
   obsidianExport,
@@ -139,6 +140,7 @@ export function createPanelBackend(options) {
   backend.knowledgeList = () => knowledgeList(backend)
   backend.knowledgeNote = (input) => knowledgeNote(backend, input)
   backend.knowledgeSave = (input) => knowledgeSave(backend, input)
+  backend.knowledgeSync = (input) => knowledgeSync(backend, input)
   const logCall = makePanelCallLogger(backend.root)
   for (const method of PANEL_METHODS) {
     const operation = backend[method]
@@ -290,6 +292,10 @@ export async function bindTypertRemote(ctx, backend) {
 
     async knowledgeSave(input) {
       return this.delegate.knowledgeSave(input)
+    }
+
+    async knowledgeSync(input) {
+      return this.delegate.knowledgeSync(input)
     }
   }
 

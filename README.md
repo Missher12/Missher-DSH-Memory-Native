@@ -15,6 +15,7 @@
 - **八个一级标签**：记忆 / 用户画像 / 知识图谱 / 知识库 / 捕获与注入 / 保留与维护 / 数据 / Obsidian；知识库管理提升出的长期笔记并同步 Obsidian。
 - **知识图谱（v0.8）**：面板「知识图谱」标签把记忆按主题渲染成星座图（主题为中心节点、共享标签为虚线），点击节点看详情，可一键「提升为知识」写成长期 Markdown 笔记。
 - **知识库编辑（v0.10）**：知识库 tab 点任意笔记打开编辑器，可改标题 / 主题 / 标签 / 正文；保存原子写回 `knowledge/<id>.md`，保留 frontmatter 与 memoryId；文件被外部修改时提示重新加载，不静默覆盖。
+- **知识双向同步（v0.10）**：知识笔记可整批同步到 `<vault>/<folder>/knowledge`，也可从 vault 导入新笔记；本地已改过的同名文件报冲突而不覆盖；vault 侧笔记会以独立节点进入知识图谱，并按 `[[wiki link]]` 连到主题。
 - **Obsidian DLC**：设置里填 vault 路径与文件夹，一键把每条记忆导出为带 YAML frontmatter 的 `.md`；改完笔记可导入回记忆（按 id 更新，不重复、不删除）。
 - **好管理（v0.7）**：回收站（恢复 / 彻底删除）、批量归档/删除/加标签（失败自动回滚）、版本历史与 diff、主题筛选与合并建议。
 - **数据可搬运**：面板支持「导出 / 导入 / 立即备份」——导出为 JSON 下载，导入按 revision 去重合并并重建索引，备份写入 `backups/`。
@@ -138,13 +139,14 @@ node --test tests/*.test.js
 
 | 项目 | 结果 | 证据 |
 |---|---|---|
-| 单元测试 | 170/170 通过 | `node --test tests/*.test.js` |
+| 单元测试 | 176/176 通过 | `node --test tests/*.test.js` |
 | 自动捕获 | 17 条真实记忆（14 active / 3 candidate） | `~/.dsh/dsh-memory/**/memories.jsonl` |
 | 上下文注入 | 真实轮次出现 `<memory-context>` 块 | 会话日志 |
 | 面板 RPC | Typert 传输 + 网关自检 stats/list 通过 | `panel-transport.json`、`panel-calls.jsonl` |
 | 面板渲染/交互 | 浅色/深色/540px/编辑保存/Esc 关闭/批准/双确认删除/空态/错误态 | `docs/images/panel-*.png`（夹具渲染） |
 | Token 遥测 | 近 7 天注入/抽取趋势、平均注入、超预算计数 | `~/.dsh/dsh-memory/usage.jsonl`；`docs/demo/v09-token-trend.png` |
 | 知识笔记编辑 | 打开/编辑/保存/冲突检测/重新加载，735 与 430 无溢出 | `docs/demo/v10-knowledge-editor.png`、`docs/demo/v10-knowledge-list.png` |
+| 知识双向同步 | 导出 1 条/跳过 1 条、导入新笔记、冲突不覆盖；vault 节点 + wiki 边 | `docs/demo/v10-knowledge-sync.png`、`docs/demo/v10-graph-vault.png` |
 | 召回性能 | 5000 条：建索引 114ms，中位 4.69ms，p95 8.91ms | `node scripts/bench-recall.mjs` |
 
 待验证：浏览器端首次 list 调用（刷新页面后在 `panel-calls.jsonl` 出现），以及重启/卸载验收。

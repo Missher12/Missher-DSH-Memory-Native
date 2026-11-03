@@ -448,3 +448,13 @@ node scripts/bench-recall.mjs
 - 单测 **170/170**（+knowledge-edit 8、+contract 1）；eval hit@5 1.000 / precision@5 0.989 不降。
 - harness：打开首条笔记回填 title/topic/tags/body；改标题+正文保存后弹窗关闭、列表标题更新、显示「笔记已保存。」；强制冲突时出现「文件已被外部修改…」与「重新加载」，重新加载恢复磁盘标题；弹窗 520px（430 宽为 398px），`__errors=[]`，`scrollWidth=430` 无横向溢出。
 - 截图：`docs/demo/v10-knowledge-list.png`、`docs/demo/v10-knowledge-editor.png`、`docs/demo/v10-knowledge-editor-430.png`。
+
+## 43. v0.10 知识双向同步 + vault 笔记入图谱（2026-11-04）
+
+- 新增 `exportKnowledgeToVault` / `importKnowledgeFromVault` / `listVaultKnowledgeNotes`（`host/obsidian.js`）：知识笔记整批同步到 `<vault>/<folder>/knowledge/`，导出内容逐字不变、相同文件跳过；导入只接收带 `dsh_knowledge: true` 的 `.md`，同名且内容不同计为 conflict，**不覆盖**本地编辑；`_index.md` 等私有文件忽略。
+- 新增 RPC `knowledgeSync({direction:'export'|'import'})`，已同步 `PANEL_METHODS`、PanelRemote、客户端 `METHODS`/`RESULT_TYPES`。
+- 图谱：`buildKnowledgeGraph` 支持 `source:'vault'` 的笔记节点（`vault:<file>`，青色）与本地知识节点（`note:<file>`，蓝色），并按 `[[wiki link]]` 连接已有主题 hub（`type:'wiki'` 虚线）；与本地同名文件去重；`memoryCount` 改为只统计记忆节点，新增 `noteCount`。
+- 客户端：知识库增加「同步知识到 Obsidian / 从 Obsidian 导入知识」按钮，成功显示导入/导出/跳过/冲突计数；图谱增加记忆/知识笔记/Vault 笔记图例，选中 vault 笔记显示「导入知识库后可编辑」。
+- 单测 **176/176**（+knowledge-sync 5、+contract 1）；eval hit@5 1.000 / precision@5 0.989。
+- harness：导出提示「已导出 1 条 · 跳过 1 条。」；图谱 `vaultCircles=1`、`knowledgeCircles=1`、`wikiEdges=1`，搜索 Vault 后详情类型显示「Vault 笔记」；735/430 `__errors=[]`，scrollWidth=430 无溢出。
+- 截图：`docs/demo/v10-knowledge-sync.png`、`docs/demo/v10-knowledge-sync-430.png`、`docs/demo/v10-graph-vault.png`。

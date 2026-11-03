@@ -683,3 +683,20 @@ test('knowledgeNote reads and knowledgeSave writes a promoted note', (t) => {
   assert.equal(backend.knowledgeNote({ file }).title, '编辑后的标题')
   assert.equal(backend.knowledgeList().notes[0].title, '编辑后的标题')
 })
+
+test('knowledgeSync exports notes to the vault and imports them back', (t) => {
+  const { backend } = setup(t)
+  const vault = mkdtempSync(join(tmpdir(), 'dsh-memory-vault-'))
+  t.after(() => rmSync(vault, { recursive: true, force: true }))
+  backend.config.obsidian = { vaultPath: vault, folder: 'KB' }
+  const record = seed(backend.store, backend.index, { content: '知识同步测试', topic: '存储' })
+  backend.knowledgePromote({ id: record.id, scope: 'project', projectKey: KEY })
+  const exported = backend.knowledgeSync({ direction: 'export' })
+  assert.equal(exported.written, 1)
+  const target = join(vault, 'KB', 'knowledge', `${record.id}.md`)
+  assert.ok(existsSync(target))
+  const imported = backend.knowledgeSync({ direction: 'import' })
+  assert.equal(imported.skipped, 1)
+  assert.equal(imported.conflicts, 0)
+  assert.throws(() => backend.knowledgeSync({ direction: 'sideways' }), PanelInputError)
+})

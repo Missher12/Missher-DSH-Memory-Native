@@ -21,7 +21,15 @@ import { isValidProjectKey, scopePaths } from './paths.js'
 import { deriveProfile } from './profile.js'
 import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
 import { readMaintenance } from './maintenance.js'
-import { exportToObsidian, importFromObsidian, readSyncSummary, writeSyncSummary } from './obsidian.js'
+import {
+  exportKnowledgeToVault,
+  exportToObsidian,
+  importFromObsidian,
+  importKnowledgeFromVault,
+  listVaultKnowledgeNotes,
+  readSyncSummary,
+  writeSyncSummary,
+} from './obsidian.js'
 import { computeUsageSummary, localDayKey } from './usage-log.js'
 import { tokenize } from './tokenize.js'
 import { MEMORY_KINDS } from './records.js'
@@ -34,7 +42,7 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */
@@ -708,7 +716,17 @@ export function knowledgeGraph(backend, raw) {
       : resolvedProjectKey === null ? [] : backend.store.list('project', resolvedProjectKey)
   }
   const limit = Number.isInteger(input.limit) ? Math.min(1000, Math.max(10, input.limit)) : 400
-  const notes = backend.root === null ? [] : listKnowledgeNotes(backend.root)
+  const localNotes = backend.root === null ? [] : listKnowledgeNotes(backend.root)
+  const localFiles = new Set(localNotes.map((note) => note.file))
+  const vaultPath = backend.config?.obsidian?.vaultPath ?? null
+  const folder = backend.config?.obsidian?.folder ?? 'DSH Memory'
+  const vaultNotes = vaultPath === null
+    ? []
+    : listVaultKnowledgeNotes(vaultPath, folder).filter((note) => !localFiles.has(note.file))
+  const notes = [
+    ...localNotes.map((note) => ({ ...note, source: 'knowledge' })),
+    ...vaultNotes,
+  ]
   const profile = deriveProfile(records, { limit: 12 })
   return buildKnowledgeGraph(records, { maxNodes: limit, notes, traits: profile.traits })
 }
@@ -745,6 +763,23 @@ export function knowledgeSave(backend, raw) {
   if (backend.root === null) throw new PanelInputError('memory root is unavailable')
   try {
     return saveKnowledgeNote(backend.root, asObject(raw))
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** Sync knowledge notes to/from the Obsidian vault. */
+export function knowledgeSync(backend, raw) {
+  if (backend.root === null) throw new PanelInputError('memory root is unavailable')
+  const input = asObject(raw)
+  const direction = input.direction === 'import' ? 'import' : input.direction === 'export' ? 'export' : null
+  if (direction === null) throw new PanelInputError('direction must be export or import')
+  const { vaultPath, folder } = obsidianTargetFrom(backend, input)
+  try {
+    const summary = direction === 'export'
+      ? exportKnowledgeToVault({ root: backend.root, vaultPath, folder })
+      : importKnowledgeFromVault({ root: backend.root, vaultPath, folder })
+    return { direction, ...summary }
   } catch (error) {
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }

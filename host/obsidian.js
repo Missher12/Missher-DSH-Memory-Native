@@ -18,8 +18,9 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 
+import { KNOWLEDGE_DIR, extractWikiLinks, isKnowledgeFile, parseKnowledgeNote, splitNoteBody } from './knowledge.js'
 import { isValidProjectKey } from './paths.js'
 import { MEMORY_KINDS, MEMORY_STATUSES } from './records.js'
 
@@ -222,6 +223,135 @@ export function importFromObsidian(options) {
     }
   }
   return { dir, scanned: files.length, imported, updated, skipped, preview }
+}
+
+/** Skill/knowledge notes live in `<vault>/<folder>/knowledge`. */
+export const KNOWLEDGE_SUBDIR = 'knowledge'
+
+/** Absolute vault directory that mirrors `<root>/knowledge`. */
+export function knowledgeVaultDir(vaultPath, folder) {
+  return join(resolveObsidianTarget(vaultPath, folder).dir, KNOWLEDGE_SUBDIR)
+}
+
+function readVaultKnowledgeNote(file) {
+  const name = basename(file)
+  if (!isKnowledgeFile(name)) return null
+  const text = readFileSync(file, 'utf8')
+  const { data, body } = parseKnowledgeNote(text)
+  if (data.dsh_knowledge !== true) return null
+  const { title } = splitNoteBody(body)
+  return {
+    file: name,
+    memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
+    topic: typeof data.topic === 'string' ? data.topic : null,
+    tags: Array.isArray(data.tags) ? data.tags : [],
+    title: title === '' ? name : title,
+    body,
+    links: extractWikiLinks(body),
+    source: 'vault',
+  }
+}
+
+/** Read knowledge notes the user authored or copied into the vault. */
+export function listVaultKnowledgeNotes(vaultPath, folder) {
+  try {
+    const dir = knowledgeVaultDir(vaultPath, folder)
+    if (!existsSync(dir)) return []
+    const notes = []
+    for (const name of readdirSync(dir).filter((item) => item.endsWith('.md') && !item.startsWith('_'))) {
+      try {
+        const note = readVaultKnowledgeNote(join(dir, name))
+        if (note !== null) notes.push(note)
+      } catch {
+        // Skip unreadable vault notes.
+      }
+    }
+    return notes
+  } catch {
+    return []
+  }
+}
+
+/** Copy `<root>/knowledge/*.md` into `<vault>/<folder>/knowledge`; identical files are skipped. */
+export function exportKnowledgeToVault(options) {
+  const dir = knowledgeVaultDir(options.vaultPath, options.folder)
+  const source = join(options.root, KNOWLEDGE_DIR)
+  if (!existsSync(source)) return { dir, total: 0, written: 0, skipped: 0 }
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  let total = 0
+  let written = 0
+  let skipped = 0
+  for (const name of readdirSync(source).filter((item) => item.endsWith('.md') && !item.startsWith('_'))) {
+    let content
+    try {
+      content = readFileSync(join(source, name), 'utf8')
+    } catch {
+      continue
+    }
+    total += 1
+    const target = join(dir, name)
+    let existing = null
+    try {
+      existing = existsSync(target) ? readFileSync(target, 'utf8') : null
+    } catch {
+      existing = null
+    }
+    if (existing === content) {
+      skipped += 1
+      continue
+    }
+    writeAtomic(target, content)
+    written += 1
+  }
+  return { dir, total, written, skipped }
+}
+
+/**
+ * Import vault knowledge notes into `<root>/knowledge`.
+ *
+ * New files are copied, identical files are skipped, and a file that already
+ * exists locally with different content is reported as a conflict instead of
+ * overwriting the local edit.
+ */
+export function importKnowledgeFromVault(options) {
+  const dir = knowledgeVaultDir(options.vaultPath, options.folder)
+  if (!existsSync(dir)) throw new Error('Obsidian knowledge folder does not exist; export first')
+  const target = join(options.root, KNOWLEDGE_DIR)
+  mkdirSync(target, { recursive: true, mode: 0o700 })
+  const files = readdirSync(dir).filter((name) => name.endsWith('.md') && !name.startsWith('_'))
+  let imported = 0
+  let skipped = 0
+  let conflicts = 0
+  for (const name of files) {
+    if (!isKnowledgeFile(name)) continue
+    let text
+    try {
+      text = readFileSync(join(dir, name), 'utf8')
+      const { data } = parseKnowledgeNote(text)
+      if (data.dsh_knowledge !== true) {
+        skipped += 1
+        continue
+      }
+    } catch {
+      skipped += 1
+      continue
+    }
+    const file = join(target, name)
+    if (existsSync(file)) {
+      let existing = null
+      try {
+        existing = readFileSync(file, 'utf8')
+      } catch {
+        existing = null
+      }
+      if (existing === text) skipped += 1
+      else conflicts += 1
+      continue
+    }
+    writeAtomic(file, text)
+    imported += 1
+  }
+  return { dir, scanned: files.length, imported, skipped, conflicts }
 }
 
 /** Persist the last sync summary next to the memory authority. */

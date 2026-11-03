@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const NAMESPACE = 'dshMemory'
     const SERVICE_KEY = 'remote.' + NAMESPACE
     const NS = 'dsh-memory'
-    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave']
+    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync']
     const RESULT_TYPES = {
       list: 'MemoryList',
       stats: 'MemoryStats',
@@ -51,6 +51,7 @@ window.__ModuleLoader__.load({
       knowledgeList: 'MemoryKnowledgeList',
       knowledgeNote: 'MemoryKnowledgeNote',
       knowledgeSave: 'MemoryKnowledgeSave',
+      knowledgeSync: 'MemoryKnowledgeSync',
     }
     const KINDS = ['preference', 'fact', 'decision', 'episode']
     const STATUSES = ['active', 'candidate', 'archived', 'superseded', 'deleted']
@@ -109,6 +110,8 @@ window.__ModuleLoader__.load({
         'kind.fact': 'Fact',
         'kind.decision': 'Decision',
         'kind.episode': 'Episode',
+        'kind.knowledge': 'Knowledge note',
+        'kind.vault': 'Vault note',
         'status.active': 'Active',
         'status.candidate': 'Candidate',
         'status.archived': 'Archived',
@@ -151,6 +154,11 @@ window.__ModuleLoader__.load({
         'library.openFailed': 'Could not open the note: {reason}',
         'library.conflict': 'This file changed on disk. Reload before saving, or your edit would overwrite it.',
         'library.reload': 'Reload',
+        'library.syncKnowledgeExport': 'Sync notes to Obsidian',
+        'library.syncKnowledgeImport': 'Import notes from Obsidian',
+        'library.exportResult': 'Exported {written} notes · skipped {skipped}.',
+        'library.importResult': 'Imported {imported} · skipped {skipped} · conflicts {conflicts}.',
+        'library.syncFailed': 'Sync failed: {reason}',
         'knowledge.title': 'Knowledge map',
         'knowledge.hint': 'Topics are hubs; lines are shared tags. Drag to pan, scroll to zoom, click a node for details.',
         'knowledge.search': 'Search memories or topics',
@@ -169,6 +177,10 @@ window.__ModuleLoader__.load({
         'knowledge.promoted': 'Knowledge note written: {path}',
         'knowledge.promoteFailed': 'Promote failed: {reason}',
         'knowledge.knowledgeNote': 'Long-term knowledge note',
+        'knowledge.vaultNote': 'Vault note. Import it into the knowledge base to edit it here.',
+        'knowledge.legendMemories': 'Memories',
+        'knowledge.legendKnowledge': 'Knowledge notes',
+        'knowledge.legendVault': 'Vault notes',
         'knowledge.traitNote': 'Profile preference derived from evidence memories',
         'knowledge.noSelection': 'Click a node to inspect it.',
         'knowledge.kind': 'Kind',
@@ -355,6 +367,8 @@ window.__ModuleLoader__.load({
         'kind.fact': '\u4e8b\u5b9e',
         'kind.decision': '\u51b3\u7b56',
         'kind.episode': '\u7247\u6bb5',
+        'kind.knowledge': '\u77e5\u8bc6\u7b14\u8bb0',
+        'kind.vault': 'Vault \u7b14\u8bb0',
         'status.active': '\u751f\u6548',
         'status.candidate': '\u5f85\u5ba1',
         'status.archived': '\u5df2\u5f52\u6863',
@@ -397,6 +411,11 @@ window.__ModuleLoader__.load({
         'library.openFailed': '打开笔记失败：{reason}',
         'library.conflict': '文件已被外部修改。请先重新加载，否则保存会覆盖外部改动。',
         'library.reload': '重新加载',
+        'library.syncKnowledgeExport': '同步知识到 Obsidian',
+        'library.syncKnowledgeImport': '从 Obsidian 导入知识',
+        'library.exportResult': '已导出 {written} 条 · 跳过 {skipped} 条。',
+        'library.importResult': '已导入 {imported} 条 · 跳过 {skipped} 条 · 冲突 {conflicts} 条。',
+        'library.syncFailed': '同步失败：{reason}',
         'knowledge.title': '\u77e5\u8bc6\u56fe\u8c31',
         'knowledge.hint': '\u4e3b\u9898\u662f\u4e2d\u5fc3\u8282\u70b9\uff0c\u8fde\u7ebf\u662f\u5171\u4eab\u6807\u7b7e\u3002\u62d6\u52a8\u5e73\u79fb\u3001\u6eda\u8f6e\u7f29\u653e\uff0c\u70b9\u51fb\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
         'knowledge.search': '\u641c\u7d22\u8bb0\u5fc6\u6216\u4e3b\u9898',
@@ -415,6 +434,10 @@ window.__ModuleLoader__.load({
         'knowledge.promoted': '\u5df2\u5199\u5165\u77e5\u8bc6\u7b14\u8bb0\uff1a{path}',
         'knowledge.promoteFailed': '\u63d0\u5347\u5931\u8d25\uff1a{reason}',
         'knowledge.knowledgeNote': '\u957f\u671f\u77e5\u8bc6\u7b14\u8bb0',
+        'knowledge.vaultNote': 'Vault \u7b14\u8bb0\u3002\u5bfc\u5165\u77e5\u8bc6\u5e93\u540e\u53ef\u5728\u6b64\u7f16\u8f91\u3002',
+        'knowledge.legendMemories': '\u8bb0\u5fc6',
+        'knowledge.legendKnowledge': '\u77e5\u8bc6\u7b14\u8bb0',
+        'knowledge.legendVault': 'Vault \u7b14\u8bb0',
         'knowledge.traitNote': '\u7531\u8bc1\u636e\u8bb0\u5fc6\u5f52\u7eb3\u7684\u753b\u50cf\u504f\u597d',
         'knowledge.noSelection': '\u70b9\u51fb\u4e00\u4e2a\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
         'knowledge.kind': '\u7c7b\u578b',
@@ -780,6 +803,15 @@ window.__ModuleLoader__.load({
       '.dsh-memory-graph-node[data-kind="decision"]{fill:#b7791f}',
       '.dsh-memory-graph-node[data-kind="episode"]{fill:#8b5cf6}',
       '.dsh-memory-graph-node[data-kind="trait"]{fill:#eab308}',
+      '.dsh-memory-graph-node[data-kind="knowledge"]{fill:#0ea5e9}',
+      '.dsh-memory-graph-node[data-kind="vault"]{fill:#14b8a6}',
+      '.dsh-memory-graph-edge[data-type="wiki"]{stroke:#0ea5e9;stroke-dasharray:2 3;opacity:.6}',
+      '.dsh-memory-graph-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#6b7280)}',
+      '.dsh-memory-graph-legend span{display:inline-flex;align-items:center;gap:5px}',
+      '.dsh-memory-graph-dot{width:7px;height:7px;border-radius:50%;background:#6b7280}',
+      '.dsh-memory-graph-dot[data-kind="memory"]{background:#2f6df6}',
+      '.dsh-memory-graph-dot[data-kind="knowledge"]{background:#0ea5e9}',
+      '.dsh-memory-graph-dot[data-kind="vault"]{background:#14b8a6}',
       '.dsh-memory-graph-node:focus{outline:none;stroke:#1f2328;stroke-width:2}',
       '.dsh-memory-load-row{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}',
       '.dsh-memory-profile-line{display:flex;align-items:baseline;gap:8px;min-width:0}',
@@ -1854,6 +1886,10 @@ window.__ModuleLoader__.load({
             tags: String(graph.tagCount ?? 0),
           }))),
         h('p', { className: 'dsh-memory-muted' }, t('knowledge.hint')),
+        h('div', { className: 'dsh-memory-graph-legend' },
+          h('span', null, h('i', { className: 'dsh-memory-graph-dot', 'data-kind': 'memory' }), t('knowledge.legendMemories')),
+          h('span', null, h('i', { className: 'dsh-memory-graph-dot', 'data-kind': 'knowledge' }), t('knowledge.legendKnowledge')),
+          h('span', null, h('i', { className: 'dsh-memory-graph-dot', 'data-kind': 'vault' }), t('knowledge.legendVault'))),
         h('div', { className: 'dsh-memory-graph-tools' },
           h('input', {
             className: 'dsh-memory-graph-search',
@@ -1908,7 +1944,9 @@ window.__ModuleLoader__.load({
                   onClick: () => onPromote(selected),
                   disabled: promoting,
                 }, promoting ? t('knowledge.promoting') : t('knowledge.promote'))
-                : h('p', { className: 'dsh-memory-muted' }, selected.type === 'trait' ? t('knowledge.traitNote') : t('knowledge.knowledgeNote')))))
+                : h('p', { className: 'dsh-memory-muted' }, selected.type === 'trait'
+                  ? t('knowledge.traitNote')
+                  : selected.kind === 'vault' ? t('knowledge.vaultNote') : t('knowledge.knowledgeNote')))))
     }
 
     function KnowledgeLibrary(props) {
@@ -1923,6 +1961,8 @@ window.__ModuleLoader__.load({
       const [noteError, setNoteError] = React.useState('')
       const [conflict, setConflict] = React.useState(false)
       const [notice, setNotice] = React.useState('')
+      const [syncing, setSyncing] = React.useState(false)
+      const [syncError, setSyncError] = React.useState('')
       const titleId = React.useId()
 
       const close = () => {
@@ -1996,6 +2036,28 @@ window.__ModuleLoader__.load({
           setNoteError(t('library.saveFailed', { reason: messageOf(failure) }))
         } finally {
           setSaving(false)
+        }
+      }
+
+      const syncNotes = async (direction) => {
+        if (call === null || syncing) return
+        setSyncing(true)
+        setSyncError('')
+        setNotice('')
+        try {
+          const result = await call('knowledgeSync', { direction })
+          setNotice(direction === 'export'
+            ? t('library.exportResult', { written: String(result?.written ?? 0), skipped: String(result?.skipped ?? 0) })
+            : t('library.importResult', {
+              imported: String(result?.imported ?? 0),
+              skipped: String(result?.skipped ?? 0),
+              conflicts: String(result?.conflicts ?? 0),
+            }))
+          if (typeof onChanged === 'function') onChanged()
+        } catch (failure) {
+          setSyncError(t('library.syncFailed', { reason: messageOf(failure) }))
+        } finally {
+          setSyncing(false)
         }
       }
 
@@ -2073,7 +2135,10 @@ window.__ModuleLoader__.load({
         h('p', { className: 'dsh-memory-muted' }, vault === '' ? t('library.noVault') : t('library.vault', { path: vault })),
         h('div', { className: 'dsh-memory-settings-buttons' },
           h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('export'), disabled: busy }, t('library.syncExport')),
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('import'), disabled: busy }, t('library.syncImport'))),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('import'), disabled: busy }, t('library.syncImport')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => syncNotes('export'), disabled: syncing }, t('library.syncKnowledgeExport')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => syncNotes('import'), disabled: syncing }, t('library.syncKnowledgeImport'))),
+        syncError === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, syncError),
         notice === '' ? null : h('p', { className: 'dsh-memory-library-notice', role: 'status' }, notice),
         loading
           ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('library.loading'))

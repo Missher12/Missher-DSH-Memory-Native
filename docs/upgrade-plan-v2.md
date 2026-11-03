@@ -43,11 +43,12 @@
 1. **知识笔记编辑**（已完成 2026-11-04）
    - 知识库 tab 点笔记打开编辑器：标题、正文、topic、tags、`[[链接]]`；保存写回 `knowledge/<id>.md`。
    - 冲突：`expectedMtimeMs` 不匹配时返回 conflict，面板提示重新加载，不静默覆盖；frontmatter 未知字段原样保留。
-2. **Obsidian 双向同步知识**
-   - 导出：`knowledge/*.md` 同步到 vault 子目录（保留 frontmatter）。
-   - 导入：vault 中带 `dsh_knowledge: true`（或指定文件夹）的笔记进入知识库，按 id/文件名去重。
-3. **图谱接入 vault**
-   - 图谱节点增加 `vault` 类型；按 `[[wiki link]]` 建边；支持只显示记忆/知识/vault/画像。
+2. **Obsidian 双向同步知识**（已完成 2026-11-04）
+   - 导出：`knowledge/*.md` 同步到 `<vault>/<folder>/knowledge/`，内容不变，相同文件跳过。
+   - 导入：vault 中带 `dsh_knowledge: true` 的笔记按文件名进入知识库；同名且内容不同报 conflict，不覆盖本地编辑。
+3. **图谱接入 vault**（已完成 2026-11-04）
+   - 图谱节点增加 `vault` 类型（青绿色）；本地知识笔记（蓝色）与 vault 笔记分别着色，含图例。
+   - 按正文 `[[wiki link]]` 连到已有主题 hub；与本地同名笔记去重，避免双份节点。
 4. **图谱体验**
    - 时间过滤（最近 7/30/90 天）；双击主题展开/收起；布局可保存。
 5. **画像可编辑**

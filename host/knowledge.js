@@ -68,14 +68,29 @@ export function buildKnowledgeGraph(records, options = {}) {
       }
     }
   }
+  const noteNodes = []
   for (const note of (Array.isArray(options.notes) ? options.notes : [])) {
     const memoryId = typeof note.memoryId === 'string' ? note.memoryId : null
     const topic = typeof note.topic === 'string' && note.topic.trim() !== '' ? note.topic.trim() : '未分类'
-    const noteId = `note:${note.file}`
-    nodes.push({ id: noteId, type: 'note', topic, kind: 'knowledge', status: 'active', label: String(note.title ?? note.file).slice(0, 60), confidence: 1 })
-    const target = memoryId === null ? null : nodes.find((node) => node.type === 'memory' && node.id === memoryId)
+    const source = note.source === 'vault' ? 'vault' : 'knowledge'
+    const noteId = `${source === 'vault' ? 'vault' : 'note'}:${note.file}`
+    const links = Array.isArray(note.links) ? note.links.map((link) => String(link)) : extractWikiLinks(note.body ?? '')
+    const node = {
+      id: noteId,
+      type: 'note',
+      source,
+      topic,
+      kind: source === 'vault' ? 'vault' : 'knowledge',
+      status: 'active',
+      label: String(note.title ?? note.file).slice(0, 60),
+      confidence: 1,
+      links,
+    }
+    nodes.push(node)
+    noteNodes.push(node)
+    const target = memoryId === null ? null : nodes.find((entry) => entry.type === 'memory' && entry.id === memoryId)
     if (target !== undefined) edges.push({ source: noteId, target: memoryId, type: 'knowledge' })
-    else hubs.find((hub) => hub.label === topic) === undefined ? null : edges.push({ source: noteId, target: `topic:${topic}`, type: 'knowledge' })
+    else if (hubs.some((hub) => hub.label === topic)) edges.push({ source: noteId, target: `topic:${topic}`, type: 'knowledge' })
   }
 
   const traits = Array.isArray(options.traits) ? options.traits : []
@@ -102,6 +117,13 @@ export function buildKnowledgeGraph(records, options = {}) {
     }
   }
 
+  for (const node of noteNodes) {
+    for (const link of node.links) {
+      const hub = hubs.find((entry) => entry.label === link)
+      if (hub !== undefined) edges.push({ source: node.id, target: hub.id, type: 'wiki', label: link })
+    }
+  }
+
   for (const [tag, ids] of tagIndex) {
     if (ids.length < 2) continue
     for (let i = 0; i < ids.length - 1; i += 1) {
@@ -113,7 +135,8 @@ export function buildKnowledgeGraph(records, options = {}) {
     hubs,
     edges,
     topicCount: topics.size,
-    memoryCount: nodes.length,
+    memoryCount: nodes.filter((node) => node.type === 'memory').length,
+    noteCount: nodes.filter((node) => node.type === 'note').length,
     tagCount: tagIndex.size,
     truncated: (Array.isArray(records) ? records : []).length > list.length,
   }
@@ -180,6 +203,24 @@ function parseNote(text) {
   }
   const body = match === null ? String(text) : String(text).slice(match[0].length)
   return { data, body: body.trimEnd() }
+}
+
+/** Public parser for vault-side knowledge notes. */
+export function parseKnowledgeNote(text) {
+  return parseNote(text)
+}
+
+/** Unique `[[wiki links]]` targets in a note body. */
+export function extractWikiLinks(text) {
+  const links = []
+  const seen = new Set()
+  for (const match of String(text ?? '').matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/gu)) {
+    const value = match[1].trim()
+    if (value === '' || seen.has(value)) continue
+    seen.add(value)
+    links.push(value)
+  }
+  return links
 }
 
 function serializeValue(value) {
@@ -302,7 +343,11 @@ export function saveKnowledgeNote(root, input) {
 }
 
 /** Read promoted knowledge notes from `<root>/knowledge`. */
-export function listKnowledgeNotes(root) {
+/**
+ * @param {string} root
+ * @param {{ includeBody?: boolean }} [options]
+ */
+export function listKnowledgeNotes(root, options = {}) {
   const dir = join(root, KNOWLEDGE_DIR)
   if (!existsSync(dir)) return []
   const notes = []
@@ -311,13 +356,16 @@ export function listKnowledgeNotes(root) {
       const { data, body } = parseNote(readFileSync(join(dir, file), 'utf8'))
       if (data.dsh_knowledge !== true) continue
       const { title } = splitNoteBody(body)
-      notes.push({
+      const note = {
         file,
         memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
         topic: typeof data.topic === 'string' ? data.topic : null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         title: title === '' ? file : title.slice(0, 60),
-      })
+        links: extractWikiLinks(body),
+      }
+      if (options.includeBody === true) note.body = body
+      notes.push(note)
     } catch {
       // Skip unreadable notes.
     }
