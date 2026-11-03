@@ -19,7 +19,10 @@ import { statSync } from 'node:fs'
 
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { deriveProfile } from './profile.js'
+import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge } from './knowledge.js'
 import { readMaintenance } from './maintenance.js'
+import { exportToObsidian, importFromObsidian, readSyncSummary, writeSyncSummary } from './obsidian.js'
+import { tokenize } from './tokenize.js'
 import { MEMORY_KINDS } from './records.js'
 
 /** Package identity shared by the client contribution and diagnostics. */
@@ -28,13 +31,13 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */
 export const PANEL_LIMIT = Object.freeze({ default: 100, max: 200 })
 /** Statuses the panel can filter on (tombstones stay hidden). */
-export const PANEL_FILTER_STATUSES = Object.freeze(['active', 'candidate', 'archived', 'superseded'])
+export const PANEL_FILTER_STATUSES = Object.freeze(['active', 'candidate', 'archived', 'superseded', 'deleted'])
 /** Statuses a panel edit may write; deletion has its own endpoint. */
 export const PANEL_PATCH_STATUSES = Object.freeze(['active', 'candidate', 'archived'])
 /** Fields a panel edit may change. */
@@ -157,6 +160,7 @@ export function listMemories(backend, raw) {
   if (kind !== undefined && !MEMORY_KINDS.includes(kind)) {
     throw new PanelInputError(`kind must be one of ${MEMORY_KINDS.join(', ')}`)
   }
+  const topic = optionalText(input.topic, 'topic', 48)
   const query = optionalText(input.query, 'query', PANEL_QUERY_LIMIT)
   const limit = optionalInteger(input.limit, 'limit', PANEL_LIMIT.default, 1, PANEL_LIMIT.max)
   const offset = optionalInteger(input.offset, 'offset', 0, 0, 100000)
@@ -172,12 +176,20 @@ export function listMemories(backend, raw) {
       total: 0,
       offset,
       kindCounts: { preference: 0, fact: 0, decision: 0, episode: 0 },
+      topicCounts: { __none__: 0 },
     }
   }
 
-  const statuses = status === undefined ? [...PANEL_FILTER_STATUSES] : [status]
+  const statuses = status === undefined ? PANEL_FILTER_STATUSES.filter((value) => value !== 'deleted') : [status]
   let records
-  if (query !== undefined) {
+  if (status === 'deleted') {
+    records = backend.store.list(scope, scope === 'project' ? resolvedProjectKey : null, { includeDeleted: true })
+      .filter((record) => record.status === 'deleted')
+    if (query !== undefined) {
+      const needle = query.toLowerCase()
+      records = records.filter((record) => String(record.content ?? '').toLowerCase().includes(needle))
+    }
+  } else if (query !== undefined) {
     const hits = backend.index.search(query, {
       statuses,
       scopes: [scope],
@@ -193,10 +205,22 @@ export function listMemories(backend, raw) {
   }
 
   const kindCounts = { preference: 0, fact: 0, decision: 0, episode: 0 }
-  const filtered = records.filter((record) => {
+  const topicCounts = { __none__: 0 }
+  const byKind = records.filter((record) => {
     if (Object.hasOwn(kindCounts, record.kind)) kindCounts[record.kind] += 1
     return kind === undefined || record.kind === kind
   })
+  for (const record of byKind) {
+    const value = typeof record.topic === 'string' && record.topic !== '' ? record.topic : null
+    if (value === null) topicCounts.__none__ += 1
+    else topicCounts[value] = (topicCounts[value] ?? 0) + 1
+  }
+  const filtered = topic === undefined
+    ? byKind
+    : byKind.filter((record) => {
+      const value = typeof record.topic === 'string' && record.topic !== '' ? record.topic : null
+      return topic === '__none__' ? value === null : value === topic
+    })
   const total = filtered.length
   const start = Math.min(offset, total)
   return {
@@ -208,6 +232,7 @@ export function listMemories(backend, raw) {
     total,
     offset,
     kindCounts,
+    topicCounts,
   }
 }
 
@@ -253,11 +278,14 @@ export function computeStats(backend, raw) {
     avgConfidence: confidenceCount === 0 ? null : Math.round((confidenceSum / confidenceCount) * 100) / 100,
     lastCapturedAt: lastCapturedAt === 0 ? null : lastCapturedAt,
     maintenance: backend.root ? readMaintenance(backend.root) : null,
+    lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
     captureEnabled: backend.config?.capture?.enabled === true,
     injectEnabled: backend.config?.inject?.enabled === true,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
     retentionEpisodeDays: backend.config?.retention?.episodeDays ?? null,
     maintenanceEnabled: backend.config?.maintenance?.enabled === true,
+    obsidianVaultPath: backend.config?.obsidian?.vaultPath ?? null,
+    obsidianFolder: backend.config?.obsidian?.folder ?? 'DSH Memory',
   }
 }
 
@@ -322,6 +350,8 @@ const PANEL_SETTINGS_FIELDS = Object.freeze([
   'injectMaxTokens',
   'retentionEpisodeDays',
   'maintenanceEnabled',
+  'obsidianVaultPath',
+  'obsidianFolder',
 ])
 
 /**
@@ -342,6 +372,10 @@ export function updateSettings(backend, raw) {
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         throw new PanelInputError(`${field} must be a number`)
       }
+    } else if (field === 'obsidianVaultPath' || field === 'obsidianFolder') {
+      if (typeof value !== 'string') throw new PanelInputError(`${field} must be a string`)
+      if (field === 'obsidianVaultPath' && value.length > 1024) throw new PanelInputError('obsidianVaultPath is too long')
+      if (field === 'obsidianFolder' && value.length > 64) throw new PanelInputError('obsidianFolder is too long')
     } else if (typeof value !== 'boolean') {
       throw new PanelInputError(`${field} must be a boolean`)
     }
@@ -376,6 +410,342 @@ export function importData(backend, raw) {
 /** Write a timestamped backup next to the authority and return its path. */
 export function createBackup(backend) {
   return { path: backend.store.backup() }
+}
+
+/** Restore a tombstoned record to active. */
+export function restoreMemory(backend, raw) {
+  const target = normalizeTarget(raw)
+  const current = backend.store.find(target.id, target.scopes)
+  if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
+  if (current.status !== 'deleted') throw new PanelInputError('only deleted memories can be restored')
+  const updated = backend.store.update(target.id, { status: 'active' }, target.scopes)
+  backend.index.upsert(updated)
+  return { record: projectRecord(updated) }
+}
+
+/** Restore one historical revision as a new active revision. */
+export function restoreRevision(backend, raw) {
+  const target = normalizeTarget(raw)
+  const input = asObject(raw)
+  const revision = optionalInteger(input.revision, 'revision', 1, 1, 1_000_000)
+  const current = backend.store.find(target.id, target.scopes)
+  if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
+  const candidate = backend.store.history(target.id, target.scopes).find((record) => record.revision === revision)
+  if (candidate === undefined) throw new PanelInputError('revision not found')
+  const updated = backend.store.update(target.id, {
+    content: candidate.content,
+    topic: candidate.topic ?? null,
+    tags: Array.isArray(candidate.tags) ? candidate.tags : [],
+    importance: candidate.importance ?? 0.5,
+    pinned: candidate.pinned === true,
+    status: 'active',
+  }, target.scopes)
+  backend.index.upsert(updated)
+  return { record: projectRecord(updated) }
+}
+
+/** Physically delete every revision; only tombstones are purgeable. */
+export function purgeMemory(backend, raw) {
+  const target = normalizeTarget(raw)
+  const current = backend.store.find(target.id, target.scopes)
+  if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
+  if (current.status !== 'deleted') throw new PanelInputError('only deleted memories can be purged')
+  const purged = backend.store.purge(target.id, target.scopes)
+  if (!purged) throw new PanelInputError('memory could not be purged')
+  backend.index.remove(target.id)
+  return { purged: true, id: target.id }
+}
+
+/** Revision history for one record, newest first. */
+export function memoryHistory(backend, raw) {
+  const target = normalizeTarget(raw)
+  const current = backend.store.find(target.id, target.scopes)
+  if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
+  const revisions = backend.store.history(target.id, target.scopes).map((record) => ({
+    revision: record.revision,
+    status: record.status,
+    content: record.content,
+    topic: record.topic ?? null,
+    tags: Array.isArray(record.tags) ? record.tags : [],
+    importance: record.importance ?? null,
+    confidence: record.confidence ?? null,
+    pinned: record.pinned === true,
+    updatedAt: record.updatedAt ?? record.observedAt ?? null,
+  }))
+  return { id: target.id, scope: target.scope, projectKey: target.projectKey, revisions }
+}
+
+/** Archive, delete, restore or tag many records; atomic rolls back on any failure. */
+export function bulkAction(backend, raw) {
+  const input = asObject(raw)
+  const action = input.action
+  if (!['archive', 'delete', 'restore', 'tag'].includes(action)) {
+    throw new PanelInputError('action must be one of archive, delete, restore, tag')
+  }
+  if (!Array.isArray(input.ids) || input.ids.length === 0 || input.ids.length > 200) {
+    throw new PanelInputError('ids must contain 1..200 record ids')
+  }
+  let tags = null
+  if (action === 'tag') {
+    if (!Array.isArray(input.tags) || input.tags.length === 0 || input.tags.length > 10) {
+      throw new PanelInputError('tags must contain 1..10 tag names')
+    }
+    tags = input.tags.map((tag) => {
+      if (typeof tag !== 'string' || tag.trim() === '' || tag.trim().length > 24) {
+        throw new PanelInputError('each tag must be a non-empty string of at most 24 characters')
+      }
+      return tag.trim()
+    })
+  }
+  const atomic = input.atomic !== false
+  const { scope, projectKey } = normalizeScope(input)
+  if (scope === 'project' && projectKey === null) throw new PanelInputError('project key is required for a project-scoped bulk action')
+  const scopes = [{ scope, projectKey }]
+  const previous = new Map()
+  const updated = []
+  const failed = []
+  for (const rawId of input.ids) {
+    if (typeof rawId !== 'string' || rawId.trim() === '') {
+      failed.push({ id: String(rawId), reason: 'id must be a non-empty string' })
+      if (atomic) break
+      continue
+    }
+    const id = rawId.trim()
+    try {
+      const current = backend.store.find(id, scopes)
+      if (current === undefined) {
+        failed.push({ id, reason: 'memory not found in the requested scope' })
+        if (atomic) break
+        continue
+      }
+      let next
+      if (action === 'archive') next = backend.store.update(id, { status: 'archived' }, scopes)
+      else if (action === 'delete') next = backend.store.remove(id, scopes)
+      else if (action === 'restore') {
+        if (current.status !== 'deleted') {
+          failed.push({ id, reason: 'only deleted memories can be restored' })
+          if (atomic) break
+          continue
+        }
+        next = backend.store.update(id, { status: 'active' }, scopes)
+      } else {
+        const merged = [...new Set([...(Array.isArray(current.tags) ? current.tags : []), ...tags])]
+        next = backend.store.update(id, { tags: merged }, scopes)
+      }
+      if (next === undefined) {
+        failed.push({ id, reason: 'memory not found in the requested scope' })
+        if (atomic) break
+        continue
+      }
+      previous.set(id, current)
+      if (next.status === 'deleted') backend.index.remove(id)
+      else backend.index.upsert(next)
+      updated.push(id)
+    } catch (error) {
+      failed.push({ id, reason: error instanceof Error ? error.message : String(error) })
+      if (atomic) break
+    }
+  }
+
+  let rolledBack = false
+  let rollbackFailed = []
+  if (atomic && failed.length > 0 && updated.length > 0) {
+    rolledBack = true
+    for (const id of updated) {
+      const before = previous.get(id)
+      try {
+        const next = backend.store.update(id, {
+          status: before.status,
+          tags: before.tags,
+          topic: before.topic ?? null,
+          importance: before.importance ?? 0.5,
+          pinned: before.pinned === true,
+        }, scopes)
+        if (next !== undefined) {
+          if (next.status === 'deleted') backend.index.remove(id)
+          else backend.index.upsert(next)
+        } else {
+          rollbackFailed.push(id)
+        }
+      } catch {
+        rollbackFailed.push(id)
+      }
+    }
+    updated.length = 0
+  }
+  return { action, updated, failed, rolledBack, rollbackFailed, updatedCount: updated.length, failedCount: failed.length }
+}
+
+/** Suggest topic names that differ only slightly (bigram similarity or containment). */
+export function topicSuggestions(backend, raw) {
+  const input = asObject(raw)
+  const { scope, projectKey } = normalizeScope(input)
+  if (scope === 'project' && projectKey === null) throw new PanelInputError('project key is required for a project-scoped topic query')
+  const records = backend.store.list(scope, scope === 'project' ? projectKey : null)
+  const counts = new Map()
+  for (const record of records) {
+    const topic = typeof record.topic === 'string' && record.topic.trim() !== '' ? record.topic.trim() : null
+    if (topic !== null) counts.set(topic, (counts.get(topic) ?? 0) + 1)
+  }
+  const topics = [...counts.keys()].sort()
+  const suggestions = []
+  for (let i = 0; i < topics.length; i += 1) {
+    for (let j = i + 1; j < topics.length; j += 1) {
+      const left = topics[i]
+      const right = topics[j]
+      const a = new Set(tokenize(left).filter((token) => token.length >= 2))
+      const b = new Set(tokenize(right).filter((token) => token.length >= 2))
+      let shared = 0
+      for (const token of a) if (b.has(token)) shared += 1
+      const union = a.size + b.size - shared
+      const similarity = union === 0 ? 0 : shared / union
+      const contained = left.includes(right) || right.includes(left)
+      if (similarity >= 0.5 || contained) {
+        suggestions.push({
+          from: left,
+          to: right,
+          fromCount: counts.get(left),
+          toCount: counts.get(right),
+          similarity: Math.round(similarity * 100) / 100,
+        })
+      }
+    }
+  }
+  suggestions.sort((left, right) => right.similarity - left.similarity)
+  return { scope, projectKey: scope === 'project' ? projectKey : null, suggestions: suggestions.slice(0, 20), topicCount: counts.size }
+}
+
+/** Merge one topic into another for every record in the scope. */
+export function mergeTopics(backend, raw) {
+  const input = asObject(raw)
+  const { scope, projectKey } = normalizeScope(input)
+  if (scope === 'project' && projectKey === null) throw new PanelInputError('project key is required for a project-scoped topic merge')
+  const from = optionalText(input.from, 'from', 48)
+  const to = optionalText(input.to, 'to', 48)
+  if (from === undefined || to === undefined || from === to) throw new PanelInputError('from and to must be different topic names')
+  const records = backend.store.list(scope, scope === 'project' ? projectKey : null)
+  let merged = 0
+  for (const record of records) {
+    if (record.topic !== from) continue
+    const updated = backend.store.update(record.id, { topic: to }, [{ scope, projectKey: scope === 'project' ? projectKey : null }])
+    if (updated !== undefined) {
+      backend.index.upsert(updated)
+      merged += 1
+    }
+  }
+  return { from, to, merged }
+}
+
+/** Resolve Obsidian path settings from the request or the live config. */
+function obsidianTargetFrom(backend, input) {
+  const vaultPath = optionalText(input.vaultPath, 'vaultPath', 1024) ?? backend.config?.obsidian?.vaultPath ?? null
+  if (vaultPath === null) throw new PanelInputError('Obsidian vault path is not configured')
+  const folder = optionalText(input.folder, 'folder', 64) ?? backend.config?.obsidian?.folder ?? 'DSH Memory'
+  return { vaultPath, folder }
+}
+
+/** Export memories to the Obsidian vault as one Markdown file each. */
+export function obsidianExport(backend, raw) {
+  const input = asObject(raw)
+  const { vaultPath, folder } = obsidianTargetFrom(backend, input)
+  let summary
+  try {
+    summary = exportToObsidian({ store: backend.store, vaultPath, folder })
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
+  }
+  try {
+    writeSyncSummary(backend.root, { direction: 'export', ...summary })
+  } catch {
+    // The sync summary is advisory.
+  }
+  return summary
+}
+
+/** Import Markdown notes back into memory (dryRun previews without writing). */
+export function obsidianImport(backend, raw) {
+  const input = asObject(raw)
+  const { vaultPath, folder } = obsidianTargetFrom(backend, input)
+  let summary
+  try {
+    summary = importFromObsidian({
+      store: backend.store,
+      index: backend.index,
+      vaultPath,
+      folder,
+      dryRun: input.dryRun === true,
+    })
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
+  }
+  if (input.dryRun !== true) {
+    try {
+      writeSyncSummary(backend.root, { direction: 'import', ...summary })
+    } catch {
+      // The sync summary is advisory.
+    }
+  }
+  return summary
+}
+
+/** Current Obsidian configuration + last sync summary. */
+export function obsidianStatus(backend) {
+  return {
+    vaultPath: backend.config?.obsidian?.vaultPath ?? null,
+    folder: backend.config?.obsidian?.folder ?? 'DSH Memory',
+    lastSync: backend.root ? readSyncSummary(backend.root) : null,
+  }
+}
+
+/** Topic-oriented graph for the panel's knowledge map. */
+export function knowledgeGraph(backend, raw) {
+  const input = asObject(raw)
+  let records
+  if (input.scope === 'all') {
+    records = backend.store.listAll()
+  } else {
+    const { scope, projectKey } = normalizeScope(input)
+    const resolvedProjectKey = scope === 'project' ? (projectKey ?? currentProjectKey(backend.store)) : null
+    records = scope === 'global'
+      ? backend.store.list('global', null)
+      : resolvedProjectKey === null ? [] : backend.store.list('project', resolvedProjectKey)
+  }
+  const limit = Number.isInteger(input.limit) ? Math.min(1000, Math.max(10, input.limit)) : 400
+  const notes = backend.root === null ? [] : listKnowledgeNotes(backend.root)
+  const profile = deriveProfile(records, { limit: 12 })
+  return buildKnowledgeGraph(records, { maxNodes: limit, notes, traits: profile.traits })
+}
+
+/** Promote one memory into a long-term Markdown knowledge note. */
+export function knowledgePromote(backend, raw) {
+  const target = normalizeTarget(raw)
+  const record = backend.store.find(target.id, target.scopes)
+  if (record === undefined) throw new PanelInputError('memory not found in the requested scope')
+  if (record.status === 'deleted') throw new PanelInputError('cannot promote a deleted memory')
+  if (backend.root === null) throw new PanelInputError('memory root is unavailable')
+  try {
+    const path = promoteMemoryToKnowledge(backend.root, record)
+    return { ok: true, path, id: record.id }
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** List promoted long-term knowledge notes for the knowledge base tab. */
+export function knowledgeList(backend) {
+  const notes = backend.root === null ? [] : listKnowledgeNotes(backend.root)
+  return {
+    notes: notes.map((note) => ({
+      file: note.file,
+      memoryId: note.memoryId,
+      topic: note.topic,
+      tags: note.tags,
+      title: note.title,
+    })),
+    total: notes.length,
+    vaultPath: backend.config?.obsidian?.vaultPath ?? null,
+    folder: backend.config?.obsidian?.folder ?? 'DSH Memory',
+  }
 }
 
 function normalizePatch(raw) {

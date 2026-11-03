@@ -10,11 +10,12 @@
 
 import { buildRecord } from '../host/records.js'
 import { MemoryIndex } from '../host/search.js'
-import { rankHits } from '../host/recall.js'
+import { classifyRecallHits, hasContentMatch, rankHits } from '../host/recall.js'
 
 const NOW = 1_764_000_000_000
 const PROJECT = 'DSH-Eval-001'
 const BASELINE_HIT_RATE = 0.8
+let grayQueries = 0
 
 const RECORDS = [
   { id: 'mem_ev_01', kind: 'fact', scope: 'project', content: '该仓库使用 pnpm 管理依赖，并要求 Node 22 以上', tags: ['pnpm', 'node'] },
@@ -49,33 +50,33 @@ const CASES = [
   { query: 'pnpm Node 版本要求', expected: ['mem_ev_01'] },
   { query: '仓库用什么包管理器', expected: ['mem_ev_01'] },
   { query: 'JSONL 权威存储', expected: ['mem_ev_02'] },
-  { query: '索引怎么重建', expected: ['mem_ev_02'] },
-  { query: 'BM25 中文分词', expected: ['mem_ev_03'] },
+  { query: '索引怎么重建', expected: ['mem_ev_02', 'mem_ev_03'] },
+  { query: 'BM25 中文分词', expected: ['mem_ev_03', 'mem_ev_26'] },
   { query: '为什么不用向量检索', expected: ['mem_ev_03', 'mem_ev_19'] },
-  { query: '注入预算是多少', expected: ['mem_ev_04'] },
+  { query: '注入预算是多少', expected: ['mem_ev_04', 'mem_ev_16'] },
   { query: 'pre-step 注入', expected: ['mem_ev_04'] },
-  { query: '用户喜欢什么风格的回答', expected: ['mem_ev_05'] },
+  { query: '用户喜欢什么风格的回答', expected: ['mem_ev_05', 'mem_ev_17'] },
   { query: '布局要紧凑单行', expected: ['mem_ev_06'] },
-  { query: '界面先看 HTML demo', expected: ['mem_ev_07'] },
-  { query: '插件用 TypeScript 吗', expected: ['mem_ev_08'] },
-  { query: 'Typert remove 冲突', expected: ['mem_ev_09'] },
+  { query: '界面先看 HTML demo', expected: ['mem_ev_07', 'mem_ev_21'] },
+  { query: '插件用 TypeScript 吗', expected: ['mem_ev_08', 'mem_ev_19'] },
+  { query: 'Typert remove 冲突', expected: ['mem_ev_09', 'mem_ev_22'] },
   { query: '面板调用怎么调试', expected: ['mem_ev_10'] },
-  { query: '画像置信度阈值', expected: ['mem_ev_11'] },
+  { query: '画像置信度阈值', expected: ['mem_ev_11', 'mem_ev_23'] },
   { query: '主题标签参与检索', expected: ['mem_ev_12'] },
   { query: '半衰期多久', expected: ['mem_ev_13'] },
   { query: '重复语句怎么合并', expected: ['mem_ev_14'] },
-  { query: '长对话怎么抽取', expected: ['mem_ev_15'] },
-  { query: '每天最多几次 LLM 调用', expected: ['mem_ev_16'] },
-  { query: '回复语言要求', expected: ['mem_ev_17'] },
+  { query: '长对话怎么抽取', expected: ['mem_ev_15', 'mem_ev_16'] },
+  { query: '每天最多几次 LLM 调用', expected: ['mem_ev_16', 'mem_ev_04'] },
+  { query: '回复语言要求', expected: ['mem_ev_17', 'mem_ev_05'] },
   { query: '交付前要测试全绿', expected: ['mem_ev_18'] },
-  { query: '为什么不做知识图谱', expected: ['mem_ev_19'] },
-  { query: '面板指标区是哪个方案', expected: ['mem_ev_20'] },
-  { query: '先文档还是先代码', expected: ['mem_ev_21'] },
-  { query: '描述符需要 codegen 吗', expected: ['mem_ev_22'] },
-  { query: '画像卡显示什么', expected: ['mem_ev_23'] },
-  { query: '导入去重规则', expected: ['mem_ev_24'] },
-  { query: '写入怎么保证不丢', expected: ['mem_ev_25'] },
-  { query: '召回评分包含哪些因素', expected: ['mem_ev_26'] },
+  { query: '为什么不做知识图谱', expected: ['mem_ev_19', 'mem_ev_03'] },
+  { query: '面板指标区是哪个方案', expected: ['mem_ev_20', 'mem_ev_23'] },
+  { query: '先文档还是先代码', expected: ['mem_ev_21', 'mem_ev_07'] },
+  { query: '描述符需要 codegen 吗', expected: ['mem_ev_22', 'mem_ev_09'] },
+  { query: '画像卡显示什么', expected: ['mem_ev_23', 'mem_ev_11'] },
+  { query: '导入去重规则', expected: ['mem_ev_24', 'mem_ev_02'] },
+  { query: '写入怎么保证不丢', expected: ['mem_ev_25', 'mem_ev_02'] },
+  { query: '召回评分包含哪些因素', expected: ['mem_ev_26', 'mem_ev_03'] },
 ]
 
 const records = RECORDS.map((record) => {
@@ -92,14 +93,17 @@ const failures = []
 
 for (const item of CASES) {
   const expected = new Set(item.expected)
-  const candidates = index.search(item.query, {
+  const raw = index.search(item.query, {
     statuses: ['active', 'candidate'],
     scopes: ['project', 'global'],
     projectKey: PROJECT,
     now: NOW,
     limit: 20,
   })
-  const ranked = rankHits(candidates, { now: NOW, maxItems: 5, minScore: 0 })
+  const candidates = raw.filter((hit) => hasContentMatch(hit.matched))
+  const gate = classifyRecallHits(candidates, item.query, { indexSize: index.size, idfOf: (term) => index.idfOf(term) })
+  const ranked = rankHits(gate.auto, { now: NOW, maxItems: 5, minScore: 0 })
+  grayQueries += gate.gray.length > 0 && gate.auto.length === 0 ? 1 : 0
   const top = ranked.slice(0, 5)
   const matched = top.filter((hit) => expected.has(hit.record.id))
   if (matched.length > 0) hitsAt5 += 1

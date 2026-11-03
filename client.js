@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const NAMESPACE = 'dshMemory'
     const SERVICE_KEY = 'remote.' + NAMESPACE
     const NS = 'dsh-memory'
-    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup']
+    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList']
     const RESULT_TYPES = {
       list: 'MemoryList',
       stats: 'MemoryStats',
@@ -36,9 +36,22 @@ window.__ModuleLoader__.load({
       exportData: 'MemoryExport',
       importData: 'MemoryImportResult',
       backup: 'MemoryBackupResult',
+      restoreMemory: 'MemoryUpdateResult',
+      purgeMemory: 'MemoryPurgeResult',
+      history: 'MemoryHistoryResult',
+      restoreRevision: 'MemoryUpdateResult',
+      bulkAction: 'MemoryBulkResult',
+      topicSuggestions: 'MemoryTopicSuggestions',
+      mergeTopics: 'MemoryTopicMerge',
+      obsidianExport: 'MemoryObsidianExport',
+      obsidianImport: 'MemoryObsidianImport',
+      obsidianStatus: 'MemoryObsidianStatus',
+      knowledgeGraph: 'MemoryKnowledgeGraph',
+      knowledgePromote: 'MemoryKnowledgePromote',
+      knowledgeList: 'MemoryKnowledgeList',
     }
     const KINDS = ['preference', 'fact', 'decision', 'episode']
-    const STATUSES = ['active', 'candidate', 'archived', 'superseded']
+    const STATUSES = ['active', 'candidate', 'archived', 'superseded', 'deleted']
     const EDITABLE_STATUSES = ['active', 'candidate', 'archived']
     const BOOT_GLOBAL = '__DSH_MEMORY__'
 
@@ -82,6 +95,9 @@ window.__ModuleLoader__.load({
         'filter.scope.project': 'Current project',
         'filter.scope.global': 'Global',
         'filter.status': 'Status',
+        'filter.topic': 'Topic',
+        'filter.topic.all': 'All topics',
+        'filter.topic.none': 'No topic',
         'filter.status.all': 'All statuses',
         'filter.kind': 'Kind',
         'filter.kind.all': 'All kinds',
@@ -100,6 +116,41 @@ window.__ModuleLoader__.load({
         'row.updated': 'Updated {value}',
         'row.pinned': 'Pinned',
         'count.showing': 'Showing {shown} of {total}',
+        'view.memory': 'Memories',
+        'view.knowledge': 'Knowledge map',
+        'view.library': 'Knowledge base',
+        'view.settings': 'Settings',
+        'library.title': 'Knowledge base',
+        'library.hint': 'Long-term notes promoted from memories. Sync them with your Obsidian vault below.',
+        'library.empty': 'No long-term notes yet. Open the knowledge map and promote a memory.',
+        'library.loading': 'Loading knowledge notes…',
+        'library.failed': 'Knowledge base failed: {reason}',
+        'library.total': '{count} notes',
+        'library.vault': 'Vault: {path}',
+        'library.noVault': 'Configure the Obsidian vault in Settings first.',
+        'library.note': 'Note',
+        'library.syncExport': 'Sync to Obsidian',
+        'library.syncImport': 'Import from Obsidian',
+        'knowledge.title': 'Knowledge map',
+        'knowledge.hint': 'Topics are hubs; lines are shared tags. Click a node for details.',
+        'knowledge.empty': 'No memories to visualize yet.',
+        'knowledge.loading': 'Building the knowledge map…',
+        'knowledge.failed': 'Knowledge map failed: {reason}',
+        'knowledge.stats': '{memories} memories · {topics} topics · {tags} tags',
+        'knowledge.truncated': 'Showing the most recent 400 memories.',
+        'knowledge.detail': 'Details',
+        'knowledge.promote': 'Promote to knowledge',
+        'knowledge.promoting': 'Promoting…',
+        'knowledge.promoted': 'Knowledge note written: {path}',
+        'knowledge.promoteFailed': 'Promote failed: {reason}',
+        'knowledge.knowledgeNote': 'Long-term knowledge note',
+        'knowledge.traitNote': 'Profile preference derived from evidence memories',
+        'knowledge.noSelection': 'Click a node to inspect it.',
+        'knowledge.kind': 'Kind',
+        'knowledge.status': 'Status',
+        'knowledge.topic': 'Topic',
+        'knowledge.confidence': 'Confidence',
+        'knowledge.tags': 'Tags',
         'settings.title': 'Memory settings',
         'settings.capture': 'Auto capture',
         'settings.inject': 'Context injection',
@@ -109,6 +160,15 @@ window.__ModuleLoader__.load({
         'settings.group.capture': 'Capture & injection',
         'settings.group.retention': 'Retention & maintenance',
         'settings.group.data': 'Data',
+        'settings.group.obsidian': 'Obsidian',
+        'obsidian.vault': 'Vault path',
+        'obsidian.folder': 'Folder',
+        'obsidian.actions': 'Sync',
+        'obsidian.export': 'Export to Obsidian',
+        'obsidian.import': 'Import from Obsidian',
+        'obsidian.exported': 'Exported {written}, skipped {skipped}',
+        'obsidian.imported': 'Imported {imported}, updated {updated}, skipped {skipped}',
+        'obsidian.failed': 'Obsidian sync failed: {reason}',
         'settings.save': 'Save settings',
         'settings.saving': 'Saving…',
         'settings.saved': 'Settings saved',
@@ -129,6 +189,7 @@ window.__ModuleLoader__.load({
         'settings.failed': 'Save failed: {reason}',
         'settings.maintenance.none': 'Self-maintenance has not run yet',
         'settings.maintenance.summary': 'Last maintenance: archived {archived} · pruned {pruned} backups',
+        'settings.inject.usage': 'Last injection {tokens}/{budget} tokens',
         'profile.title': 'User profile',
         'profile.summary': '{count} traits',
         'profile.evidence': '{count} evidence',
@@ -140,6 +201,40 @@ window.__ModuleLoader__.load({
         'actions.refresh': 'Refresh',
         'actions.rebuild': 'Rebuild index',
         'actions.edit': 'Edit',
+        'actions.restore': 'Restore',
+        'actions.purge': 'Delete forever',
+        'actions.purgeConfirm': 'Confirm delete',
+        'actions.history': 'History',
+        'actions.close': 'Close',
+        'notice.restored': 'Memory restored',
+        'notice.purged': 'Memory permanently deleted',
+        'notice.bulkDone': '{count} memories processed',
+        'bulk.selected': '{count} selected',
+        'bulk.selectAll': 'Select all on page',
+        'bulk.clear': 'Clear',
+        'bulk.archive': 'Archive',
+        'bulk.delete': 'Delete',
+        'bulk.restore': 'Restore',
+        'bulk.selectRow': 'Select memory',
+        'history.title': 'Revision history',
+        'history.loading': 'Loading revisions…',
+        'history.restore': 'Restore this revision',
+        'history.current': 'current',
+        'history.time': 'Updated {time}',
+        'history.diffRemoved': 'removed: {text}',
+        'history.diffAdded': 'added: {text}',
+        'bulk.tag': 'Tags',
+        'bulk.tagTitle': 'Add tags to selected memories',
+        'bulk.tagPlaceholder': 'Comma separated, e.g. pnpm, node',
+        'bulk.tagApply': 'Add tags',
+        'notice.bulkPartial': '{updated} updated, {failed} failed',
+        'notice.bulkRolledBack': '{failed} failed, all changes rolled back',
+        'topic.suggest': 'Merge suggestions',
+        'topic.mergeTitle': 'Topic merge suggestions',
+        'topic.mergeLine': '{from} ({fromCount}) → {to} ({toCount})',
+        'topic.mergeAction': 'Merge',
+        'topic.merged': '{count} memories merged',
+        'topic.none': 'No merge suggestions',
         'actions.approve': 'Approve',
         'actions.archive': 'Archive',
         'actions.delete': 'Delete',
@@ -210,6 +305,9 @@ window.__ModuleLoader__.load({
         'filter.scope.project': '\u5f53\u524d\u9879\u76ee',
         'filter.scope.global': '\u5168\u5c40',
         'filter.status': '\u72b6\u6001',
+        'filter.topic': '\u4e3b\u9898',
+        'filter.topic.all': '\u5168\u90e8\u4e3b\u9898',
+        'filter.topic.none': '\u65e0\u4e3b\u9898',
         'filter.status.all': '\u5168\u90e8\u72b6\u6001',
         'filter.kind': '\u7c7b\u578b',
         'filter.kind.all': '\u5168\u90e8\u7c7b\u578b',
@@ -228,6 +326,41 @@ window.__ModuleLoader__.load({
         'row.updated': '\u66f4\u65b0\u4e8e {value}',
         'row.pinned': '\u5df2\u7f6e\u9876',
         'count.showing': '\u663e\u793a {shown}/{total} \u6761',
+        'view.memory': '\u8bb0\u5fc6',
+        'view.knowledge': '\u77e5\u8bc6\u56fe\u8c31',
+        'view.library': '\u77e5\u8bc6\u5e93',
+        'view.settings': '\u8bbe\u7f6e',
+        'library.title': '\u77e5\u8bc6\u5e93',
+        'library.hint': '\u7531\u8bb0\u5fc6\u63d0\u5347\u7684\u957f\u671f\u7b14\u8bb0\uff0c\u53ef\u540c\u6b65\u5230 Obsidian\u3002',
+        'library.empty': '\u8fd8\u6ca1\u6709\u957f\u671f\u7b14\u8bb0\uff1a\u53bb\u77e5\u8bc6\u56fe\u8c31\u63d0\u5347\u4e00\u6761\u8bb0\u5fc6\u5427\u3002',
+        'library.loading': '\u6b63\u5728\u52a0\u8f7d\u77e5\u8bc6\u7b14\u8bb0\u2026',
+        'library.failed': '\u77e5\u8bc6\u5e93\u52a0\u8f7d\u5931\u8d25\uff1a{reason}',
+        'library.total': '{count} \u6761\u7b14\u8bb0',
+        'library.vault': 'Vault\uff1a{path}',
+        'library.noVault': '\u5148\u5728\u300c\u8bbe\u7f6e\u300d\u91cc\u914d\u7f6e Obsidian vault\u3002',
+        'library.note': '\u7b14\u8bb0',
+        'library.syncExport': '\u540c\u6b65\u5230 Obsidian',
+        'library.syncImport': '\u4ece Obsidian \u5bfc\u5165',
+        'knowledge.title': '\u77e5\u8bc6\u56fe\u8c31',
+        'knowledge.hint': '\u4e3b\u9898\u662f\u4e2d\u5fc3\u8282\u70b9\uff0c\u8fde\u7ebf\u662f\u5171\u4eab\u6807\u7b7e\u3002\u70b9\u51fb\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
+        'knowledge.empty': '\u6682\u65e0\u53ef\u53ef\u89c6\u5316\u7684\u8bb0\u5fc6\u3002',
+        'knowledge.loading': '\u6b63\u5728\u6784\u5efa\u77e5\u8bc6\u56fe\u8c31\u2026',
+        'knowledge.failed': '\u77e5\u8bc6\u56fe\u8c31\u52a0\u8f7d\u5931\u8d25\uff1a{reason}',
+        'knowledge.stats': '{memories} \u6761\u8bb0\u5fc6 \u00b7 {topics} \u4e2a\u4e3b\u9898 \u00b7 {tags} \u4e2a\u6807\u7b7e',
+        'knowledge.truncated': '\u4ec5\u5c55\u793a\u6700\u8fd1 400 \u6761\u8bb0\u5fc6\u3002',
+        'knowledge.detail': '\u8be6\u60c5',
+        'knowledge.promote': '\u63d0\u5347\u4e3a\u77e5\u8bc6',
+        'knowledge.promoting': '\u63d0\u5347\u4e2d\u2026',
+        'knowledge.promoted': '\u5df2\u5199\u5165\u77e5\u8bc6\u7b14\u8bb0\uff1a{path}',
+        'knowledge.promoteFailed': '\u63d0\u5347\u5931\u8d25\uff1a{reason}',
+        'knowledge.knowledgeNote': '\u957f\u671f\u77e5\u8bc6\u7b14\u8bb0',
+        'knowledge.traitNote': '\u7531\u8bc1\u636e\u8bb0\u5fc6\u5f52\u7eb3\u7684\u753b\u50cf\u504f\u597d',
+        'knowledge.noSelection': '\u70b9\u51fb\u4e00\u4e2a\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
+        'knowledge.kind': '\u7c7b\u578b',
+        'knowledge.status': '\u72b6\u6001',
+        'knowledge.topic': '\u4e3b\u9898',
+        'knowledge.confidence': '\u7f6e\u4fe1\u5ea6',
+        'knowledge.tags': '\u6807\u7b7e',
         'settings.title': '\u8bb0\u5fc6\u8bbe\u7f6e',
         'settings.capture': '\u81ea\u52a8\u6355\u83b7',
         'settings.inject': '\u4e0a\u4e0b\u6587\u6ce8\u5165',
@@ -237,6 +370,15 @@ window.__ModuleLoader__.load({
         'settings.group.capture': '\u6355\u83b7\u4e0e\u6ce8\u5165',
         'settings.group.retention': '\u4fdd\u7559\u4e0e\u7ef4\u62a4',
         'settings.group.data': '\u6570\u636e',
+        'settings.group.obsidian': 'Obsidian',
+        'obsidian.vault': 'Vault \u8def\u5f84',
+        'obsidian.folder': '\u6587\u4ef6\u5939',
+        'obsidian.actions': '\u540c\u6b65',
+        'obsidian.export': '\u5bfc\u51fa\u5230 Obsidian',
+        'obsidian.import': '\u4ece Obsidian \u5bfc\u5165',
+        'obsidian.exported': '\u5df2\u5bfc\u51fa {written} \u6761\uff0c\u8df3\u8fc7 {skipped} \u6761',
+        'obsidian.imported': '\u5df2\u5bfc\u5165 {imported} \u6761\uff0c\u66f4\u65b0 {updated} \u6761\uff0c\u8df3\u8fc7 {skipped} \u6761',
+        'obsidian.failed': 'Obsidian \u540c\u6b65\u5931\u8d25\uff1a{reason}',
         'settings.save': '\u4fdd\u5b58\u8bbe\u7f6e',
         'settings.saving': '\u4fdd\u5b58\u4e2d\u2026',
         'settings.saved': '\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
@@ -257,6 +399,7 @@ window.__ModuleLoader__.load({
         'settings.failed': '\u4fdd\u5b58\u5931\u8d25\uff1a{reason}',
         'settings.maintenance.none': '\u5c1a\u672a\u6267\u884c\u81ea\u7ef4\u62a4',
         'settings.maintenance.summary': '\u4e0a\u6b21\u81ea\u7ef4\u62a4\uff1a\u5f52\u6863 {archived} \u6761 \u00b7 \u6e05\u7406\u5907\u4efd {pruned} \u4efd',
+        'settings.inject.usage': '\u4e0a\u6b21\u6ce8\u5165 {tokens}/{budget} token',
         'profile.title': '\u7528\u6237\u753b\u50cf',
         'profile.summary': '\u5171 {count} \u6761',
         'profile.evidence': '{count} \u6761\u8bc1\u636e',
@@ -268,6 +411,40 @@ window.__ModuleLoader__.load({
         'actions.refresh': '\u5237\u65b0',
         'actions.rebuild': '\u91cd\u5efa\u7d22\u5f15',
         'actions.edit': '\u7f16\u8f91',
+        'actions.restore': '\u6062\u590d',
+        'actions.purge': '\u5f7b\u5e95\u5220\u9664',
+        'actions.purgeConfirm': '\u786e\u8ba4\u5f7b\u5e95\u5220\u9664',
+        'actions.history': '\u5386\u53f2',
+        'actions.close': '\u5173\u95ed',
+        'notice.restored': '\u8bb0\u5fc6\u5df2\u6062\u590d',
+        'notice.purged': '\u8bb0\u5fc6\u5df2\u5f7b\u5e95\u5220\u9664',
+        'notice.bulkDone': '\u5df2\u5904\u7406 {count} \u6761',
+        'bulk.selected': '\u5df2\u9009 {count} \u6761',
+        'bulk.selectAll': '\u5168\u9009\u672c\u9875',
+        'bulk.clear': '\u6e05\u9664',
+        'bulk.archive': '\u5f52\u6863',
+        'bulk.delete': '\u5220\u9664',
+        'bulk.restore': '\u6062\u590d',
+        'bulk.selectRow': '\u9009\u62e9\u8bb0\u5fc6',
+        'history.title': '\u7248\u672c\u5386\u53f2',
+        'history.loading': '\u6b63\u5728\u52a0\u8f7d\u7248\u672c\u2026',
+        'history.restore': '\u6062\u590d\u6b64\u7248\u672c',
+        'history.current': '\u5f53\u524d',
+        'history.time': '\u66f4\u65b0\u4e8e {time}',
+        'history.diffRemoved': '\u5220\u9664\uff1a{text}',
+        'history.diffAdded': '\u65b0\u589e\uff1a{text}',
+        'bulk.tag': '\u6807\u7b7e',
+        'bulk.tagTitle': '\u7ed9\u9009\u4e2d\u8bb0\u5fc6\u6dfb\u52a0\u6807\u7b7e',
+        'bulk.tagPlaceholder': '\u9017\u53f7\u5206\u9694\uff0c\u5982 pnpm, node',
+        'bulk.tagApply': '\u6dfb\u52a0\u6807\u7b7e',
+        'notice.bulkPartial': '\u5df2\u66f4\u65b0 {updated} \u6761\uff0c\u5931\u8d25 {failed} \u6761',
+        'notice.bulkRolledBack': '\u5931\u8d25 {failed} \u6761\uff0c\u5df2\u56de\u6eda\u5168\u90e8\u66f4\u6539',
+        'topic.suggest': '\u5408\u5e76\u5efa\u8bae',
+        'topic.mergeTitle': '\u4e3b\u9898\u5408\u5e76\u5efa\u8bae',
+        'topic.mergeLine': '{from}\uff08{fromCount}\uff09\u2192 {to}\uff08{toCount}\uff09',
+        'topic.mergeAction': '\u5408\u5e76',
+        'topic.merged': '\u5df2\u5408\u5e76 {count} \u6761',
+        'topic.none': '\u6682\u65e0\u5408\u5e76\u5efa\u8bae',
         'actions.approve': '\u6279\u51c6',
         'actions.archive': '\u5f52\u6863',
         'actions.delete': '\u5220\u9664',
@@ -454,6 +631,8 @@ window.__ModuleLoader__.load({
       '.dsh-memory-muted{margin:14px 0 0}',
       '.dsh-memory-list-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:16px 0 8px;flex-wrap:wrap}',
       '.dsh-memory-kind-tabs{display:flex;gap:6px;flex-wrap:wrap}',
+      '.dsh-memory-list-tools{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;min-width:0}',
+      '.dsh-memory-topic-select{max-width:170px;min-width:110px;font-size:12px}',
       '.dsh-memory-kind-tab{height:26px;padding:0 10px;border-radius:7px;border:.5px solid var(--dsh-memory-card-border);background:var(--dsh-memory-card-bg);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:24px;cursor:pointer}',
       '.dsh-memory-kind-tab:hover{background:var(--dsw-alias-bg-layer-2)}',
       '.dsh-memory-kind-tab[data-active="true"]{background:var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,#2f6df6));border-color:transparent;color:#fff}',
@@ -497,6 +676,26 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;box-sizing:border-box;min-height:48px;font-size:13.5px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-row+.dsh-memory-settings-row{border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dsh-memory-view-tabs{display:inline-flex;gap:2px;padding:3px;margin:10px 0 2px;border:.5px solid var(--dsh-memory-card-border);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#f5f6f8)}',
+      '.dsh-memory-view-tab{border:0;background:transparent;padding:5px 12px;border-radius:7px;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
+      '.dsh-memory-view-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}',
+      '.dsh-memory-knowledge{display:flex;flex-direction:column;gap:8px}',
+      '.dsh-memory-knowledge-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}',
+      '.dsh-memory-graph-wrap{overflow:hidden;border:.5px solid var(--dsh-memory-card-border);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dsh-memory-graph{display:block;width:100%;height:auto}',
+      '.dsh-memory-graph-edge{stroke:var(--dsw-alias-border-l3,rgba(127,127,127,.35));stroke-width:1;opacity:.55}',
+      '.dsh-memory-graph-edge[data-type="tag"]{stroke:var(--dsw-alias-state-business-primary,#2f6df6);stroke-dasharray:3 3;opacity:.45}',
+      '.dsh-memory-graph-hub circle{fill:color-mix(in srgb,var(--dsw-alias-label-tertiary,#6b7280) 14%,transparent);stroke:var(--dsw-alias-border-l3,rgba(127,127,127,.35))}',
+      '.dsh-memory-graph-hub-label{font-size:11px;fill:var(--dsw-alias-label-secondary,#6b7280)}',
+      '.dsh-memory-graph-node{cursor:pointer;stroke:var(--dsw-alias-bg-layer-1,#fff);stroke-width:1.5}',
+      '.dsh-memory-graph-node[data-kind="preference"]{fill:#2f6df6}',
+      '.dsh-memory-graph-node[data-kind="fact"]{fill:#1a9e63}',
+      '.dsh-memory-graph-node[data-kind="decision"]{fill:#b7791f}',
+      '.dsh-memory-graph-node[data-kind="episode"]{fill:#8b5cf6}',
+      '.dsh-memory-graph-node[data-kind="trait"]{fill:#eab308}',
+      '.dsh-memory-graph-node:focus{outline:none;stroke:#1f2328;stroke-width:2}',
+      '.dsh-memory-load-row{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}',
+      '.dsh-memory-settings-input{box-sizing:border-box;flex:0 1 240px;min-width:0;height:28px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px}',
       '.dsh-memory-settings-control{display:flex;align-items:center;gap:8px;flex:0 0 auto}',
       '.dsh-memory-switch{position:relative;flex:0 0 auto;width:40px;height:22px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.35));cursor:pointer;transition:background .18s ease}',
       '.dsh-memory-switch[aria-checked="true"]{background:var(--dsw-alias-state-business-primary,#2f6df6)}',
@@ -514,6 +713,18 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-state i{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary,#34a26b)}',
       '.dsh-memory-settings-state[data-dirty="true"] i{background:var(--dsw-alias-state-warning-primary,#d97706)}',
       '.dsh-memory-settings-notice{margin:10px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280)}',
+      '.dsh-memory-select-box{box-sizing:border-box;width:14px;height:14px;margin:0;flex:0 0 auto;accent-color:var(--dsw-alias-state-business-primary,#2f6df6);cursor:pointer}',
+      '.dsh-memory-bulk{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:8px 0;padding:8px 10px;border:.5px solid var(--dsh-memory-card-border);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#2f6df6) 6%,transparent);color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px}',
+      '.dsh-memory-bulk-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.dsh-memory-history{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow:auto}',
+      '.dsh-memory-history-item{padding-top:8px;border-top:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-history-item:first-child{padding-top:0;border-top:0}',
+      '.dsh-memory-history-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dsh-memory-history-content{margin:4px 0 6px;font-size:13px;line-height:1.45;color:var(--dsw-alias-label-primary,#1f2328);word-break:break-word}',
+      '.dsh-memory-history-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}',
+      '.dsh-memory-diff{display:flex;flex-direction:column;gap:2px;margin:4px 0 6px;font-size:11.5px;line-height:16px}',
+      '.dsh-memory-diff-del{color:var(--dsw-alias-state-danger-primary,#c0392b)}',
+      '.dsh-memory-diff-add{color:var(--dsw-alias-state-success-primary,#1a9e63)}',
       '.dsh-memory-file-input{display:none}',
       '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}.dsh-memory-settings-head{gap:10px}.dsh-memory-settings-row{gap:12px}}',
       '@container (max-width:430px){.dsh-memory-settings-row{min-height:46px}.dsh-memory-settings .dsh-memory-button{height:30px;padding:0 10px}}',
@@ -1054,9 +1265,11 @@ window.__ModuleLoader__.load({
       const { stats, call, t, onSaved } = props
       const [capture, setCapture] = React.useState(true)
       const [inject, setInject] = React.useState(true)
-      const [budget, setBudget] = React.useState('600')
+      const [budget, setBudget] = React.useState('360')
       const [retention, setRetention] = React.useState('90')
       const [maintenance, setMaintenance] = React.useState(true)
+      const [obsidianVault, setObsidianVault] = React.useState('')
+      const [obsidianFolder, setObsidianFolder] = React.useState('DSH Memory')
       const [baseline, setBaseline] = React.useState(null)
       const [savedAt, setSavedAt] = React.useState('')
       const [busy, setBusy] = React.useState(false)
@@ -1068,15 +1281,19 @@ window.__ModuleLoader__.load({
         const next = {
           capture: stats.captureEnabled === true,
           inject: stats.injectEnabled === true,
-          budget: String(stats.injectMaxTokens ?? 600),
+          budget: String(stats.injectMaxTokens ?? 360),
           retention: String(stats.retentionEpisodeDays ?? 90),
           maintenance: stats.maintenanceEnabled !== false,
+          obsidianVault: typeof stats.obsidianVaultPath === 'string' ? stats.obsidianVaultPath : '',
+          obsidianFolder: typeof stats.obsidianFolder === 'string' ? stats.obsidianFolder : 'DSH Memory',
         }
         setCapture(next.capture)
         setInject(next.inject)
         setBudget(next.budget)
         setRetention(next.retention)
         setMaintenance(next.maintenance)
+        setObsidianVault(next.obsidianVault)
+        setObsidianFolder(next.obsidianFolder)
         setBaseline(next)
       }, [stats])
 
@@ -1085,19 +1302,25 @@ window.__ModuleLoader__.load({
         inject !== baseline.inject ||
         budget !== baseline.budget ||
         retention !== baseline.retention ||
-        maintenance !== baseline.maintenance
+        maintenance !== baseline.maintenance ||
+        obsidianVault !== baseline.obsidianVault ||
+        obsidianFolder !== baseline.obsidianFolder
       )
       const last = stats === null ? null : stats.maintenance
-      const summary = maintenance
+      const injection = stats === null || stats.lastInjection === null || stats.lastInjection === undefined ? null : stats.lastInjection
+      const usage = injection === null
+        ? ''
+        : ' · ' + t('settings.inject.usage', { tokens: String(injection.tokens ?? 0), budget: String(injection.budget ?? 360) })
+      const summary = (maintenance
         ? (last === null || last === undefined
           ? t('settings.maintenance.none')
           : t('settings.maintenance.summary', { archived: String(last.archived ?? 0), pruned: String(last.pruned ?? 0) }))
-        : t('settings.maintenance.off')
+        : t('settings.maintenance.off')) + usage
       const stateText = dirty
         ? t('settings.state.dirty')
         : (savedAt === '' ? t('settings.state.saved') : t('settings.state.savedAt', { time: savedAt }))
 
-      const snapshot = () => ({ capture, inject, budget, retention, maintenance })
+      const snapshot = () => ({ capture, inject, budget, retention, maintenance, obsidianVault, obsidianFolder })
       const save = async () => {
         if (call === null || busy || !dirty) return
         setBusy(true)
@@ -1106,9 +1329,11 @@ window.__ModuleLoader__.load({
           await call('updateSettings', {
             captureEnabled: capture,
             injectEnabled: inject,
-            injectMaxTokens: Math.max(100, Number(budget) || 600),
+            injectMaxTokens: Math.max(100, Number(budget) || 360),
             retentionEpisodeDays: Math.max(0, Number(retention) || 0),
             maintenanceEnabled: maintenance,
+            obsidianVaultPath: obsidianVault.trim(),
+            obsidianFolder: obsidianFolder.trim(),
           })
           setBaseline(snapshot())
           setSavedAt(timeNowText())
@@ -1188,12 +1413,62 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dsh-memory-number' },
           h('input', { type: 'number', min, max, step, value, 'aria-label': label, onChange }),
           h('em', null, unit)))
+      const textRow = (label, value, placeholder, onChange) => h('div', { className: 'dsh-memory-settings-row' },
+        h('span', { className: 'dsh-memory-settings-label' }, label),
+        h('input', {
+          className: 'dsh-memory-settings-input',
+          type: 'text',
+          value,
+          placeholder,
+          'aria-label': label,
+          onChange,
+        }))
       const button = (label, onClick) => h('button', {
         type: 'button',
         className: 'dsh-memory-button',
         onClick,
         disabled: busy,
       }, label)
+
+      const obsidianExport = async () => {
+        if (call === null || busy) return
+        setBusy(true)
+        setNotice('')
+        try {
+          const result = await call('obsidianExport', {
+            vaultPath: obsidianVault.trim(),
+            folder: obsidianFolder.trim(),
+          })
+          setNotice(t('obsidian.exported', { written: String(result.written ?? 0), skipped: String(result.skipped ?? 0) }))
+          onSaved()
+        } catch (failure) {
+          setNotice(t('obsidian.failed', { reason: messageOf(failure) }))
+        } finally {
+          setBusy(false)
+        }
+      }
+      const obsidianImport = async () => {
+        if (call === null || busy) return
+        setBusy(true)
+        setNotice('')
+        try {
+          const result = await call('obsidianImport', {
+            vaultPath: obsidianVault.trim(),
+            folder: obsidianFolder.trim(),
+            dryRun: false,
+          })
+          setNotice(t('obsidian.imported', {
+            imported: String(result.imported ?? 0),
+            updated: String(result.updated ?? 0),
+            skipped: String(result.skipped ?? 0),
+          }))
+          onSaved()
+        } catch (failure) {
+          setNotice(t('obsidian.failed', { reason: messageOf(failure) }))
+        } finally {
+          setBusy(false)
+        }
+      }
 
       return h('section', { className: 'dsh-memory-card dsh-memory-settings' },
         h('div', { className: 'dsh-memory-settings-head' },
@@ -1227,6 +1502,15 @@ window.__ModuleLoader__.load({
                 className: 'dsh-memory-file-input',
                 onChange: importAll,
               })))),
+        h('div', { className: 'dsh-memory-settings-group' },
+          h('h4', { className: 'dsh-memory-settings-group-title' }, t('settings.group.obsidian')),
+          textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
+          textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
+          h('div', { className: 'dsh-memory-settings-row' },
+            h('span', { className: 'dsh-memory-settings-label' }, t('obsidian.actions')),
+            h('div', { className: 'dsh-memory-settings-buttons' },
+              button(t('obsidian.export'), obsidianExport),
+              button(t('obsidian.import'), obsidianImport)))),
         notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
         h('div', { className: 'dsh-memory-settings-foot' },
           h('span', { className: 'dsh-memory-settings-state', 'data-dirty': dirty ? 'true' : 'false' },
@@ -1238,6 +1522,139 @@ window.__ModuleLoader__.load({
             onClick: save,
             disabled: busy || !dirty,
           }, busy ? t('settings.saving') : t('settings.save'))))
+    }
+
+    function KnowledgeView(props) {
+      const { graph, loading, error, t, onPromote, promoting } = props
+      const [selected, setSelected] = React.useState(null)
+      if (loading) return h('p', { className: 'dsh-memory-muted', role: 'status' }, t('knowledge.loading'))
+      if (error !== '') return h('p', { className: 'dsh-memory-error-text', role: 'alert' }, t('knowledge.failed', { reason: error }))
+      if (graph === null || !Array.isArray(graph.nodes) || graph.nodes.length === 0) {
+        return h('div', { className: 'dsh-memory-empty' }, h('p', { className: 'dsh-memory-empty-title' }, t('knowledge.empty')))
+      }
+      const width = 800
+      const height = 460
+      const cx = width / 2
+      const cy = height / 2
+      const hubs = Array.isArray(graph.hubs) ? graph.hubs : []
+      const positions = new Map()
+      const membersByTopic = new Map()
+      for (const node of graph.nodes) {
+        if (!membersByTopic.has(node.topic)) membersByTopic.set(node.topic, [])
+        membersByTopic.get(node.topic).push(node)
+      }
+      hubs.forEach((hub, index) => {
+        const angle = (index / Math.max(1, hubs.length)) * Math.PI * 2 - Math.PI / 2
+        const distance = hubs.length <= 1 ? 0 : 165
+        const hx = cx + Math.cos(angle) * distance
+        const hy = cy + Math.sin(angle) * distance
+        positions.set(hub.id, { x: hx, y: hy })
+        const members = membersByTopic.get(hub.label) ?? []
+        const ring = Math.max(28, 14 + members.length * 2.6)
+        members.forEach((node, memberIndex) => {
+          const memberAngle = (memberIndex / Math.max(1, members.length)) * Math.PI * 2 + angle
+          positions.set(node.id, {
+            x: hx + Math.cos(memberAngle) * ring,
+            y: hy + Math.sin(memberAngle) * ring,
+          })
+        })
+      })
+      const edgeNodes = graph.edges.map((edge, index) => {
+        const from = positions.get(edge.source)
+        const to = positions.get(edge.target)
+        if (from === undefined || to === undefined) return null
+        return h('line', {
+          key: 'e' + index,
+          x1: from.x,
+          y1: from.y,
+          x2: to.x,
+          y2: to.y,
+          className: 'dsh-memory-graph-edge',
+          'data-type': edge.type,
+        })
+      })
+      const hubNodes = hubs.map((hub) => {
+        const point = positions.get(hub.id)
+        if (point === undefined) return null
+        return h('g', { key: hub.id, className: 'dsh-memory-graph-hub' },
+          h('circle', { cx: point.x, cy: point.y, r: 9 }),
+          h('text', { x: point.x, y: point.y - 14, className: 'dsh-memory-graph-hub-label', textAnchor: 'middle' }, hub.label))
+      })
+      const memoryNodes = graph.nodes.map((node) => {
+        const point = positions.get(node.id)
+        if (point === undefined) return null
+        return h('circle', {
+          key: node.id,
+          cx: point.x,
+          cy: point.y,
+          r: 4.5 + Math.max(0, Math.min(1, node.confidence)) * 3,
+          className: 'dsh-memory-graph-node',
+          'data-kind': node.kind,
+          tabIndex: 0,
+          role: 'button',
+          'aria-label': node.label,
+          onClick: () => setSelected(node),
+          onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') setSelected(node) },
+        }, h('title', null, node.label))
+      })
+      return h('section', { className: 'dsh-memory-card dsh-memory-knowledge' },
+        h('div', { className: 'dsh-memory-knowledge-head' },
+          h('h3', { className: 'dsh-memory-settings-title' }, t('knowledge.title')),
+          h('span', { className: 'dsh-memory-list-total' }, t('knowledge.stats', {
+            memories: String(graph.memoryCount ?? graph.nodes.length),
+            topics: String(graph.topicCount ?? hubs.length),
+            tags: String(graph.tagCount ?? 0),
+          }))),
+        h('p', { className: 'dsh-memory-muted' }, t('knowledge.hint')),
+        h('div', { className: 'dsh-memory-graph-wrap' },
+          h('svg', { viewBox: '0 0 ' + width + ' ' + height, className: 'dsh-memory-graph', role: 'img', 'aria-label': t('knowledge.title') },
+            edgeNodes, hubNodes, memoryNodes)),
+        graph.truncated === true ? h('p', { className: 'dsh-memory-muted' }, t('knowledge.truncated')) : null,
+        h('div', { className: 'dsh-memory-knowledge-detail' },
+          h('h4', { className: 'dsh-memory-settings-group-title' }, t('knowledge.detail')),
+          selected === null
+            ? h('p', { className: 'dsh-memory-muted' }, t('knowledge.noSelection'))
+            : h('div', { className: 'dsh-memory-knowledge-selected' },
+              h('p', { className: 'dsh-memory-content' }, selected.label),
+              h('div', { className: 'dsh-memory-load-row' },
+                h('span', { className: 'dsh-memory-muted' }, t('knowledge.kind') + ': ' + t('kind.' + selected.kind)),
+                h('span', { className: 'dsh-memory-muted' }, t('knowledge.status') + ': ' + t('status.' + selected.status)),
+                h('span', { className: 'dsh-memory-muted' }, t('knowledge.topic') + ': ' + selected.topic),
+                h('span', { className: 'dsh-memory-muted' }, t('knowledge.confidence') + ': ' + Number(selected.confidence).toFixed(2))),
+              selected.type === 'memory'
+                ? h('button', {
+                  type: 'button',
+                  className: 'dsh-memory-button',
+                  onClick: () => onPromote(selected),
+                  disabled: promoting,
+                }, promoting ? t('knowledge.promoting') : t('knowledge.promote'))
+                : h('p', { className: 'dsh-memory-muted' }, selected.type === 'trait' ? t('knowledge.traitNote') : t('knowledge.knowledgeNote')))))
+    }
+
+    function KnowledgeLibrary(props) {
+      const { data, loading, error, t, onSync, busy } = props
+      const notes = data !== null && Array.isArray(data.notes) ? data.notes : []
+      const vault = data !== null && typeof data.vaultPath === 'string' ? data.vaultPath : ''
+      return h('section', { className: 'dsh-memory-card dsh-memory-library' },
+        h('div', { className: 'dsh-memory-knowledge-head' },
+          h('h3', { className: 'dsh-memory-settings-title' }, t('library.title')),
+          h('span', { className: 'dsh-memory-list-total' }, t('library.total', { count: String(notes.length) }))),
+        h('p', { className: 'dsh-memory-muted' }, t('library.hint')),
+        h('p', { className: 'dsh-memory-muted' }, vault === '' ? t('library.noVault') : t('library.vault', { path: vault })),
+        h('div', { className: 'dsh-memory-settings-buttons' },
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('export'), disabled: busy }, t('library.syncExport')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('import'), disabled: busy }, t('library.syncImport'))),
+        loading
+          ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('library.loading'))
+          : error !== ''
+            ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, t('library.failed', { reason: error }))
+            : notes.length === 0
+              ? h('p', { className: 'dsh-memory-muted' }, t('library.empty'))
+              : h('ul', { className: 'dsh-memory-history' }, notes.map((note) => h('li', { key: note.file, className: 'dsh-memory-history-item' },
+                h('div', { className: 'dsh-memory-history-head' },
+                  h('strong', null, note.title),
+                  note.topic === null ? null : h('span', { className: 'dsh-memory-tag' }, note.topic)),
+                h('span', { className: 'dsh-memory-muted' }, note.file)))))
     }
 
     function MemoryEditor(props) {
@@ -1325,6 +1742,23 @@ window.__ModuleLoader__.load({
             }, busy ? t('actions.saving') : t('actions.save'))))))
     }
 
+    /** Character-level change summary between two revisions. */
+    function revisionDiff(older, newer) {
+      if (older === null || newer === null) return null
+      const before = String(older.content ?? '')
+      const after = String(newer.content ?? '')
+      if (before === after) return null
+      let start = 0
+      while (start < before.length && start < after.length && before[start] === after[start]) start += 1
+      let endBefore = before.length - 1
+      let endAfter = after.length - 1
+      while (endBefore >= start && endAfter >= start && before[endBefore] === after[endAfter]) {
+        endBefore -= 1
+        endAfter -= 1
+      }
+      return { removed: before.slice(start, endBefore + 1), added: after.slice(start, endAfter + 1) }
+    }
+
     function MemoryPanel(props) {
       const { t, store } = props
       const locale = props.locale
@@ -1334,10 +1768,22 @@ window.__ModuleLoader__.load({
       const [scope, setScope] = React.useState('project')
       const [status, setStatus] = React.useState('')
       const [kind, setKind] = React.useState('')
+      const [topic, setTopic] = React.useState('')
       const [queryInput, setQueryInput] = React.useState('')
       const [query, setQuery] = React.useState('')
       const [page, setPage] = React.useState(0)
       const [pageSize, setPageSize] = React.useState(10)
+      const [view, setView] = React.useState('memory')
+      const [graph, setGraph] = React.useState(null)
+      const [graphLoading, setGraphLoading] = React.useState(false)
+      const [graphError, setGraphError] = React.useState('')
+      const [graphRefresh, setGraphRefresh] = React.useState(0)
+      const [promotingNode, setPromotingNode] = React.useState(false)
+      const [library, setLibrary] = React.useState(null)
+      const [libraryLoading, setLibraryLoading] = React.useState(false)
+      const [libraryError, setLibraryError] = React.useState('')
+      const [libraryBusy, setLibraryBusy] = React.useState(false)
+      const [libraryRefresh, setLibraryRefresh] = React.useState(0)
       const [data, setData] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
@@ -1346,6 +1792,17 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = React.useState(null)
       const [editError, setEditError] = React.useState('')
       const [confirmingId, setConfirmingId] = React.useState('')
+      const [purgingId, setPurgingId] = React.useState('')
+      const [selected, setSelected] = React.useState([])
+      const [historyRecord, setHistoryRecord] = React.useState(null)
+      const [historyData, setHistoryData] = React.useState(null)
+      const [historyError, setHistoryError] = React.useState('')
+      const [historyBusy, setHistoryBusy] = React.useState(false)
+      const [topicSuggestOpen, setTopicSuggestOpen] = React.useState(false)
+      const [topicSuggestions, setTopicSuggestions] = React.useState(null)
+      const [topicSuggestBusy, setTopicSuggestBusy] = React.useState(false)
+      const [bulkTagOpen, setBulkTagOpen] = React.useState(false)
+      const [bulkTagValue, setBulkTagValue] = React.useState('')
       const [toolbarNarrow, setToolbarNarrow] = React.useState(false)
       const toolbarObserver = React.useRef(null)
       const setToolbarNode = React.useCallback((node) => {
@@ -1392,6 +1849,7 @@ window.__ModuleLoader__.load({
             projectKey,
             status: status === '' ? undefined : status,
             kind: kind === '' ? undefined : kind,
+            topic: topic === '' ? undefined : topic,
             query: query === '' ? undefined : query,
             limit: pageSize,
             offset: page * pageSize,
@@ -1402,11 +1860,35 @@ window.__ModuleLoader__.load({
         } finally {
           setLoading(false)
         }
-      }, [call, scope, status, kind, query, page, pageSize])
+      }, [call, scope, status, kind, topic, query, page, pageSize])
 
       React.useEffect(() => {
         void load()
       }, [load])
+
+      React.useEffect(() => {
+        if (view !== 'library' || call === null) return undefined
+        let cancelled = false
+        setLibraryLoading(true)
+        setLibraryError('')
+        call('knowledgeList', {})
+          .then((next) => { if (!cancelled) setLibrary(next) })
+          .catch((failure) => { if (!cancelled) setLibraryError(messageOf(failure)) })
+          .finally(() => { if (!cancelled) setLibraryLoading(false) })
+        return () => { cancelled = true }
+      }, [view, call, libraryRefresh])
+
+      React.useEffect(() => {
+        if (view !== 'knowledge' || call === null) return undefined
+        let cancelled = false
+        setGraphLoading(true)
+        setGraphError('')
+        call('knowledgeGraph', { scope })
+          .then((next) => { if (!cancelled) setGraph(next) })
+          .catch((failure) => { if (!cancelled) setGraphError(messageOf(failure)) })
+          .finally(() => { if (!cancelled) setGraphLoading(false) })
+        return () => { cancelled = true }
+      }, [view, call, scope, graphRefresh])
 
       React.useEffect(() => {
         const listed = data === null ? null : data.list
@@ -1450,6 +1932,116 @@ window.__ModuleLoader__.load({
       const remove = (record) => runAction('delete:' + record.id, (invoke) => invoke('removeMemory', targetOf(record)), 'notice.deleted')
         .then(() => setConfirmingId(''))
 
+      const restore = (record) => runAction('restore:' + record.id, (invoke) => invoke('restoreMemory', targetOf(record)), 'notice.restored')
+
+      const purge = (record) => {
+        if (purgingId !== record.id) {
+          setPurgingId(record.id)
+          return
+        }
+        setPurgingId('')
+        void runAction('purge:' + record.id, (invoke) => invoke('purgeMemory', targetOf(record)), 'notice.purged')
+      }
+
+      const openHistory = async (record) => {
+        if (call === null) return
+        setHistoryRecord(record)
+        setHistoryData(null)
+        setHistoryError('')
+        setHistoryBusy(true)
+        try {
+          setHistoryData(await call('history', targetOf(record)))
+        } catch (failure) {
+          setHistoryError(messageOf(failure))
+        } finally {
+          setHistoryBusy(false)
+        }
+      }
+
+      const restoreRevision = (revision) => {
+        if (historyRecord === null) return
+        void runAction('revision:' + revision, (invoke) => invoke('restoreRevision', {
+          ...targetOf(historyRecord),
+          revision,
+        }), 'notice.restored').then(() => setHistoryRecord(null))
+      }
+
+      const toggleSelected = (id) => {
+        setSelected((previous) => previous.includes(id)
+          ? previous.filter((value) => value !== id)
+          : [...previous, id])
+      }
+
+      const bulk = async (action, extra) => {
+        if (call === null || selected.length === 0 || busy !== '') return
+        const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
+        setBusy('bulk:' + action)
+        setError('')
+        try {
+          const result = await call('bulkAction', {
+            action,
+            scope,
+            projectKey,
+            ids: selected,
+            ...(extra === undefined ? {} : extra),
+          })
+          if (result.rolledBack === true) {
+            setNotice(t('notice.bulkRolledBack', { failed: String(result.failedCount) }))
+          } else if (result.failedCount > 0) {
+            setNotice(t('notice.bulkPartial', { updated: String(result.updatedCount), failed: String(result.failedCount) }))
+          } else {
+            setNotice(t('notice.bulkDone', { count: String(result.updatedCount) }))
+          }
+          setSelected([])
+          setBulkTagOpen(false)
+          setBulkTagValue('')
+          await load()
+        } catch (failure) {
+          setError(messageOf(failure))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const openTopicSuggestions = async () => {
+        if (call === null) return
+        const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
+        setTopicSuggestOpen(true)
+        setTopicSuggestions(null)
+        setTopicSuggestBusy(true)
+        try {
+          setTopicSuggestions(await call('topicSuggestions', { scope, projectKey }))
+        } catch (failure) {
+          setError(messageOf(failure))
+          setTopicSuggestOpen(false)
+        } finally {
+          setTopicSuggestBusy(false)
+        }
+      }
+
+      const mergeTopic = async (item) => {
+        if (call === null || busy !== '') return
+        const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
+        setBusy('topic:merge')
+        setError('')
+        try {
+          const result = await call('mergeTopics', { scope, projectKey, from: item.from, to: item.to })
+          setNotice(t('topic.merged', { count: String(result.merged ?? 0) }))
+          setTopicSuggestOpen(false)
+          await load()
+        } catch (failure) {
+          setError(messageOf(failure))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const submitBulkTag = () => {
+        const tags = bulkTagValue.split(',').map((tag) => tag.trim()).filter((tag) => tag !== '')
+        if (tags.length === 0) return
+        void bulk('tag', { tags })
+      }
+
       const rebuild = () => runAction('rebuild', (invoke) => invoke('rebuildIndex', {}), 'notice.rebuilt')
 
       const saveEdit = async (patch) => {
@@ -1472,7 +2064,8 @@ window.__ModuleLoader__.load({
       const intro = h('p', { className: 'dsh-memory-intro' }, t('panel.intro'))
 
       if (transport.status === 'loading') {
-        return h('div', { className: 'dsh-memory-root' },
+
+      return h('div', { className: 'dsh-memory-root' },
           heading,
           intro,
           h('p', { className: 'dsh-memory-muted', role: 'status' }, t('list.loading')))
@@ -1494,21 +2087,178 @@ window.__ModuleLoader__.load({
       const total = listed === null ? 0 : listed.total
       const kindCounts = listed !== null && listed.kindCounts !== undefined && listed.kindCounts !== null ? listed.kindCounts : {}
       const kindCountsTotal = Object.values(kindCounts).reduce((sum, value) => sum + (Number(value) || 0), 0)
+      const topicCounts = listed !== null && listed.topicCounts !== undefined && listed.topicCounts !== null ? listed.topicCounts : {}
       const pageCount = Math.max(1, Math.ceil(total / pageSize))
       const currentProjectKey = stats === null ? null : stats.currentProjectKey
-      const filtering = query !== '' || status !== '' || kind !== ''
+      const filtering = query !== '' || status !== '' || kind !== '' || topic !== ''
       const showMissingProject = !filtering && scope === 'project' && currentProjectKey === null &&
         stats !== null && stats.total > 0
+
+      const promoteNode = async (node) => {
+        if (call === null || promotingNode) return
+        const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
+        setPromotingNode(true)
+        setError('')
+        try {
+          const result = await call('knowledgePromote', { id: node.id, scope, projectKey })
+          setNotice(t('knowledge.promoted', { path: String(result.path ?? '') }))
+          setGraphRefresh((value) => value + 1)
+        } catch (failure) {
+          setError(t('knowledge.promoteFailed', { reason: messageOf(failure) }))
+        } finally {
+          setPromotingNode(false)
+        }
+      }
+
+      const syncKnowledge = async (direction) => {
+        if (call === null || libraryBusy) return
+        const vaultPath = stats === null || typeof stats.obsidianVaultPath !== 'string' ? '' : stats.obsidianVaultPath
+        const folder = stats === null || typeof stats.obsidianFolder !== 'string' ? 'DSH Memory' : stats.obsidianFolder
+        setLibraryBusy(true)
+        setError('')
+        try {
+          if (direction === 'export') {
+            const result = await call('obsidianExport', { vaultPath, folder })
+            setNotice(t('obsidian.exported', { written: String(result.written ?? 0), skipped: String(result.skipped ?? 0) }))
+          } else {
+            const result = await call('obsidianImport', { vaultPath, folder, dryRun: false })
+            setNotice(t('obsidian.imported', {
+              imported: String(result.imported ?? 0),
+              updated: String(result.updated ?? 0),
+              skipped: String(result.skipped ?? 0),
+            }))
+          }
+          setLibraryRefresh((value) => value + 1)
+        } catch (failure) {
+          setError(messageOf(failure))
+        } finally {
+          setLibraryBusy(false)
+        }
+      }
+
+      const viewTabs = h('div', { className: 'dsh-memory-view-tabs', role: 'tablist' },
+        ['memory', 'knowledge', 'library', 'settings'].map((value) => h('button', {
+          key: value,
+          type: 'button',
+          role: 'tab',
+          'aria-selected': view === value,
+          'data-active': view === value ? 'true' : 'false',
+          className: 'dsh-memory-view-tab',
+          onClick: () => setView(value),
+        }, t('view.' + value))))
+
+      if (view === 'knowledge') {
+        return h('div', { className: 'dsh-memory-root' },
+          heading,
+          intro,
+          viewTabs,
+          notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
+          error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
+          h(KnowledgeView, { graph, loading: graphLoading, error: graphError, t, onPromote: promoteNode, promoting: promotingNode }))
+      }
+
+      if (view === 'library') {
+        return h('div', { className: 'dsh-memory-root' },
+          heading,
+          intro,
+          viewTabs,
+          notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
+          error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
+          h(KnowledgeLibrary, {
+            data: library,
+            loading: libraryLoading,
+            error: libraryError,
+            t,
+            onSync: syncKnowledge,
+            busy: libraryBusy,
+          }))
+      }
+
+      if (view === 'settings') {
+        return h('div', { className: 'dsh-memory-root' },
+          heading,
+          intro,
+          viewTabs,
+          notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
+          error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
+          h(SettingsCard, { stats, call, t, onSaved: load }))
+      }
+
+      const suggestionItems = topicSuggestions !== null && Array.isArray(topicSuggestions.suggestions) ? topicSuggestions.suggestions : []
+      const suggestionRows = suggestionItems.map((item) => {
+        return h('li', { key: item.from + '>' + item.to, className: 'dsh-memory-history-item' },
+          h('div', { className: 'dsh-memory-history-foot' },
+            h('span', { className: 'dsh-memory-history-content' }, t('topic.mergeLine', {
+              from: item.from,
+              fromCount: String(item.fromCount),
+              to: item.to,
+              toCount: String(item.toCount),
+            })),
+            h('button', {
+              type: 'button',
+              className: 'dsh-memory-button',
+              onClick: () => mergeTopic(item),
+              disabled: busy !== '',
+            }, t('topic.mergeAction'))))
+      })
+      const suggestionNode = suggestionRows.length === 0
+        ? h('p', { className: 'dsh-memory-muted' }, t('topic.none'))
+        : h('ul', { className: 'dsh-memory-history' }, suggestionRows)
+
+      const revisionRows = (historyData !== null && Array.isArray(historyData.revisions) ? historyData.revisions : []).map((revision, index, revisions) => {
+        const diff = revisionDiff(index + 1 < revisions.length ? revisions[index + 1] : null, revision)
+        const diffNode = diff === null
+          ? null
+          : h('div', { className: 'dsh-memory-diff' },
+            diff.removed === '' ? null : h('span', { className: 'dsh-memory-diff-del' }, t('history.diffRemoved', { text: diff.removed })),
+            diff.added === '' ? null : h('span', { className: 'dsh-memory-diff-add' }, t('history.diffAdded', { text: diff.added })))
+        const isCurrent = revision.revision === (historyData.revisions[0] === undefined ? -1 : historyData.revisions[0].revision)
+        return h('li', { key: revision.revision, className: 'dsh-memory-history-item' },
+          h('div', { className: 'dsh-memory-history-head' },
+            h('strong', null, 'r' + revision.revision),
+            h('span', { className: 'dsh-memory-status-pill', 'data-status': revision.status }, t('status.' + revision.status)),
+            isCurrent ? h('span', { className: 'dsh-memory-row-meta' }, t('history.current')) : null),
+          h('p', { className: 'dsh-memory-history-content' }, revision.content),
+          diffNode,
+          h('div', { className: 'dsh-memory-history-foot' },
+            h('span', { className: 'dsh-memory-row-meta' }, t('history.time', { time: formatTime(revision.updatedAt, locale) })),
+            h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => restoreRevision(revision.revision) }, t('history.restore'))))
+      })
+      const historyModal = historyRecord === null ? null : h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dsh-memory-history-title' },
+        h('h3', { className: 'dsh-memory-modal-title', id: 'dsh-memory-history-title' }, t('history.title')),
+        historyBusy
+          ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('history.loading'))
+          : historyError !== ''
+            ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, historyError)
+            : h('ul', { className: 'dsh-memory-history' }, revisionRows),
+        h('div', { className: 'dsh-memory-modal-actions' },
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setHistoryRecord(null) }, t('actions.close'))))
+      const bulkTagModal = bulkTagOpen ? h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true' },
+        h('h3', { className: 'dsh-memory-modal-title' }, t('bulk.tagTitle')),
+        h('input', {
+          className: 'dsh-memory-input',
+          value: bulkTagValue,
+          placeholder: t('bulk.tagPlaceholder'),
+          onChange: (event) => setBulkTagValue(event.target.value),
+        }),
+        h('div', { className: 'dsh-memory-modal-actions' },
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => { setBulkTagOpen(false); setBulkTagValue('') } }, t('actions.cancel')),
+          h('button', { type: 'button', className: 'dsh-memory-button dsh-memory-button-primary', disabled: bulkTagValue.trim() === '' || busy !== '', onClick: submitBulkTag }, t('bulk.tagApply')))) : null
+      const topicModal = topicSuggestOpen ? h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true' },
+        h('h3', { className: 'dsh-memory-modal-title' }, t('topic.mergeTitle')),
+        topicSuggestBusy ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('history.loading')) : suggestionNode,
+        h('div', { className: 'dsh-memory-modal-actions' },
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setTopicSuggestOpen(false) }, t('actions.close')))) : null
 
       return h('div', { className: 'dsh-memory-root' },
         heading,
         intro,
+        viewTabs,
         h('section', { className: 'dsh-memory-hero-cards' },
           h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
           h('div', { className: 'dsh-memory-hero-side' }, h(HeroInsights, { activity: data === null ? null : data.activity, stats, t, locale }))),
         h(ActivityHeatmap, { activity: data === null ? null : data.activity, stats, t, locale }),
         h(ProfileCard, { profile: data === null ? null : data.profile, t }),
-        h(SettingsCard, { stats, call, t, onSaved: load }),
         h('div', { className: 'dsh-memory-toolbar', ref: setToolbarNode, 'data-narrow': toolbarNarrow ? 'true' : 'false' },
           h(Field, { label: t('filter.scope') },
             h('select', {
@@ -1602,7 +2352,28 @@ window.__ModuleLoader__.load({
                 setPage(0)
               },
             }, t('kind.' + value), h('span', { className: 'dsh-memory-kind-count' }, String(kindCounts[value] ?? 0))))),
-          h('span', { className: 'dsh-memory-list-total' }, t('pager.total', { total: String(total) }))),
+          h('div', { className: 'dsh-memory-list-tools' },
+            h('select', {
+              className: 'dsh-memory-select dsh-memory-topic-select',
+              value: topic,
+              onChange: (event) => {
+                setTopic(event.target.value)
+                setPage(0)
+              },
+              'aria-label': t('filter.topic'),
+            },
+            h('option', { value: '' }, t('filter.topic.all')),
+            h('option', { value: '__none__' }, t('filter.topic.none')),
+            Object.keys(topicCounts).filter((key) => key !== '__none__').sort().map((key) =>
+              h('option', { key, value: key }, key + ' (' + String(topicCounts[key]) + ')'))),
+            Object.keys(topicCounts).filter((key) => key !== '__none__').length > 1
+              ? h('button', {
+                type: 'button',
+                className: 'dsh-memory-button',
+                onClick: openTopicSuggestions,
+              }, t('topic.suggest'))
+              : null,
+            h('span', { className: 'dsh-memory-list-total' }, t('pager.total', { total: String(total) })))),
         loading && data === null ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('list.loading')) : null,
         error !== '' ? null : items.length === 0
           ? h('div', { className: 'dsh-memory-empty' },
@@ -1611,12 +2382,38 @@ window.__ModuleLoader__.load({
               ? null
               : h('p', { className: 'dsh-memory-empty-body' }, t('list.empty.body')),
             showMissingProject ? h('p', { className: 'dsh-memory-empty-body' }, t('error.missingProject')) : null)
-          : h('ul', { className: 'dsh-memory-list' },
+          : [
+            selected.length === 0 ? null : h('div', { key: 'bulk', className: 'dsh-memory-bulk' },
+              h('span', null, t('bulk.selected', { count: String(selected.length) })),
+              h('div', { className: 'dsh-memory-bulk-actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-memory-button',
+                  onClick: () => setSelected(selected.length === items.length ? [] : items.map((record) => record.id)),
+                }, t('bulk.selectAll')),
+                status === 'deleted'
+                  ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('restore') }, t('bulk.restore'))
+                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('archive') }, t('bulk.archive')),
+                status === 'deleted'
+                  ? null
+                  : h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete')),
+                status === 'deleted'
+                  ? null
+                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
+                h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setSelected([]) }, t('bulk.clear')))),
+            h('ul', { key: 'list', className: 'dsh-memory-list' },
             items.map((record) => {
               const isConfirming = confirmingId === record.id
               const actionBusy = busy !== ''
               return h('li', { key: record.id, className: 'dsh-memory-row', 'data-kind': record.kind },
                 h('div', { className: 'dsh-memory-row-head' },
+                  h('input', {
+                    type: 'checkbox',
+                    className: 'dsh-memory-select-box',
+                    checked: selected.includes(record.id),
+                    onChange: () => toggleSelected(record.id),
+                    'aria-label': t('bulk.selectRow'),
+                  }),
                   h('span', { className: 'dsh-memory-kind', 'data-kind': record.kind }, t('kind.' + record.kind)),
                   h('span', { className: 'dsh-memory-status-pill', 'data-status': record.status }, t('status.' + record.status)),
                   record.pinned === true ? h('span', { className: 'dsh-memory-pin' }, t('row.pinned')) : null,
@@ -1629,46 +2426,84 @@ window.__ModuleLoader__.load({
                     ? h('ul', { className: 'dsh-memory-tags' }, record.tags.map((tag, index) => h('li', { key: tag + ':' + index, className: 'dsh-memory-tag' }, tag)))
                     : null,
                 h('div', { className: 'dsh-memory-row-actions' },
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-memory-button',
-                    onClick: () => {
-                      setEditError('')
-                      setEditing(record)
-                    },
-                    disabled: actionBusy,
-                  }, t('actions.edit')),
-                  record.status === 'candidate'
-                    ? h('button', {
-                      type: 'button',
-                      className: 'dsh-memory-button dsh-memory-button-primary',
-                      onClick: () => approve(record),
-                      disabled: actionBusy,
-                    }, t('actions.approve'))
-                    : null,
-                  record.status !== 'archived' && record.status !== 'superseded'
-                    ? h('button', {
-                      type: 'button',
-                      className: 'dsh-memory-button',
-                      onClick: () => archive(record),
-                      disabled: actionBusy,
-                    }, t('actions.archive'))
-                    : null,
-                  h('button', {
-                    type: 'button',
-                    className: 'dsh-memory-button',
-                    'data-danger': 'true',
-                    onClick: () => {
-                      if (!isConfirming) {
-                        setConfirmingId(record.id)
-                        return
-                      }
-                      setConfirmingId('')
-                      void remove(record)
-                    },
-                    disabled: actionBusy,
-                  }, isConfirming ? t('actions.deleteConfirm') : t('actions.delete')))))
-            })),
+                  record.status === 'deleted'
+                    ? [
+                      h('button', {
+                        key: 'restore',
+                        type: 'button',
+                        className: 'dsh-memory-button',
+                        onClick: () => restore(record),
+                        disabled: actionBusy,
+                      }, t('actions.restore')),
+                      h('button', {
+                        key: 'history',
+                        type: 'button',
+                        className: 'dsh-memory-button',
+                        onClick: () => openHistory(record),
+                        disabled: actionBusy,
+                      }, t('actions.history')),
+                      h('button', {
+                        key: 'purge',
+                        type: 'button',
+                        className: 'dsh-memory-button',
+                        'data-danger': 'true',
+                        onClick: () => purge(record),
+                        disabled: actionBusy,
+                      }, purgingId === record.id ? t('actions.purgeConfirm') : t('actions.purge')),
+                    ]
+                    : [
+                      h('button', {
+                        key: 'edit',
+                        type: 'button',
+                        className: 'dsh-memory-button',
+                        onClick: () => {
+                          setEditError('')
+                          setEditing(record)
+                        },
+                        disabled: actionBusy,
+                      }, t('actions.edit')),
+                      record.status === 'candidate'
+                        ? h('button', {
+                          key: 'approve',
+                          type: 'button',
+                          className: 'dsh-memory-button dsh-memory-button-primary',
+                          onClick: () => approve(record),
+                          disabled: actionBusy,
+                        }, t('actions.approve'))
+                        : null,
+                      record.status !== 'archived' && record.status !== 'superseded'
+                        ? h('button', {
+                          key: 'archive',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => archive(record),
+                          disabled: actionBusy,
+                        }, t('actions.archive'))
+                        : null,
+                      h('button', {
+                        key: 'history',
+                        type: 'button',
+                        className: 'dsh-memory-button',
+                        onClick: () => openHistory(record),
+                        disabled: actionBusy,
+                      }, t('actions.history')),
+                      h('button', {
+                        key: 'delete',
+                        type: 'button',
+                        className: 'dsh-memory-button',
+                        'data-danger': 'true',
+                        onClick: () => {
+                          if (!isConfirming) {
+                            setConfirmingId(record.id)
+                            return
+                          }
+                          setConfirmingId('')
+                          void remove(record)
+                        },
+                        disabled: actionBusy,
+                      }, isConfirming ? t('actions.deleteConfirm') : t('actions.delete')),
+                    ])))
+            }))],
         data === null || total === 0 ? null : h('div', { className: 'dsh-memory-pager' },
           h('span', null, t('pager.summary', { page: String(page + 1), pages: String(pageCount), total: String(total) })),
           h('div', { className: 'dsh-memory-pager-actions' },
@@ -1702,7 +2537,10 @@ window.__ModuleLoader__.load({
           error: editError,
           onCancel: () => setEditing(null),
           onSave: saveEdit,
-        }))
+        }),
+        historyModal,
+        bulkTagModal,
+        topicModal)
     }
 
     const inject = ['slots', 'locale']

@@ -234,7 +234,7 @@ export class CapturePipeline {
       return
     }
     const scopes = [{ scope: 'global', projectKey: null }, { scope: 'project', projectKey: identity.key }]
-    const maxChars = Math.max(6000, (this.#config.extraction.maxInputTokens ?? 12000) * 2)
+    const maxChars = Math.max(4000, Math.min(16000, Math.round((this.#config.extraction.maxInputTokens ?? 12000) * 1.33)))
     const chunks = chunkMessages(messages, maxChars)
     const selected = chunks.slice(0, MAX_EXTRACTION_CHUNKS)
     if (chunks.length > selected.length) {

@@ -40,9 +40,22 @@ import {
   computeActivity,
   computeProfile,
   computeStats,
+  bulkAction,
   createBackup,
   exportData,
   importData,
+  knowledgeGraph,
+  knowledgeList,
+  knowledgePromote,
+  memoryHistory,
+  mergeTopics,
+  obsidianExport,
+  obsidianImport,
+  obsidianStatus,
+  purgeMemory,
+  restoreMemory,
+  restoreRevision,
+  topicSuggestions,
   listMemories,
   rebuildMemoryIndex,
   updateSettings,
@@ -95,6 +108,7 @@ export function createPanelBackend(options) {
       return typeof options.getConfig === 'function' ? options.getConfig() : (options.config ?? {})
     },
     applySettings: typeof options.applySettings === 'function' ? options.applySettings : null,
+    getLastInjection: typeof options.getLastInjection === 'function' ? options.getLastInjection : null,
   }
   backend.list = (input) => listMemories(backend, input)
   backend.stats = (input) => computeStats(backend, input)
@@ -107,6 +121,19 @@ export function createPanelBackend(options) {
   backend.exportData = () => exportData(backend)
   backend.importData = (input) => importData(backend, input)
   backend.backup = () => createBackup(backend)
+  backend.restoreMemory = (input) => restoreMemory(backend, input)
+  backend.purgeMemory = (input) => purgeMemory(backend, input)
+  backend.history = (input) => memoryHistory(backend, input)
+  backend.bulkAction = (input) => bulkAction(backend, input)
+  backend.restoreRevision = (input) => restoreRevision(backend, input)
+  backend.topicSuggestions = (input) => topicSuggestions(backend, input)
+  backend.mergeTopics = (input) => mergeTopics(backend, input)
+  backend.obsidianExport = (input) => obsidianExport(backend, input)
+  backend.obsidianImport = (input) => obsidianImport(backend, input)
+  backend.obsidianStatus = () => obsidianStatus(backend)
+  backend.knowledgeGraph = (input) => knowledgeGraph(backend, input)
+  backend.knowledgePromote = (input) => knowledgePromote(backend, input)
+  backend.knowledgeList = () => knowledgeList(backend)
   const logCall = makePanelCallLogger(backend.root)
   for (const method of PANEL_METHODS) {
     const operation = backend[method]
@@ -198,6 +225,58 @@ export async function bindTypertRemote(ctx, backend) {
 
     async backup(input) {
       return this.delegate.backup(input)
+    }
+
+    async restoreMemory(input) {
+      return this.delegate.restoreMemory(input)
+    }
+
+    async purgeMemory(input) {
+      return this.delegate.purgeMemory(input)
+    }
+
+    async history(input) {
+      return this.delegate.history(input)
+    }
+
+    async bulkAction(input) {
+      return this.delegate.bulkAction(input)
+    }
+
+    async restoreRevision(input) {
+      return this.delegate.restoreRevision(input)
+    }
+
+    async topicSuggestions(input) {
+      return this.delegate.topicSuggestions(input)
+    }
+
+    async mergeTopics(input) {
+      return this.delegate.mergeTopics(input)
+    }
+
+    async obsidianExport(input) {
+      return this.delegate.obsidianExport(input)
+    }
+
+    async obsidianImport(input) {
+      return this.delegate.obsidianImport(input)
+    }
+
+    async obsidianStatus(input) {
+      return this.delegate.obsidianStatus(input)
+    }
+
+    async knowledgeGraph(input) {
+      return this.delegate.knowledgeGraph(input)
+    }
+
+    async knowledgePromote(input) {
+      return this.delegate.knowledgePromote(input)
+    }
+
+    async knowledgeList(input) {
+      return this.delegate.knowledgeList(input)
     }
   }
 

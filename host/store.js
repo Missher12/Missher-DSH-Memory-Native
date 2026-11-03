@@ -277,6 +277,57 @@ export class MemoryStore {
     })
   }
 
+  /** All persisted revisions of one record, newest revision first. */
+  history(id, scopes) {
+    for (const { scope, projectKey } of scopes) {
+      const state = this.#state(scope, projectKey)
+      if (!state.records.has(id)) continue
+      const revisions = new Map()
+      for (const record of readJsonl(state.file).records) {
+        if (record.id !== id) continue
+        if (!revisions.has(record.revision)) revisions.set(record.revision, record)
+      }
+      return [...revisions.values()].sort((left, right) => right.revision - left.revision)
+    }
+    return []
+  }
+
+  /** Physically remove every revision of one record (used by the recycle bin). */
+  purge(id, scopes) {
+    for (const { scope, projectKey } of scopes) {
+      const state = this.#state(scope, projectKey)
+      if (!state.records.has(id)) continue
+      return this.#withLock(() => {
+        this.#refreshState(state)
+        if (!state.records.has(id)) return false
+        const kept = readJsonl(state.file).records.filter((record) => record.id !== id)
+        mkdirSync(state.dir, { recursive: true, mode: 0o700 })
+        const text = kept.map((record) => `${JSON.stringify(record)}\n`).join('')
+        const temp = `${state.file}.tmp`
+        const fd = openSync(temp, 'w', 0o600)
+        try {
+          writeSync(fd, text)
+          fsyncSync(fd)
+        } finally {
+          closeSync(fd)
+        }
+        renameSync(temp, state.file)
+        try {
+          const dirFd = openSync(state.dir, 'r')
+          try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
+        } catch {
+          // Directory fsync is best effort.
+        }
+        state.records.delete(id)
+        state.lines = kept.length
+        state.bytes = Buffer.byteLength(text)
+        this.#touch()
+        return true
+      })
+    }
+    return false
+  }
+
   /** Export every current record (global + all projects) as a JSON object. */
   exportData() {
     const projects = {}

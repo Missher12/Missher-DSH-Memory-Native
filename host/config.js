@@ -24,13 +24,13 @@ export const DEFAULT_CONFIG = Object.freeze({
     model: null,
     reasoningEffort: null,
     maxInputTokens: 12000,
-    maxOutputTokens: 800,
+    maxOutputTokens: 600,
   }),
   inject: Object.freeze({
     enabled: true,
-    maxTokens: 600,
-    maxItems: 12,
-    minScore: 0.15,
+    maxTokens: 360,
+    maxItems: 6,
+    minScore: 0.2,
   }),
   retention: Object.freeze({
     episodeDays: 90,
@@ -42,6 +42,10 @@ export const DEFAULT_CONFIG = Object.freeze({
     enabled: true,
     intervalHours: 24,
     backupKeep: 7,
+  }),
+  obsidian: Object.freeze({
+    vaultPath: null,
+    folder: 'DSH Memory',
   }),
 })
 
@@ -75,6 +79,7 @@ export function resolveConfig(raw) {
   const retention = isPlainObject(input.retention) ? input.retention : {}
   const consolidation = isPlainObject(input.consolidation) ? input.consolidation : {}
   const maintenance = isPlainObject(input.maintenance) ? input.maintenance : {}
+  const obsidian = isPlainObject(input.obsidian) ? input.obsidian : {}
 
   return Object.freeze({
     enabled: input.enabled !== false,
@@ -109,6 +114,10 @@ export function resolveConfig(raw) {
       enabled: maintenance.enabled !== false,
       intervalHours: integerIn(maintenance.intervalHours, DEFAULT_CONFIG.maintenance.intervalHours, 1, 720),
       backupKeep: integerIn(maintenance.backupKeep, DEFAULT_CONFIG.maintenance.backupKeep, 1, 100),
+    }),
+    obsidian: Object.freeze({
+      vaultPath: optionalString(obsidian.vaultPath),
+      folder: optionalString(obsidian.folder) ?? DEFAULT_CONFIG.obsidian.folder,
     }),
   })
 }

@@ -19,9 +19,9 @@ function record(overrides = {}) {
   return built.record
 }
 
-test('deriveProfile groups same-topic records into one trait with evidence', () => {
+test('deriveProfile groups similar same-topic records into one trait with evidence', () => {
   const a = record({ topic: '沟通', content: '用户偏好简洁直接的中文回答' })
-  const b = record({ topic: '沟通', content: '用户偏好简短、少客套的回复', confidence: 0.8 })
+  const b = record({ topic: '沟通', content: '用户偏好简洁直接的回复', confidence: 0.8 })
   const other = record({ topic: '存储', content: '项目使用 JSONL 作为权威存储', kind: 'fact' })
 
   const profile = deriveProfile([a, b, other])
@@ -70,4 +70,30 @@ test('formatProfileLines bounds the injected profile text', () => {
   const lines = formatProfileLines(traits, { limit: 1, maxChars: 100 })
   assert.equal(lines.length, 1)
   assert.match(lines[0], /用户偏好中文/u)
+})
+
+
+test('formatProfileLines can omit evidence metadata for injection', () => {
+  const lines = formatProfileLines([
+    { kind: 'preference', statement: '用户偏好简洁直接的表达方式', confidence: 0.95, evidenceCount: 3 },
+  ], { limit: 1, compact: true })
+  assert.deepEqual(lines, ['- [preference] 用户偏好简洁直接的表达方式'])
+})
+
+
+test('deriveProfile keeps antonym and negated preferences apart', () => {
+  const dark = record({ topic: '界面', content: '用户偏好深色主题' })
+  const light = record({ topic: '界面', content: '用户偏好浅色主题' })
+  const must = record({ topic: '交付', content: '交付前必须跑测试' })
+  const mustNot = record({ topic: '交付', content: '交付前不必跑测试' })
+  const profile = deriveProfile([dark, light, must, mustNot])
+  assert.equal(profile.total, 4)
+  assert.ok(profile.traits.every((trait) => trait.evidenceCount === 1))
+})
+
+test('deriveProfile keeps same-topic but unrelated preferences apart', () => {
+  const group = record({ topic: '面板', content: '面板设置区按组呈现，每组带标题' })
+  const tooltip = record({ topic: '面板', content: '热力图 tooltip 不能溢出卡片' })
+  const profile = deriveProfile([group, tooltip])
+  assert.equal(profile.total, 2)
 })

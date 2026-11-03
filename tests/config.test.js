@@ -12,11 +12,11 @@ test('resolveConfig returns the defaults for missing or invalid input', () => {
     assert.equal(config.capture.maxCallsPerDay, 50)
     assert.equal(config.capture.autoApproveConfidence, 0.75)
     assert.equal(config.inject.enabled, true)
-    assert.equal(config.inject.maxTokens, 600)
-    assert.equal(config.inject.maxItems, 12)
-    assert.equal(config.inject.minScore, 0.15)
+    assert.equal(config.inject.maxTokens, 360)
+    assert.equal(config.inject.maxItems, 6)
+    assert.equal(config.inject.minScore, 0.2)
     assert.equal(config.extraction.maxInputTokens, 12000)
-    assert.equal(config.extraction.maxOutputTokens, 800)
+    assert.equal(config.extraction.maxOutputTokens, 600)
     assert.equal(config.retention.episodeDays, 90)
     assert.equal(config.consolidation.auto, false)
     assert.equal(config.dataDir, null)
@@ -86,9 +86,9 @@ test('resolveConfig falls back for non-finite numbers and wrong types', () => {
   assert.equal(config.capture.minTurnChars, 200)
   assert.equal(config.capture.maxCallsPerDay, 50)
   assert.equal(config.capture.autoApproveConfidence, 0.75)
-  assert.equal(config.inject.maxTokens, 600)
-  assert.equal(config.inject.maxItems, 12)
-  assert.equal(config.inject.minScore, 0.15)
+  assert.equal(config.inject.maxTokens, 360)
+  assert.equal(config.inject.maxItems, 6)
+  assert.equal(config.inject.minScore, 0.2)
   assert.equal(config.retention.episodeDays, 90)
 })
 
@@ -98,7 +98,7 @@ test('resolveConfig trims provider/model strings and turns blanks into null', ()
     model: 'deepseek-flash',
     reasoningEffort: null,
     maxInputTokens: 12000,
-    maxOutputTokens: 800,
+    maxOutputTokens: 600,
   })
   assert.equal(resolveConfig({ extraction: { provider: '   ', model: '' } }).extraction.provider, null)
   assert.equal(resolveConfig({ extraction: { provider: '   ', model: '' } }).extraction.model, null)
@@ -136,6 +136,15 @@ test('resolveConfig returns a deeply frozen object', () => {
 
 test('DEFAULT_CONFIG is the frozen baseline resolveConfig falls back to', () => {
   assert.ok(Object.isFrozen(DEFAULT_CONFIG))
-  assert.equal(DEFAULT_CONFIG.inject.maxTokens, 600)
+  assert.equal(DEFAULT_CONFIG.inject.maxTokens, 360)
   assert.equal(resolveConfig({}).inject.maxTokens, DEFAULT_CONFIG.inject.maxTokens)
+})
+
+
+test('config exposes Obsidian path and folder defaults', () => {
+  assert.equal(DEFAULT_CONFIG.obsidian.folder, 'DSH Memory')
+  const config = resolveConfig({ obsidian: { vaultPath: ' /tmp/vault ', folder: 'Notes' } })
+  assert.equal(config.obsidian.vaultPath, '/tmp/vault')
+  assert.equal(config.obsidian.folder, 'Notes')
+  assert.equal(resolveConfig({ obsidian: { folder: '   ' } }).obsidian.folder, 'DSH Memory')
 })

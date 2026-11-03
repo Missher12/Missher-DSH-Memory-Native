@@ -51,3 +51,13 @@ test('mergeConfigObjects merges nested sections without dropping defaults', () =
   )
   assert.deepEqual(merged, { capture: { enabled: false, minTurnChars: 200 }, inject: { maxTokens: 900 } })
 })
+
+
+test('settings persist the Obsidian vault path and folder', (t) => {
+  const root = setup(t)
+  const saved = writeSettings(root, { obsidianVaultPath: ' /Users/me/Vault ', obsidianFolder: 'DSH Notes' })
+  assert.equal(saved.obsidianVaultPath, '/Users/me/Vault')
+  assert.equal(saved.obsidianFolder, 'DSH Notes')
+  const config = settingsToConfig(saved)
+  assert.deepEqual(config.obsidian, { vaultPath: '/Users/me/Vault', folder: 'DSH Notes' })
+})

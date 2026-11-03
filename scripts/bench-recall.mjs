@@ -17,8 +17,9 @@ const KINDS = ['preference', 'fact', 'decision', 'episode']
 const WORDS = '记忆 存储 检索 项目 偏好 决策 经验 上下文 注入 索引 数据库 接口 面板 用户 中文 测试 版本 仓库 方案 设计'.split(' ')
 const now = Date.now()
 
+const RECORD_COUNT = Number(process.env.BENCH_RECORDS) > 0 ? Number(process.env.BENCH_RECORDS) : 5000
 const records = []
-for (let i = 0; i < 5000; i += 1) {
+for (let i = 0; i < RECORD_COUNT; i += 1) {
   const content = `第 ${i} 条记忆：${WORDS[i % WORDS.length]} 与 ${WORDS[(i * 7) % WORDS.length]} 以及 ${WORDS[(i * 13) % WORDS.length]} 相关，用于容量测试`
   const built = buildRecord({
     kind: KINDS[i % 4],
@@ -53,4 +54,5 @@ console.log(JSON.stringify({
   medianMs: Number(times[Math.floor(times.length / 2)].toFixed(2)),
   p95Ms: Number(times[Math.floor(times.length * 0.95)].toFixed(2)),
   maxMs: Number(times[times.length - 1].toFixed(2)),
+  heapMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
 }, null, 2))

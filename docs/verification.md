@@ -280,3 +280,88 @@ node scripts/bench-recall.mjs
 - 状态：改动后「有未保存的更改」+ 保存可用；保存成功显示「已保存 · HH:MM」与提示；保存后重新拉取 stats。
 - 实测 735/520/430：行 48/48/46、开关 22、数字 32、按钮 32/30（430）、无横向溢出；面板 mock 保存交互通过。
 - 变更文件：client.js（客户端），已 touch；主机侧无改动，无需重装（为刷新缓存仍执行 remove+install）。
+
+## 23. Token 效率（2026-11-02）
+
+- 注入块：默认 `maxTokens` 600→360、`maxItems` 12→6、`minScore` 0.15→0.2；短续问预算 220；`formatMemoryLine` 去掉 id/scope/日期/置信度，只保留 `- [类型] 内容`（≤140 字）；画像限 2 条并去重。
+- 抽取 prompt：RULES 固定开销 579→360 token；旧记忆 12→6 条、每条 ≤80 字；transcript 上限 16000 字符；capture 分块上限对齐 16000 字符。
+- GUIDANCE：125→66 token。
+- 实测（真实 182 条库 + 抽样 5 查询）：注入均值 542→329（-39%）；抽取 4k transcript + 旧记忆 2393→1851（-23%）；按 4 次注入 + 1 次抽取估算单轮 4686→3233（-31%）。
+- 面板设置卡显示「上次注入 X/预算 token」；`stats.lastInjection` 由 pre-step 写入。
+- 测试 115/115（新增 token 相关 2 个 + telemetry 1 个）；eval hit@5 1.000 不降；bench 5k p95 8.31→6.38ms。
+
+## 24. 召回门控 v2 + 画像防误合并（2026-11-03）
+
+- 审计（只读 teammate）：弱相关多词查询在旧门控下仍注入 7/12；归一化 fused top1 结构下限 0.715，minScore 0.2 无法过滤。画像同 topic 直接合并、反义/否定被静默覆盖。
+- 门控：`classifyRecallHits` 使用内容 bigram 贡献和 S_bi、区分度 D、加权覆盖率 cov（按 query term idf 加权），阈值按 I1=idf(df=1,N) 缩放（drop 0.49·I1、soft 0.86·I1、auto 2.1·I1、D_min 0.4·I1、cov 0.5）。
+- 实测（真实库 254 条）：`设计文档` 3 条 auto、`Typert remove 端点` 4 条、`记忆 设置` 2 条；`数据库迁移/翻译/灰度发布/用户头像/越存越慢/怎么让召回` 全部 0 注入；灰区写 `recall-gate.jsonl`（不存原始 query，只存 hash）。
+- 评测改为走生产门控：hit@5 1.000、precision@5 0.978、MRR 0.983。
+- 画像：similarity 改 bigram Jaccard；同 topic 阈值 0.5、跨 topic/无 topic 0.62；否定极性、反义对、数字冲突不合并；新增 3 个测试（反义/否定/同主题不同事）。
+- 测试 121/121。
+
+## 25. v0.6.1 收尾：续问两条消息、topic 软加分、多相关项评测（2026-11-03）
+
+- 续问：`recallQueries` 对 followUp 依次尝试「上一条 + 当前」合并查询、上一条、当前；实测「召回门控怎么定」+「继续」→ 合并查询命中 6 条 auto，top1 为门控记录。
+- topic 软加分：`rankHits` 增加 `topicHint`（取 auto 命中中出现 ≥2 次的主题），命中 +0.05；测试覆盖。
+- 评测：CASES 扩展为多相关项（19 个 case 2 条相关项），走生产门控后 hit@5 1.000、precision@5 0.989、MRR 1.000。
+- 测试 123/123；重装 applied，自检 total=205；5k bench p95 9.26ms。
+
+## 26. v0.7 回收站 / 批量 / 版本历史 / 主题筛选（2026-11-03）
+
+- Store：新增 `history(id)`（读原始 JSONL 全 revision）与 `purge(id)`（锁内重写文件、物理删除全部 revision、目录 fsync）。
+- RPC：`restoreMemory`、`purgeMemory`、`history`、`restoreRevision`、`bulkAction`（archive/delete/restore，逐条失败返回）；`list` 支持 `status=deleted` 与 `topic`（含 `__none__`），返回 `topicCounts`。
+- 面板：已删除视图、恢复/彻底删除（二次确认）、历史弹层与恢复此版本、行复选框与批量条、主题下拉筛选；全部走真实 RPC。
+- 测试 129/129；harness 实测：回收站 1 行、历史 r2/r1、批量条「已选 2 条」、主题选项依赖/存储/注入且过滤生效，`__errors=[]`。
+- 截图：`docs/demo/v07-recycle.png`、`v07-history.png`、`v07-topic.png`。
+- 重装 applied，激活自检通过。
+
+## 27. v0.7 收尾：原子批量、标签、diff、主题合并（2026-11-03）
+
+- 批量：`bulkAction` 支持 archive/delete/restore/tag；默认 atomic，任一失败即回滚已成功项并返回 `rolledBack`；面板批量条新增「标签」弹层，失败/回滚有独立提示。
+- 历史：每个 revision 显示与上一版的字符级 diff（删除/新增片段），恢复旧版本写成新 revision。
+- 主题：`topicSuggestions` 按 bigram Jaccard≥0.5 或包含关系给出合并建议；`mergeTopics` 合并记录主题；面板列表头「合并建议」弹层。
+- 实测 harness：diff「删除：最初版本 / 新增：旧版本曾」；合并建议「部署（2）→ 部署流程（3）」；标签弹层提交后「已处理 2 条」；`__errors=[]`。
+- 宽度：735/520/430 列表框与工具栏 `scrollWidth-clientWidth=0`。
+- 测试 132/132；重装 applied，自检通过。
+
+## 28. 稳定性与抗崩溃（2026-11-03）
+
+- 激活隔离：`apply()` 中 root/store/index 初始化包 try/catch，存储不可用时只记 warning 并禁用插件，不向 Host 抛错（新增测试：dataDir 指向文件 → 不抛且不注册 hook）。
+- hook 隔离：`agent/pre-step` 的记忆检索/注入整段 try/catch，异常时返回原始 decision；`session/event`、维护定时器、panel 自检、dispose 均有 catch。新增测试：agent.session getter 抛错时 pre-step 仍返回 decision。
+- 数据：坏行隔离、schema 校验、锁内重写、fsync 已有测试；提取 LLM 失败/无路由时 capture 跳过不抛。
+- 压测：2000 次 pre-step + 4000 个 session 事件（含每 20 条 turn/end），0 异常，耗时 2.36s，heap 38MB。
+- 规模：5k 记录 build ~90–185ms、p95 6–11ms；50k 记录 build 772ms、p95 125ms、heap 290MB（不崩，但超出 v0.8 的 50ms 目标，列为优化项）。
+- 测试 134/134；重装 applied，自检通过，真实数据 5 个项目、320 行未受影响。
+
+## 29. Obsidian DLC（2026-11-03）
+
+- 模块 `host/obsidian.js`：一条记忆 = 一个 Markdown 文件，YAML frontmatter 保存 id/kind/scope/projectKey/status/topic/tags/confidence/importance/revision/时间；正文为 content。
+- 导出幂等（内容相同跳过），生成 `_index.md`；导入只处理 `dsh_memory: true` 且 id/kind/scope 合法的笔记，按 id 更新、不重复创建、不删除 vault 文件。
+- RPC：`obsidianExport` / `obsidianImport`（支持 dryRun）/ `obsidianStatus`；设置新增 `obsidianVaultPath`、`obsidianFolder` 并持久化。
+- 面板「记忆设置 → Obsidian」：vault 路径、文件夹、导出/导入按钮；735/520/430 无溢出。
+- 真实库实测：357 条记忆导出 357 个 md + `_index.md`，dry-run 导入预览 357 条 update；测试 141/141；重装 applied，激活自检通过。
+- 截图：`docs/demo/v08-obsidian.png`。
+
+## 30. 知识图谱 + 知识提升（2026-11-03）
+
+- `host/knowledge.js`：`buildKnowledgeGraph` 按 topic 聚合，topic 为 hub、共享 tag 为边；`promoteMemoryToKnowledge` 写 `knowledge/<id>.md`；`listKnowledgeNotes` 读回并作为 note 节点。
+- RPC：`knowledgeGraph`（scope/project/all）、`knowledgePromote`；面板「知识图谱」标签、SVG 星座图、节点详情、提升按钮。
+- harness：4 个 topic hub、7 个记忆节点、7 条边；点击节点显示详情；提升后提示「已写入知识笔记」；735/520/430 无溢出；`__errors=[]`。
+- 测试 146/146；重装 applied，激活自检通过。
+- 截图：`docs/demo/v08-knowledge.png`。
+
+## 31. 知识图谱修复 + 画像节点（2026-11-03）
+
+- 线上问题：`Remote method knowledgeGraph is not mounted`。根因是客户端 `METHODS` 描述符列表漏注册 `knowledgeGraph`（host 方法存在，但客户端 mount 时没有 descriptor），不是数据问题。
+- 修复：客户端 METHODS + RESULT_TYPES 补 `knowledgeGraph`、`knowledgePromote`、`obsidianExport/Import/Status`；激活自检增加 `knowledgeGraph` 调用。
+- 自检：`knowledge: {ok:true, memories:367, topics:231}`，`panel-calls.jsonl` 出现 `knowledgeGraph ok`。
+- 图谱改进：主题 hub 上限 24（多余合并为「其他」）；新增「用户画像」hub 与 12 条 trait 节点、证据连线（type=profile）。
+- 测试 147/147；重装 applied。
+
+## 32. 四标签页 + 知识库 + 描述符回归测试（2026-11-03）
+
+- 线上 `knowledgeGraph is not mounted` 根因：客户端 METHODS 描述符漏注册；已补 knowledgeGraph/knowledgePromote/obsidian*/knowledgeList，并新增 `tests/panel-methods.test.js`：断言 host `PANEL_METHODS` 与 client `METHODS`、`RESULT_TYPES` 完全对齐，防止再次出现「Host 有、面板没挂」。
+- 标签页：记忆 / 知识图谱 / 知识库 / 设置；设置卡片移入独立 tab；知识库 tab 列出提升出的笔记、vault 路径、同步按钮。
+- 图谱：topic hub 上限 24（多余合并「其他」），新增「用户画像」hub + trait 节点 + 证据连线。
+- harness：四标签可切换、知识库 2 条笔记、设置四组完整；735/520/430 无溢出；`__errors=[]`。
+- 测试 149/149；重装 applied，自检 knowledge ok。

@@ -50,6 +50,14 @@ export class MemoryIndex {
     return this
   }
 
+  /** idf of a term in the current index, or null when it is absent. */
+  idfOf(term) {
+    const docFrequency = this.#docFreq.get(term) ?? 0
+    if (docFrequency === 0) return null
+    const total = this.#docs.size
+    return Math.log(1 + (total - docFrequency + 0.5) / (docFrequency + 0.5))
+  }
+
   /** Remove one record from the index. */
   remove(id) {
     const doc = this.#docs.get(id)
@@ -99,6 +107,7 @@ export class MemoryIndex {
 
       let score = 0
       const matched = []
+      const termScores = []
       for (const term of terms) {
         const termFrequency = doc.terms.get(term)
         if (termFrequency === undefined) continue
@@ -106,9 +115,11 @@ export class MemoryIndex {
         const docFrequency = this.#docFreq.get(term) ?? 0
         const idf = Math.log(1 + (total - docFrequency + 0.5) / (docFrequency + 0.5))
         const denominator = termFrequency + K1 * (1 - B + (B * doc.length) / (averageLength || 1))
-        score += idf * ((termFrequency * (K1 + 1)) / denominator)
+        const value = idf * ((termFrequency * (K1 + 1)) / denominator)
+        score += value
+        termScores.push({ term, idf, value })
       }
-      if (score > 0) hits.push({ record, score, matched })
+      if (score > 0) hits.push({ record, score, matched, termScores })
     }
 
     hits.sort((left, right) => {

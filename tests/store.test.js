@@ -214,3 +214,21 @@ test('export, backup and import round-trip', (t) => {
   assert.equal(again.imported, 0)
   assert.equal(again.skipped, 2)
 })
+
+test('history lists every revision and purge removes all of them', (t) => {
+  const root = tempRoot(t)
+  const store = makeStore(root)
+  const created = writeFact(store).record
+  const scopes = [{ scope: 'project', projectKey: KEY }]
+  store.update(created.id, { content: '该仓库使用 pnpm 并要求 Node 22（修订二）' }, scopes)
+  store.update(created.id, { content: '该仓库使用 pnpm 并要求 Node 24（修订三）' }, scopes)
+  const history = store.history(created.id, scopes)
+  assert.deepEqual(history.map((record) => record.revision), [3, 2, 1])
+  assert.match(history[0].content, /Node 24/u)
+
+  assert.equal(store.purge(created.id, scopes), true)
+  assert.deepEqual(store.list('project', KEY, { includeDeleted: true }), [])
+  assert.deepEqual(store.history(created.id, scopes), [])
+  const raw = readJsonl(join(root, 'projects', KEY, 'memories.jsonl'))
+  assert.equal(raw.records.length, 0)
+})

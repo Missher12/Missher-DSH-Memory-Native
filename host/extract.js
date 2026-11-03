@@ -11,36 +11,25 @@
 
 import { normalizeContent } from './records.js'
 
-export const MAX_MEMORIES_PER_PASS = 8
+export const MAX_MEMORIES_PER_PASS = 6
 export const MAX_TRANSCRIPT_MESSAGE_CHARS = 2400
+export const MAX_TRANSCRIPT_CHARS = 16000
+export const MAX_EXISTING = 6
+export const MAX_EXISTING_CONTENT_CHARS = 80
 
-const RULES = `你是记忆抽取器。从下面这一段对话里，找出"跨会话仍然有价值"的信息，输出 JSON。
+const RULES = `你是记忆抽取器。从对话中提取跨会话仍有价值的信息，只输出 JSON。
 
-只保存：
-1) preference：用户稳定的偏好、习惯、沟通方式（例如语言、格式、工作方式）。
-2) fact：项目或技术事实、约束、环境（例如仓库使用的工具、版本要求、外部系统限制）。
-3) decision：已经做出的选择及其理由（例如选定某种存储方案）。
-4) episode：一次任务经历中可复用的教训（失败原因、成功关键、踩过的坑）。
+类型：preference（用户稳定偏好/习惯）、fact（项目/技术事实、约束、环境）、decision（已做出的选择及理由）、episode（任务中可复用的教训）。
+不保存：一次性细节、未确认猜测、助手建议、敏感信息（密钥/密码/证件）、与已有记忆完全重复的内容。
 
-不保存：
-- 一次性的任务细节、临时状态、尚未确认的猜测；
-- 助手自己的建议、假设或客套话（除非用户明确采纳）；
-- 密钥、密码、令牌、私钥、身份证号等敏感信息；
-- 与已有记忆完全重复的内容。
-
-你可以对已有记忆做四种操作：
-- ADD：新增一条此前不存在的记忆。
-- UPDATE：同一事实有补充或修正，targetId 指向已有记忆。
-- SUPERSEDE：旧事实已失效、被新事实替代，targetId 指向旧记忆。
-- NOOP：这段对话没有值得保存的信息（此时 memories 可为空数组）。
+操作：ADD 新增；UPDATE 补充或修正（targetId=旧 id）；SUPERSEDE 旧事实失效（targetId=旧 id）；NOOP 无可存内容（memories 为空数组）。
 
 要求：
-- content 用一句完整、可独立理解的陈述，保持对话原文语言（中文就中文，英文就英文），不超过 200 字。
-- scope 只能是 "global"（跨项目的用户偏好）或 "project"（仅当前项目有效）。
-- confidence 与 importance 取 0..1；不确定的给低 confidence。
-- topic 是一个 2–8 字的主题标签（如「存储」「部署」「沟通偏好」），用于分组；没有合适主题就留空字符串。
-- 最多输出 ${MAX_MEMORIES_PER_PASS} 条。
-- 只输出 JSON，不要解释，不要 markdown 代码块。
+- content 一句完整、可独立理解，保持原文语言，不超过 200 字。
+- scope 只能是 global（跨项目偏好）或 project（当前项目）。
+- confidence 与 importance 取 0..1，不确定的给低 confidence。
+- topic 是 2–8 字主题标签，没有就留空字符串。
+- 最多输出 8 条；只输出 JSON，不要解释，不要 markdown 代码块。
 
 输出格式：
 {"memories":[{"op":"ADD","kind":"fact","scope":"project","content":"…","topic":"…","tags":["…"],"confidence":0.8,"importance":0.6,"targetId":null}],"skipReason":""}`
@@ -53,12 +42,18 @@ export function buildExtractionPrompt(input) {
   const existing = Array.isArray(input.existing) ? input.existing : []
   const existingText = existing.length === 0
     ? '（暂无相关旧记忆）'
-    : existing.slice(0, 12).map((record) => `- [${record.id}] (${record.kind}/${record.status}) ${record.content}`).join('\n')
-  const transcript = String(input.transcript ?? '').slice(0, 24000)
+    : existing.slice(0, MAX_EXISTING).map((record) => {
+      const content = String(record.content ?? '').replace(/\s+/gu, ' ').trim()
+      const clipped = content.length > MAX_EXISTING_CONTENT_CHARS
+        ? `${content.slice(0, MAX_EXISTING_CONTENT_CHARS - 1)}…`
+        : content
+      return `- [${record.id}] (${record.kind}/${record.status}) ${clipped}`
+    }).join('\n')
+  const transcript = String(input.transcript ?? '').slice(0, MAX_TRANSCRIPT_CHARS)
   return [
     RULES,
     '',
-    '## 已有的相关记忆',
+    '## 已有相关记忆',
     existingText,
     '',
     '## 本次对话',

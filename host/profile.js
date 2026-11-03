@@ -16,20 +16,54 @@ import { tokenize } from './tokenize.js'
 export const PROFILE_TRAITS_LIMIT = 10
 /** Minimum confidence for a record to contribute to the profile. */
 export const PROFILE_MIN_CONFIDENCE = 0.55
-/** Token-set Jaccard above which two statements are considered the same trait. */
-export const PROFILE_SIMILARITY = 0.42
+/** Bigram Jaccard above which two statements with the same topic are the same trait. */
+export const PROFILE_TOPIC_SIMILARITY = 0.5
+/** Bigram Jaccard above which two statements with a missing topic are the same trait. */
+export const PROFILE_CROSS_SIMILARITY = 0.62
+/** Kept for compatibility with older callers/tests. */
+export const PROFILE_SIMILARITY = PROFILE_TOPIC_SIMILARITY
 /** Profile recency half-life (days), matching the jev-agent-memory design. */
 export const PROFILE_HALF_LIFE_DAYS = 60
 const EVIDENCE_LIMIT = 8
 const PROFILE_KINDS = new Set(['preference'])
 
+const NEGATION_PATTERN = /(?:不|没|别|勿|禁止|never|\bnot\b|\bno\b)/iu
+const ANTONYM_PAIRS = Object.freeze([
+  ['深', '浅'], ['暗', '亮'], ['可写', '只读'], ['启用', '禁用'], ['允许', '禁止'],
+  ['必须', '不必'], ['需要', '无需'], ['喜欢', '讨厌'], ['增', '减'], ['快', '慢'],
+  ['大', '小'], ['多', '少'], ['开', '关'],
+])
+
+function bigramSet(text) {
+  return new Set(tokenize(text).filter((token) => token.length >= 2))
+}
+
 function similarity(left, right) {
-  const a = new Set(tokenize(left))
-  const b = new Set(tokenize(right))
+  const a = bigramSet(left)
+  const b = bigramSet(right)
   if (a.size === 0 || b.size === 0) return 0
   let shared = 0
   for (const token of a) if (b.has(token)) shared += 1
   return shared / (a.size + b.size - shared)
+}
+
+function numbersOf(text) {
+  return new Set(String(text ?? '').match(/\d+(?:\.\d+)?/gu) ?? [])
+}
+
+/** Whether two preference statements conflict (polarity, antonyms, values). */
+export function profileConflicts(left, right) {
+  const a = String(left ?? '')
+  const b = String(right ?? '')
+  if (NEGATION_PATTERN.test(a) !== NEGATION_PATTERN.test(b)) return true
+  for (const [first, second] of ANTONYM_PAIRS) {
+    if ((a.includes(first) && b.includes(second)) || (a.includes(second) && b.includes(first))) return true
+  }
+  const valuesA = numbersOf(a)
+  const valuesB = numbersOf(b)
+  for (const value of valuesA) if (!valuesB.has(value)) return true
+  for (const value of valuesB) if (!valuesA.has(value)) return true
+  return false
 }
 
 function decay(ageMs) {
@@ -57,13 +91,15 @@ export function deriveProfile(records, options = {}) {
     let cluster
     for (const candidate of traits) {
       if (candidate.kind !== record.kind) continue
-      if (topic !== null && candidate.topic !== null) {
-        if (topic !== candidate.topic) continue
-      } else if (similarity(candidate.statement, record.content) < PROFILE_SIMILARITY) {
-        continue
+      if (profileConflicts(candidate.statement, record.content)) continue
+      const same = similarity(candidate.statement, record.content)
+      const sameTopic = topic !== null && candidate.topic !== null && topic === candidate.topic
+      const topicMissing = topic === null || candidate.topic === null
+      const identical = String(candidate.statement).trim() === String(record.content).trim()
+      if (identical || (sameTopic && same >= PROFILE_TOPIC_SIMILARITY) || (topicMissing && same >= PROFILE_CROSS_SIMILARITY)) {
+        cluster = candidate
+        break
       }
-      cluster = candidate
-      break
     }
     if (cluster === undefined) {
       traits.push({
@@ -113,7 +149,9 @@ export function formatProfileLines(traits, options = {}) {
   const lines = []
   let used = 0
   for (const trait of (Array.isArray(traits) ? traits : []).slice(0, limit)) {
-    const line = `- [${trait.kind}] ${trait.statement}（置信度 ${trait.confidence.toFixed(2)}，${trait.evidenceCount} 条证据）`
+    const line = options.compact === true
+      ? `- [${trait.kind}] ${trait.statement}`
+      : `- [${trait.kind}] ${trait.statement}（置信度 ${trait.confidence.toFixed(2)}，${trait.evidenceCount} 条证据）`
     if (used + line.length > maxChars) break
     lines.push(line)
     used += line.length + 1

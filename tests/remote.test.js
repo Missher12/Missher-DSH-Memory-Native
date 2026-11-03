@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, rmSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -146,7 +146,7 @@ test('list paginates and reports per-kind counts', (t) => {
 test('profile groups durable preferences into evidence-backed traits', (t) => {
   const { store, index, backend } = setup(t)
   const first = seed(store, index, { kind: 'preference', scope: 'global', projectKey: null, content: '用户偏好简洁直接的中文回答', confidence: 0.9, topic: '沟通' })
-  seed(store, index, { kind: 'preference', scope: 'global', projectKey: null, content: '用户偏好少客套的回复', confidence: 0.8, topic: '沟通' })
+  seed(store, index, { kind: 'preference', scope: 'global', projectKey: null, content: '用户偏好简洁直接的回复', confidence: 0.8, topic: '沟通' })
   seed(store, index, { kind: 'fact', content: '该仓库使用 pnpm 管理依赖' })
 
   const profile = backend.profile({ limit: 5 })
@@ -472,4 +472,171 @@ test('export, import and backup round-trip through the panel operations', (t) =>
   const backup = source.backend.backup()
   assert.ok(typeof backup.path === 'string')
   assert.ok(existsSync(backup.path))
+})
+
+test('stats exposes the last injection estimate', (t) => {
+  const { backend } = setup(t)
+  backend.getLastInjection = () => ({ at: NOW, tokens: 280, items: 4, budget: 360, followUp: false })
+  const stats = backend.stats({ scope: 'project', projectKey: KEY })
+  assert.equal(stats.lastInjection.tokens, 280)
+  assert.equal(stats.lastInjection.budget, 360)
+})
+
+test('recycle bin lists tombstones, restores and purges them', (t) => {
+  const { backend } = setup(t)
+  const record = seed(backend.store, backend.index)
+  backend.removeMemory({ id: record.id, scope: 'project', projectKey: KEY })
+  const deleted = listMemories(backend, { scope: 'project', projectKey: KEY, status: 'deleted' })
+  assert.equal(deleted.total, 1)
+  assert.equal(deleted.items[0].id, record.id)
+
+  const restored = backend.restoreMemory({ id: record.id, scope: 'project', projectKey: KEY })
+  assert.equal(restored.record.status, 'active')
+  assert.equal(listMemories(backend, { scope: 'project', projectKey: KEY }).total, 1)
+  assert.throws(() => backend.restoreMemory({ id: record.id, scope: 'project', projectKey: KEY }), /only deleted/u)
+
+  backend.removeMemory({ id: record.id, scope: 'project', projectKey: KEY })
+  const purged = backend.purgeMemory({ id: record.id, scope: 'project', projectKey: KEY })
+  assert.equal(purged.purged, true)
+  assert.equal(listMemories(backend, { scope: 'project', projectKey: KEY, status: 'deleted' }).total, 0)
+  assert.equal(listMemories(backend, { scope: 'project', projectKey: KEY }).total, 0)
+  assert.throws(() => backend.purgeMemory({ id: record.id, scope: 'project', projectKey: KEY }), /not found/u)
+})
+
+test('history exposes every revision of a record', (t) => {
+  const { backend } = setup(t)
+  const record = seed(backend.store, backend.index)
+  backend.update({ id: record.id, scope: 'project', projectKey: KEY, patch: { content: '该仓库使用 pnpm 并要求 Node 24 以上' } })
+  const history = backend.history({ id: record.id, scope: 'project', projectKey: KEY })
+  assert.deepEqual(history.revisions.map((revision) => revision.revision), [2, 1])
+  assert.match(history.revisions[0].content, /Node 24/u)
+})
+
+test('bulk actions update many records and report failures', (t) => {
+  const { backend } = setup(t)
+  const first = seed(backend.store, backend.index, { content: '第一条批量记忆内容' })
+  const second = seed(backend.store, backend.index, { content: '第二条批量记忆内容' })
+  const archived = backend.bulkAction({ action: 'archive', scope: 'project', projectKey: KEY, ids: [first.id, second.id, 'mem_missing'], atomic: false })
+  assert.deepEqual([...archived.updated].sort(), [first.id, second.id].sort())
+  assert.equal(archived.failedCount, 1)
+  assert.equal(archived.failed[0].id, 'mem_missing')
+
+  const deleted = backend.bulkAction({ action: 'delete', scope: 'project', projectKey: KEY, ids: [first.id] })
+  assert.equal(deleted.updatedCount, 1)
+  assert.equal(listMemories(backend, { scope: 'project', projectKey: KEY, status: 'deleted' }).total, 1)
+
+  const restored = backend.bulkAction({ action: 'restore', scope: 'project', projectKey: KEY, ids: [first.id, second.id], atomic: false })
+  assert.equal(restored.updatedCount, 1)
+  assert.equal(restored.failedCount, 1)
+})
+
+test('restoreRevision writes an old version as a new active revision', (t) => {
+  const { backend } = setup(t)
+  const record = seed(backend.store, backend.index)
+  backend.update({ id: record.id, scope: 'project', projectKey: KEY, patch: { content: '第二版内容，要求 Node 24' } })
+  const restored = backend.restoreRevision({ id: record.id, scope: 'project', projectKey: KEY, revision: 1 })
+  assert.equal(restored.record.revision, 3)
+  assert.equal(restored.record.status, 'active')
+  assert.match(restored.record.content, /Node 22/u)
+  assert.throws(() => backend.restoreRevision({ id: record.id, scope: 'project', projectKey: KEY, revision: 99 }), /revision not found/u)
+})
+
+test('list filters by topic and reports topic counts', (t) => {
+  const { backend } = setup(t)
+  seed(backend.store, backend.index, { content: '记忆采用 JSONL 存储', topic: '存储' })
+  seed(backend.store, backend.index, { content: '面板采用分组设置', topic: '面板' })
+  seed(backend.store, backend.index, { content: '没有主题的一条记忆' })
+  const all = listMemories(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(all.total, 3)
+  assert.equal(all.topicCounts['存储'], 1)
+  assert.equal(all.topicCounts['面板'], 1)
+  assert.equal(all.topicCounts['__none__'], 1)
+
+  const stored = listMemories(backend, { scope: 'project', projectKey: KEY, topic: '存储' })
+  assert.equal(stored.total, 1)
+  assert.match(stored.items[0].content, /JSONL/u)
+
+  const none = listMemories(backend, { scope: 'project', projectKey: KEY, topic: '__none__' })
+  assert.equal(none.total, 1)
+  assert.equal(none.items[0].topic, null)
+})
+
+test('bulk actions roll back atomically when one id fails', (t) => {
+  const { backend } = setup(t)
+  const first = seed(backend.store, backend.index, { content: '原子批量一' })
+  const second = seed(backend.store, backend.index, { content: '原子批量二' })
+  const result = backend.bulkAction({ action: 'archive', scope: 'project', projectKey: KEY, ids: [first.id, second.id, 'mem_missing'] })
+  assert.equal(result.failedCount, 1)
+  assert.equal(result.rolledBack, true)
+  assert.equal(result.updatedCount, 0)
+  assert.equal(backend.store.find(first.id, [{ scope: 'project', projectKey: KEY }]).status, 'active')
+  assert.equal(backend.store.find(second.id, [{ scope: 'project', projectKey: KEY }]).status, 'active')
+})
+
+test('bulk tag merges tags without duplicating them', (t) => {
+  const { backend } = setup(t)
+  const record = seed(backend.store, backend.index, { tags: ['pnpm'] })
+  const result = backend.bulkAction({ action: 'tag', scope: 'project', projectKey: KEY, ids: [record.id], tags: ['pnpm', 'node'] })
+  assert.equal(result.updatedCount, 1)
+  const updated = backend.store.find(record.id, [{ scope: 'project', projectKey: KEY }])
+  assert.deepEqual([...updated.tags].sort(), ['node', 'pnpm'])
+})
+
+test('topic suggestions find near-duplicates and merge them', (t) => {
+  const { backend } = setup(t)
+  seed(backend.store, backend.index, { content: '项目部署流程与回滚步骤说明', topic: '部署' })
+  seed(backend.store, backend.index, { content: '项目部署回滚与验证步骤说明', topic: '部署流程' })
+  seed(backend.store, backend.index, { content: '项目存储方案与迁移步骤说明', topic: '存储' })
+  const suggestions = backend.topicSuggestions({ scope: 'project', projectKey: KEY })
+  assert.ok(suggestions.suggestions.some((item) => item.from === '部署' && item.to === '部署流程'))
+  const merged = backend.mergeTopics({ scope: 'project', projectKey: KEY, from: '部署', to: '部署流程' })
+  assert.equal(merged.merged, 1)
+  const topics = backend.store.list('project', KEY).map((record) => record.topic).sort()
+  assert.deepEqual(topics, ['存储', '部署流程', '部署流程'])
+})
+
+test('Obsidian RPC exports and imports through the panel backend', (t) => {
+  const { backend, root } = setup(t)
+  const vault = join(root, 'obsidian-vault')
+  mkdirSync(vault, { recursive: true })
+  backend.config.obsidian = { vaultPath: vault, folder: 'DSH Memory' }
+  seed(backend.store, backend.index, { content: '导出到 Obsidian 的 RPC 测试记忆' })
+  const exported = backend.obsidianExport({})
+  assert.equal(exported.written, 1)
+  const imported = backend.obsidianImport({ dryRun: true })
+  assert.equal(imported.preview.length, 1)
+  assert.equal(imported.preview[0].action, 'update')
+  const status = backend.obsidianStatus({})
+  assert.equal(status.folder, 'DSH Memory')
+  assert.ok(status.lastSync !== null)
+})
+
+test('updateSettings accepts Obsidian path and folder', (t) => {
+  const { backend } = setup(t)
+  const patches = []
+  backend.applySettings = (patch) => { patches.push(patch); return { ...patch } }
+  const result = backend.updateSettings({ obsidianVaultPath: '/Users/me/Vault', obsidianFolder: 'DSH Notes' })
+  assert.deepEqual(patches[0], { obsidianVaultPath: '/Users/me/Vault', obsidianFolder: 'DSH Notes' })
+  assert.equal(result.settings.obsidianFolder, 'DSH Notes')
+  assert.throws(() => backend.updateSettings({ obsidianFolder: 42 }), /must be a string/u)
+})
+
+test('knowledgeGraph returns topics and nodes for the panel', (t) => {
+  const { backend } = setup(t)
+  seed(backend.store, backend.index, { content: '知识图谱节点一', topic: '存储', tags: ['jsonl'] })
+  seed(backend.store, backend.index, { content: '知识图谱节点二', topic: '面板', tags: ['jsonl'] })
+  const graph = backend.knowledgeGraph({ scope: 'project', projectKey: KEY })
+  assert.equal(graph.memoryCount, 2)
+  assert.ok(graph.hubs.some((hub) => hub.label === '存储'))
+  assert.ok(graph.edges.some((edge) => edge.type === 'tag' && edge.label === 'jsonl'))
+})
+
+test('knowledgePromote writes a long-term note and graph exposes it', (t) => {
+  const { backend } = setup(t)
+  const record = seed(backend.store, backend.index, { content: '可提升为知识的长期记忆', topic: '存储' })
+  const promoted = backend.knowledgePromote({ id: record.id, scope: 'project', projectKey: KEY })
+  assert.equal(promoted.ok, true)
+  const graph = backend.knowledgeGraph({ scope: 'project', projectKey: KEY })
+  assert.ok(graph.nodes.some((node) => node.type === 'note'))
+  assert.ok(graph.edges.some((edge) => edge.type === 'knowledge'))
 })

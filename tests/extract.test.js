@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildExtractionPrompt, parseExtraction } from '../host/extract.js'
+import { estimateTokens } from '../host/recall.js'
 
 test('prompt contains rules, existing memories and the transcript', () => {
   const prompt = buildExtractionPrompt({
@@ -34,7 +35,7 @@ test('parse skips NOOP items and unknown operations', () => {
 test('parse caps the number of items', () => {
   const memories = Array.from({ length: 20 }, (_, index) => ({ op: 'ADD', content: `事实 ${index}`, confidence: 0.9 }))
   const parsed = parseExtraction(JSON.stringify({ memories }))
-  assert.equal(parsed.items.length, 8)
+  assert.equal(parsed.items.length, 6)
 })
 
 test('parse rejects unusable output', () => {
@@ -50,4 +51,20 @@ test('parse defaults missing fields safely', () => {
   assert.equal(parsed.items[0].kind, 'fact')
   assert.equal(parsed.items[0].scope, 'project')
   assert.equal(parsed.items[0].confidence, 0.5)
+})
+
+
+test('extraction prompt stays compact and truncates long transcripts', () => {
+  const prompt = buildExtractionPrompt({
+    transcript: '长'.repeat(30000),
+    existing: Array.from({ length: 12 }, (_, index) => ({
+      id: 'mem_' + index,
+      kind: 'fact',
+      status: 'active',
+      content: '很长的旧记忆内容'.repeat(20),
+    })),
+  })
+  assert.ok(prompt.length < 18000)
+  assert.ok(estimateTokens(prompt) < 17200)
+  assert.equal((prompt.match(/^- \[mem_/gmu) ?? []).length, 6)
 })
