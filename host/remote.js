@@ -46,7 +46,9 @@ import {
   importData,
   knowledgeGraph,
   knowledgeList,
+  knowledgeNote,
   knowledgePromote,
+  knowledgeSave,
   memoryHistory,
   mergeTopics,
   obsidianExport,
@@ -104,11 +106,12 @@ export function createPanelBackend(options) {
     store: options.store,
     index: options.index,
     root: options.root ?? null,
+    getLastInjection: typeof options.getLastInjection === 'function' ? options.getLastInjection : null,
+    getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
     get config() {
       return typeof options.getConfig === 'function' ? options.getConfig() : (options.config ?? {})
     },
     applySettings: typeof options.applySettings === 'function' ? options.applySettings : null,
-    getLastInjection: typeof options.getLastInjection === 'function' ? options.getLastInjection : null,
   }
   backend.list = (input) => listMemories(backend, input)
   backend.stats = (input) => computeStats(backend, input)
@@ -134,6 +137,8 @@ export function createPanelBackend(options) {
   backend.knowledgeGraph = (input) => knowledgeGraph(backend, input)
   backend.knowledgePromote = (input) => knowledgePromote(backend, input)
   backend.knowledgeList = () => knowledgeList(backend)
+  backend.knowledgeNote = (input) => knowledgeNote(backend, input)
+  backend.knowledgeSave = (input) => knowledgeSave(backend, input)
   const logCall = makePanelCallLogger(backend.root)
   for (const method of PANEL_METHODS) {
     const operation = backend[method]
@@ -277,6 +282,14 @@ export async function bindTypertRemote(ctx, backend) {
 
     async knowledgeList(input) {
       return this.delegate.knowledgeList(input)
+    }
+
+    async knowledgeNote(input) {
+      return this.delegate.knowledgeNote(input)
+    }
+
+    async knowledgeSave(input) {
+      return this.delegate.knowledgeSave(input)
     }
   }
 

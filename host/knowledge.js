@@ -7,7 +7,7 @@
  * @module dsh-memory/host/knowledge
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const MAX_NODES = 400
@@ -148,6 +148,159 @@ export function promoteMemoryToKnowledge(root, record) {
   return file
 }
 
+/** A note name that can only ever resolve inside `<root>/knowledge`. */
+export function isKnowledgeFile(name) {
+  return typeof name === 'string' && /^[\p{L}\p{N}._-]{1,120}\.md$/u.test(name)
+}
+
+function parseValue(raw) {
+  let value = raw
+  if (raw === 'true') value = true
+  else if (raw === 'false') value = false
+  else if (raw === 'null') value = null
+  else if (/^-?\d+(?:\.\d+)?$/u.test(raw)) value = Number(raw)
+  else if (raw.startsWith('"') || raw.startsWith('[')) {
+    try { value = JSON.parse(raw) } catch { value = raw }
+  }
+  return value
+}
+
+/** Split note text into its frontmatter map and post-frontmatter body. */
+function parseNote(text) {
+  const match = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/u)
+  const data = {}
+  if (match !== null) {
+    for (const line of match[1].split(/\r?\n/u)) {
+      const separator = line.indexOf(':')
+      if (separator <= 0) continue
+      const key = line.slice(0, separator).trim()
+      if (key === '') continue
+      data[key] = parseValue(line.slice(separator + 1).trim())
+    }
+  }
+  const body = match === null ? String(text) : String(text).slice(match[0].length)
+  return { data, body: body.trimEnd() }
+}
+
+function serializeValue(value) {
+  if (Array.isArray(value) || typeof value === 'string') return JSON.stringify(value)
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value)
+  if (value === null) return 'null'
+  return JSON.stringify(value)
+}
+
+function serializeNote(data, body) {
+  const lines = ['---']
+  for (const key of Object.keys(data)) lines.push(`${key}: ${serializeValue(data[key])}`)
+  lines.push('---', '', body.trimEnd(), '')
+  return lines.join('\n')
+}
+
+/** First non-empty body line is the title; the rest stays editable content. */
+export function splitNoteBody(body) {
+  const lines = String(body ?? '').split(/\r?\n/u)
+  const index = lines.findIndex((line) => line.trim() !== '')
+  if (index < 0) return { title: '', rest: '' }
+  return {
+    title: lines[index].trim(),
+    rest: lines.slice(index + 1).join('\n').trim(),
+  }
+}
+
+/**
+ * Read one promoted knowledge note for editing.
+ * @param {string} root memory data root
+ * @param {string} file note file name
+ */
+export function readKnowledgeNote(root, file) {
+  if (!isKnowledgeFile(file)) throw new Error('invalid knowledge note name')
+  const path = join(root, KNOWLEDGE_DIR, file)
+  const text = readFileSync(path, 'utf8')
+  const { data, body } = parseNote(text)
+  if (data.dsh_knowledge !== true) throw new Error('not a dsh knowledge note')
+  const stat = statSync(path)
+  const { title, rest } = splitNoteBody(body)
+  return {
+    file,
+    memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
+    topic: typeof data.topic === 'string' ? data.topic : '',
+    tags: Array.isArray(data.tags) ? data.tags.map((tag) => String(tag)) : [],
+    title,
+    body: rest,
+    mtimeMs: stat.mtimeMs,
+    updatedAt: stat.mtimeMs,
+  }
+}
+
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) return []
+  const seen = new Set()
+  const out = []
+  for (const tag of tags) {
+    if (typeof tag !== 'string') continue
+    const value = tag.trim()
+    if (value === '' || value.length > 32) continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(value)
+    if (out.length >= 20) break
+  }
+  return out
+}
+
+/**
+ * Overwrite one knowledge note in place.
+ *
+ * The frontmatter map is preserved (unknown keys included); `topic` and `tags`
+ * are updated and the body is recomposed as title + rest. When the caller's
+ * `expectedMtimeMs` no longer matches the file, nothing is written and a
+ * `{ saved: false, reason: 'conflict', current }` result is returned so the
+ * panel can offer a reload instead of silently overwriting external edits.
+ *
+ * @param {string} root
+ * @param {{ file: string, title: string, body?: string, topic?: string,
+ *   tags?: string[], expectedMtimeMs?: number }} input
+ */
+export function saveKnowledgeNote(root, input) {
+  const file = input?.file
+  if (!isKnowledgeFile(file)) throw new Error('invalid knowledge note name')
+  const title = typeof input.title === 'string' ? input.title.trim() : ''
+  if (title === '') throw new Error('knowledge note title is required')
+  if ([...title].length > 200) throw new Error('knowledge note title is too long')
+  const body = typeof input.body === 'string' ? input.body.trim() : ''
+  if (body.length > 100_000) throw new Error('knowledge note body is too long')
+  const topic = typeof input.topic === 'string' ? input.topic.trim().slice(0, 40) : ''
+  const tags = normalizeTags(input.tags)
+
+  const path = join(root, KNOWLEDGE_DIR, file)
+  const text = readFileSync(path, 'utf8')
+  const parsed = parseNote(text)
+  if (parsed.data.dsh_knowledge !== true) throw new Error('not a dsh knowledge note')
+  const stat = statSync(path)
+  if (Number.isFinite(input.expectedMtimeMs) && stat.mtimeMs !== input.expectedMtimeMs) {
+    return { saved: false, reason: 'conflict', current: readKnowledgeNote(root, file) }
+  }
+
+  const oldTopic = typeof parsed.data.topic === 'string' ? parsed.data.topic : ''
+  let rest = body
+  if (oldTopic !== '' && topic !== oldTopic) {
+    const link = `- [[${oldTopic}]]`
+    if (rest.split(/\r?\n/u).includes(link)) {
+      rest = rest.split(/\r?\n/u).map((line) => (line === link ? `- [[${topic}]]` : line)).join('\n')
+    }
+  }
+  const next = { ...parsed.data }
+  next.dsh_knowledge = true
+  next.topic = topic
+  next.tags = tags
+  const composed = title + (rest === '' ? '' : `\n\n${rest}`) + '\n'
+  const temp = `${path}.tmp`
+  writeFileSync(temp, serializeNote(next, composed), { mode: 0o600 })
+  renameSync(temp, path)
+  return { saved: true, ...readKnowledgeNote(root, file) }
+}
+
 /** Read promoted knowledge notes from `<root>/knowledge`. */
 export function listKnowledgeNotes(root) {
   const dir = join(root, KNOWLEDGE_DIR)
@@ -155,32 +308,15 @@ export function listKnowledgeNotes(root) {
   const notes = []
   for (const file of readdirSync(dir).filter((name) => name.endsWith('.md'))) {
     try {
-      const text = readFileSync(join(dir, file), 'utf8')
-      const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/u)
-      if (match === null) continue
-      const data = {}
-      for (const line of match[1].split(/\r?\n/u)) {
-        const separator = line.indexOf(':')
-        if (separator <= 0) continue
-        const key = line.slice(0, separator).trim()
-        const raw = line.slice(separator + 1).trim()
-        let value = raw
-        if (raw === 'true') value = true
-        else if (raw === 'false') value = false
-        else if (raw === 'null') value = null
-        else if (/^-?\d+(?:\.\d+)?$/u.test(raw)) value = Number(raw)
-        else if (raw.startsWith('"') || raw.startsWith('[')) {
-          try { value = JSON.parse(raw) } catch { value = raw }
-        }
-        data[key] = value
-      }
+      const { data, body } = parseNote(readFileSync(join(dir, file), 'utf8'))
       if (data.dsh_knowledge !== true) continue
+      const { title } = splitNoteBody(body)
       notes.push({
         file,
         memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
         topic: typeof data.topic === 'string' ? data.topic : null,
         tags: Array.isArray(data.tags) ? data.tags : [],
-        title: String(text).slice(match[0].length).trim().split('\n')[0]?.slice(0, 60) ?? file,
+        title: title === '' ? file : title.slice(0, 60),
       })
     } catch {
       // Skip unreadable notes.

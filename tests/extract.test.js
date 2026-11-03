@@ -35,7 +35,14 @@ test('parse skips NOOP items and unknown operations', () => {
 test('parse caps the number of items', () => {
   const memories = Array.from({ length: 20 }, (_, index) => ({ op: 'ADD', content: `事实 ${index}`, confidence: 0.9 }))
   const parsed = parseExtraction(JSON.stringify({ memories }))
-  assert.equal(parsed.items.length, 6)
+  assert.equal(parsed.items.length, 4)
+})
+
+test('parse recovers complete items from a truncated response', () => {
+  const truncated = '{"memories":[{"op":"ADD","kind":"fact","content":"使用 pnpm"},{"op":"ADD","kind":"fact","content":"Node 24"},{"op":"ADD","kind":"fact","content":"还没写完'
+  const parsed = parseExtraction(truncated)
+  assert.equal(parsed.items.length, 2)
+  assert.equal(parsed.items[1].content, 'Node 24')
 })
 
 test('parse rejects unusable output', () => {
@@ -66,5 +73,6 @@ test('extraction prompt stays compact and truncates long transcripts', () => {
   })
   assert.ok(prompt.length < 18000)
   assert.ok(estimateTokens(prompt) < 17200)
+  assert.match(prompt, /最多输出 4 条/u)
   assert.equal((prompt.match(/^- \[mem_/gmu) ?? []).length, 6)
 })

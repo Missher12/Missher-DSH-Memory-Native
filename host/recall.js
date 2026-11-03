@@ -37,6 +37,14 @@ const CONTENT_STOP_TERMS = new Set([
   '继续', '好的', '嗯嗯', '行吧', '算了',
 ])
 
+/** Adaptive injection budget: fewer hits need fewer tokens (200–360). */
+export function adaptiveInjectionBudget(baseBudget, hitCount, followUp) {
+  const base = Number.isInteger(baseBudget) && baseBudget > 0 ? baseBudget : 360
+  if (followUp === true) return Math.min(base, 220)
+  const hits = Math.max(1, Math.min(6, Number.isInteger(hitCount) ? hitCount : 1))
+  return Math.min(base, Math.max(200, 160 + hits * 32))
+}
+
 /** Gate ratios relative to I1 = idf of a term appearing in one document. */
 export const GATE_RATIOS = Object.freeze({
   drop: 0.49,

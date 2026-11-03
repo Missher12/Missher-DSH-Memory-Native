@@ -11,7 +11,7 @@
 
 import { normalizeContent } from './records.js'
 
-export const MAX_MEMORIES_PER_PASS = 6
+export const MAX_MEMORIES_PER_PASS = 4
 export const MAX_TRANSCRIPT_MESSAGE_CHARS = 2400
 export const MAX_TRANSCRIPT_CHARS = 16000
 export const MAX_EXISTING = 6
@@ -25,11 +25,11 @@ const RULES = `你是记忆抽取器。从对话中提取跨会话仍有价值�
 操作：ADD 新增；UPDATE 补充或修正（targetId=旧 id）；SUPERSEDE 旧事实失效（targetId=旧 id）；NOOP 无可存内容（memories 为空数组）。
 
 要求：
-- content 一句完整、可独立理解，保持原文语言，不超过 200 字。
+- content 一句完整、可独立理解，保持原文语言，不超过 120 字。
 - scope 只能是 global（跨项目偏好）或 project（当前项目）。
 - confidence 与 importance 取 0..1，不确定的给低 confidence。
 - topic 是 2–8 字主题标签，没有就留空字符串。
-- 最多输出 8 条；只输出 JSON，不要解释，不要 markdown 代码块。
+- 最多输出 4 条，宁少勿多；只输出 JSON，不要解释，不要 markdown 代码块。
 
 输出格式：
 {"memories":[{"op":"ADD","kind":"fact","scope":"project","content":"…","topic":"…","tags":["…"],"confidence":0.8,"importance":0.6,"targetId":null}],"skipReason":""}`
@@ -61,6 +61,58 @@ export function buildExtractionPrompt(input) {
   ].join('\n')
 }
 
+/**
+ * Recover complete items from a truncated `memories` array.
+ *
+ * With a 400-token output cap a long JSON payload can be cut mid-object; the
+ * leading, fully written objects are still usable. Returns `null` when no
+ * complete object can be recovered.
+ * @param {string} raw
+ */
+function salvageMemories(raw) {
+  const text = String(raw ?? '')
+  const key = text.indexOf('"memories"')
+  if (key < 0) return null
+  const open = text.indexOf('[', key)
+  if (open < 0) return null
+  const items = []
+  let depth = 0
+  let objectStart = -1
+  let inString = false
+  let escaped = false
+  for (let index = open + 1; index < text.length; index += 1) {
+    const char = text[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+    } else if (char === '{') {
+      if (depth === 0) objectStart = index
+      depth += 1
+    } else if (char === '}') {
+      if (depth === 0) continue
+      depth -= 1
+      if (depth === 0 && objectStart >= 0) {
+        try {
+          const item = JSON.parse(text.slice(objectStart, index + 1))
+          if (item !== null && typeof item === 'object' && !Array.isArray(item)) items.push(item)
+        } catch {
+          // One corrupt item does not invalidate its neighbours.
+        }
+        objectStart = -1
+      }
+    } else if (char === ']' && depth === 0) {
+      break
+    }
+    if (items.length >= MAX_MEMORIES_PER_PASS) break
+  }
+  return items.length === 0 ? null : items
+}
+
 /** Turn the model text into an operation list. Throws on unusable output. */
 export function parseExtraction(raw) {
   const text = String(raw ?? '')
@@ -71,7 +123,9 @@ export function parseExtraction(raw) {
   try {
     parsed = JSON.parse(text.slice(start, end + 1))
   } catch {
-    throw new Error('extraction response is not valid JSON')
+    const salvaged = salvageMemories(text)
+    if (salvaged === null) throw new Error('extraction response is not valid JSON')
+    parsed = { memories: salvaged }
   }
   if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.memories)) {
     throw new Error('extraction response has no memories array')

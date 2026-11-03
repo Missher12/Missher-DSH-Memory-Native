@@ -12,7 +12,7 @@ import { MemoryStore } from '../host/store.js'
 
 const NOW = 1_700_000_000_000
 
-function fakeLlm(reply) {
+function fakeLlm(reply, finishKind = 'stop') {
   let calls = 0
   const llm = {
     calls: () => calls,
@@ -23,18 +23,18 @@ function fakeLlm(reply) {
       calls += 1
       const text = typeof reply === 'function' ? reply() : reply
       yield { type: 'text-delta', index: 0, text }
-      yield { type: 'finish', reason: { kind: 'stop' } }
+      yield { type: 'finish', reason: { kind: finishKind } }
     },
   }
   return llm
 }
 
-function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a' } = {}) {
+function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a', onExtraction, finishKind } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-capture-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const store = new MemoryStore({ root, clock: () => NOW }).open()
   const index = new MemoryIndex().rebuild(store.listAll())
-  const llm = fakeLlm(reply)
+  const llm = fakeLlm(reply, finishKind)
   const config = resolveConfig({
     capture: { minTurnChars: 0 },
     ...overrides,
@@ -47,6 +47,7 @@ function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a' } = {}
     ctx: { get: (key) => (key === 'llm' ? llm : undefined), logger: { info() {}, warn() {} } },
     clock: () => NOW,
     onWrite: () => writes.push(Date.now()),
+    onExtraction,
   })
   const session = {
     id: 'session-1',
@@ -132,6 +133,14 @@ test('credential-looking content is rejected', async (t) => {
   feed(capture, session, '记住我的 key')
   await capture.flush()
   assert.equal(store.list('project', projectIdentity(session.header.cwd).key).length, 0)
+})
+
+test('a truncated extraction keeps the complete leading items', async (t) => {
+  const truncated = '{"memories":[{"op":"ADD","kind":"fact","scope":"project","content":"该仓库使用 pnpm","confidence":0.9},{"op":"ADD","kind":"fact","scope":"project","content":"要求 Node 24 以上","confidence":0.9},{"op":"ADD","kind":"fact","scope":"project","content":"未写完'
+  const { store, capture, session } = setup(t, { reply: truncated, finishKind: 'length' })
+  feed(capture, session, '记住：这个仓库用 pnpm，要求 Node 24 以上。')
+  await capture.flush()
+  assert.equal(store.list('project', projectIdentity(session.header.cwd).key).length, 2)
 })
 
 test('budget exhaustion skips non-explicit turns', async (t) => {
@@ -293,4 +302,17 @@ test('setConfig disables capture at runtime', async (t) => {
   feed(capture, session, '记住：这个仓库用 pnpm，要求 Node 22 以上。')
   await capture.flush()
   assert.equal(llm.calls(), 0)
+})
+
+
+test('extraction reports prompt token telemetry', async (t) => {
+  const seen = []
+  const { capture, session } = setup(t, { reply: REPLY, onExtraction: (stats) => seen.push(stats) })
+  feed(capture, session, '记住：这个仓库用 pnpm，要求 Node 22 以上。')
+  await capture.flush()
+  assert.equal(seen.length, 1)
+  assert.ok(seen[0].promptTokens > 0)
+  assert.ok(seen[0].transcriptChars > 0)
+  assert.equal(seen[0].items, 1)
+  assert.equal(seen[0].applied, 1)
 })

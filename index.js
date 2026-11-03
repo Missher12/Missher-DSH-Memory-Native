@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { CapturePipeline } from './host/capture.js'
 import { resolveConfig } from './host/config.js'
 import { projectIdentity, resolveMemoryRoot } from './host/paths.js'
-import { classifyRecallHits, compileMemoryContext, hasContentMatch, isFollowUpQuery, rankHits, recallQueries } from './host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, hasContentMatch, isFollowUpQuery, rankHits, recallQueries } from './host/recall.js'
 import { writeGateLog } from './host/gate-log.js'
 import { deriveProfile, formatProfileLines } from './host/profile.js'
 import { mergeConfigObjects, readSettings, settingsToConfig, writeSettings } from './host/settings.js'
@@ -29,6 +29,7 @@ import { PANEL_NAMESPACE } from './host/remote-contract.js'
 import { wirePanel } from './host/remote.js'
 import { MemoryIndex } from './host/search.js'
 import { MemoryStore } from './host/store.js'
+import { appendUsage } from './host/usage-log.js'
 
 export const name = 'dsh-memory'
 
@@ -101,6 +102,7 @@ export function apply(ctx, rawConfig) {
   let index
   let config
   let lastInjection = null
+  let lastExtraction = null
   try {
     root = resolveMemoryRoot({ dataDir: baseConfig.dataDir, dshHome: dshHomeOf(ctx) })
     const storedSettings = readSettings(root)
@@ -119,6 +121,17 @@ export function apply(ctx, rawConfig) {
     ctx,
     logger: ctx.logger,
     onWrite: () => ctx.logger?.info?.('[dsh-memory] index updated after capture'),
+    onExtraction: (stats) => {
+      lastExtraction = stats
+      appendUsage(root, {
+        at: stats.at,
+        kind: 'extract',
+        tokens: stats.promptTokens,
+        items: stats.items,
+        applied: stats.applied,
+        calls: stats.calls,
+      })
+    },
   })
 
   const applySettings = (patch) => {
@@ -197,7 +210,7 @@ export function apply(ctx, rawConfig) {
       }
       return withoutPrevious
     }
-    const budget = followUp ? Math.min(config.inject.maxTokens, 220) : config.inject.maxTokens
+    const budget = adaptiveInjectionBudget(config.inject.maxTokens, gate.auto.length, followUp)
     const maxItems = followUp ? Math.min(4, config.inject.maxItems) : config.inject.maxItems
     const topicCounts = new Map()
     for (const hit of gate.auto.slice(0, 8)) {
@@ -222,6 +235,7 @@ export function apply(ctx, rawConfig) {
     })
     if (block === null) return withoutPrevious
       lastInjection = { at: now, tokens: block.estimatedTokens, items: block.itemCount, budget, followUp, gate: { auto: gate.auto.length, gray: gate.gray.length } }
+      appendUsage(root, { at: now, kind: 'inject', tokens: block.estimatedTokens, items: block.itemCount, budget })
       return { ...decision, messages: [...retained, makeMemoryMessage(block.text)] }
     } catch (error) {
       ctx.logger?.warn?.(`[dsh-memory] recall skipped: ${error instanceof Error ? error.message : String(error)}`)
@@ -274,7 +288,7 @@ export function apply(ctx, rawConfig) {
     clearInterval(maintenanceTimer)
   }, 'dsh-memory.maintenance')
 
-  wirePanel(ctx, { store, index, config, root, getConfig: () => config, getLastInjection: () => lastInjection, applySettings })
+  wirePanel(ctx, { store, index, config, root, getConfig: () => config, getLastInjection: () => lastInjection, getLastExtraction: () => lastExtraction, applySettings })
     .then(async (result) => {
       const diagnostic = { ...result, at: Date.now(), selfTest: null }
       try {
@@ -312,6 +326,12 @@ export function apply(ctx, rawConfig) {
             args: { input: { scope: 'all' } },
             peer,
           })
+          const library = await gateway.invoke({
+            namespace: PANEL_NAMESPACE,
+            method: 'knowledgeList',
+            args: { input: {} },
+            peer,
+          })
           diagnostic.selfTest = {
             ok: true,
             value,
@@ -325,6 +345,7 @@ export function apply(ctx, rawConfig) {
               ok: true,
               memories: typeof graph?.memoryCount === 'number' ? graph.memoryCount : null,
               topics: typeof graph?.topicCount === 'number' ? graph.topicCount : null,
+              notes: typeof library?.total === 'number' ? library.total : null,
             },
           }
         } else {

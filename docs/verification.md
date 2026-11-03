@@ -381,3 +381,70 @@ node scripts/bench-recall.mjs
 - harness：四个子标签可切换，捕获组 3 行、保留组 2 行、数据组 3 按钮、Obsidian 组 vault/文件夹/2 按钮；735/520/430 子标签与设置卡均无溢出。
 - 测试 149/149；重装 applied。
 - 截图：`docs/demo/v09-settings-tabs.png`。
+
+## 35. 设置分组提升为一级标签（2026-11-03）
+
+- 一级标签变为：记忆 / 知识图谱 / 知识库 / 捕获与注入 / 保留与维护 / 数据 / Obsidian；「设置」一级 tab 移除。
+- 每个分组页复用设置卡，只显示该组；底部「保存设置」仍一次保存全部字段；未保存状态提示保留。
+- 窄宽标签自动换行：735/520 单行（35px），430 两行（65px），无横向溢出。
+- 测试 149/149；重装 applied。
+- 截图：`docs/demo/v09-top-tabs.png`。
+
+## 36. 用户画像一级标签（2026-11-03）
+
+- 一级标签新增「用户画像」，位置在「记忆」之后；原记忆页画像卡移除，避免重复。
+- 画像页展示全部 trait（最多 10 条）：类型、证据数、置信度，并列出最多 3 条证据原文。
+- harness：8 个一级标签；画像页 2 条 trait；735 单行 35px、520/430 两行 65px，无横向溢出；`__errors=[]`。
+- 测试 149/149；重装 applied。
+- 截图：`docs/demo/v09-profile-tab.png`。
+
+## 37. 一级标签点击换行修复（2026-11-03）
+
+- 现象：点选 Obsidian 标签时标签栏重新换行。原因：激活态 `font-weight:600` 让选中的长标签变宽，行宽越界触发重排。
+- 修复：所有一级标签统一 `font-weight:600`（不再只在选中时加粗），内距 12→9px；空态/选中态只改背景与颜色，宽度恒定。
+- 实测：735/620/600/560/540/520 均单行 35px，切到 Obsidian 高度不变；430 固定两行 65px（宽度所限，稳定不跳）。
+- 测试 149/149；重装 applied。截图：`docs/demo/v09-tabs-520.png`。
+
+## 38. 标签栏与卡片对齐居中（2026-11-03）
+
+- 标签栏由 fit-content 改为 `width:100%` + `justify-content:center`，与下方卡片同宽（735/600/520/430 实测 tabsWidth=cardWidth）。
+- 统一标签字号/行高/字重/内距；735–520 单行 35px，430 两行 65px；无横向溢出。
+- 测试 149/149；重装 applied。截图：`docs/demo/v09-tabs-unified.png`。
+
+## 39. 滚动条稳定（2026-11-03）
+
+- 问题：切换标签时内容高度变化，滚动条出现/消失导致页面横向抖动。
+- 修复：对包含 `.dsh-memory-root` 的祖先滚动容器应用 `scrollbar-gutter: stable`（含 html/body 兜底）。
+- harness：把面板放进固定高度滚动容器，切换记忆/用户画像/Obsidian 时 `scrollbar-gutter` 计算为 `stable`，`clientWidth` 恒为 520；滚动高度 2005/520/539 变化但宽度不动。
+- 测试 149/149；重装 applied。
+
+## 40. Token 预算 v2 第一批（2026-11-03）
+
+- 自适应注入预算：`adaptiveInjectionBudget(base, hits, followUp)`：1 命中 200、3 命中 256、6 命中 352，续问 220；不再固定吃满 360。
+- 抽取遥测：capture 记录 `{promptTokens, transcriptChars, chunks, calls, items, applied}`，`stats.lastExtraction` 返回；设置摘要显示「抽取 N token」。
+- 已有增量抽取：回合内缓冲达到 20000 字符先抽取并清空缓冲，turn/end 只提取剩余消息。
+- 测试 152/152（+ 自适应预算、抽取遥测、stats 遥测）；eval hit@5 1.000 / precision@5 0.989 不降。
+- 重装 applied，自检知识图谱 ok。
+
+## 41. Token 预算 v2 第二批：输出收紧 + 7 天趋势（2026-11-03）
+
+- 抽取输出收紧：`MAX_MEMORIES_PER_PASS` 6→4，prompt 改为「最多输出 4 条」「content ≤120 字」，`extraction.maxOutputTokens` 默认 600→400。
+- 截断可恢复：`parseExtraction` 在 JSON 不完整时用 `salvageMemories` 扫描 `memories` 数组中已闭合的对象，保留前导完整条目；capture 接受 `finish=length`（文本非空时）并在遥测里记 `truncated`，不再整轮丢弃。
+- 用量日志：`<root>/usage.jsonl` 每次注入/抽取追加一行，仅含 `{at,kind,tokens,items,budget|applied,calls}`，不写 prompt/查询/记忆内容；超过 256KB 压到最近 2000 行，坏行与未知类型跳过，写失败不影响回合。
+- 7 天序列：`readUsage(root,{days,now})` 返回补零的本地日历日、`totals`（注入/抽取次数与 token、抽取写入数、超预算次数）、`avgInjectTokens`、`peakInjectTokens`；`computeStats` 以 `stats.usage` 返回。
+- 面板：捕获与注入 tab 的设置项下方新增「Token 用量 · 近 7 天」分组柱状图（注入/抽取双柱、日期轴、图例、平均注入、超预算提醒），总量右对齐；无数据时显示空态提示，不渲染空图。
+- harness：14 根柱、7 个日期标签（10/28–11/03）、总量 5210 token、图例「注入 1686 / 抽取 3524 / 平均 281/回合」，`__errors=[]`，trend 651×161，无横向溢出。
+- 测试 **161/161**（+usage-log 6、截断抽取 1、stats usage 1、config/extract 期望更新）；eval hit@5 1.000 / precision@5 0.989 不降。
+- 重装 applied；`panel-transport.json` 自检 ok，`stats` 已返回 `usage.windowDays=7`。
+- 截图：`docs/demo/v09-token-trend.png`。
+
+## 42. v0.10 知识笔记编辑器（2026-11-04）
+
+- 新增 host API：`readKnowledgeNote` / `saveKnowledgeNote`（`host/knowledge.js`），RPC 为 `knowledgeNote` / `knowledgeSave`，已同步 `PANEL_METHODS`、PanelRemote、客户端 `METHODS`/`RESULT_TYPES`。
+- 编辑模型：正文首个非空行作为标题，其余为可编辑正文；frontmatter 按原顺序重写，`dsh_knowledge`、`memoryId`、未知字段全部保留，topic/tags 更新；topic 变化时若正文存在自动生成的 `- [[旧主题]]` 链接则一并替换。
+- 安全：文件名仅允许 `<name>.md`（拒绝 `../` 与目录分隔符），标题 ≤200 字、正文 ≤100KB、标签去重 ≤20 个；临时文件 + rename 原子写入，模式 0600。
+- 冲突：保存携带 `expectedMtimeMs`，与磁盘 mtime 不一致时返回 `{saved:false,reason:'conflict',current}`，不写文件；面板显示警告并给出「重新加载」。
+- 客户端：知识库列表每行可点开编辑弹窗（标题/主题/标签/正文），Esc 与遮罩关闭，保存后刷新列表与图谱；打开失败、保存失败、冲突均有独立提示。
+- 单测 **170/170**（+knowledge-edit 8、+contract 1）；eval hit@5 1.000 / precision@5 0.989 不降。
+- harness：打开首条笔记回填 title/topic/tags/body；改标题+正文保存后弹窗关闭、列表标题更新、显示「笔记已保存。」；强制冲突时出现「文件已被外部修改…」与「重新加载」，重新加载恢复磁盘标题；弹窗 520px（430 宽为 398px），`__errors=[]`，`scrollWidth=430` 无横向溢出。
+- 截图：`docs/demo/v10-knowledge-list.png`、`docs/demo/v10-knowledge-editor.png`、`docs/demo/v10-knowledge-editor-430.png`。

@@ -19,11 +19,14 @@ import { statSync } from 'node:fs'
 
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { deriveProfile } from './profile.js'
-import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge } from './knowledge.js'
+import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
 import { readMaintenance } from './maintenance.js'
 import { exportToObsidian, importFromObsidian, readSyncSummary, writeSyncSummary } from './obsidian.js'
+import { computeUsageSummary, localDayKey } from './usage-log.js'
 import { tokenize } from './tokenize.js'
 import { MEMORY_KINDS } from './records.js'
+
+export { localDayKey }
 
 /** Package identity shared by the client contribution and diagnostics. */
 export const PANEL_PACKAGE = '@missher/dsh-memory'
@@ -31,7 +34,7 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */
@@ -279,6 +282,8 @@ export function computeStats(backend, raw) {
     lastCapturedAt: lastCapturedAt === 0 ? null : lastCapturedAt,
     maintenance: backend.root ? readMaintenance(backend.root) : null,
     lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
+    lastExtraction: typeof backend.getLastExtraction === 'function' ? backend.getLastExtraction() : null,
+    usage: computeUsageSummary(backend.root),
     captureEnabled: backend.config?.capture?.enabled === true,
     injectEnabled: backend.config?.inject?.enabled === true,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
@@ -290,14 +295,6 @@ export function computeStats(backend, raw) {
 }
 
 const DAY_MS = 86_400_000
-
-/** Local calendar day of a timestamp, as `YYYY-MM-DD`. */
-export function localDayKey(ms) {
-  const date = new Date(ms)
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
-}
 
 /**
  * Daily memory activity for the panel's contribution-style heatmap.
@@ -726,6 +723,28 @@ export function knowledgePromote(backend, raw) {
   try {
     const path = promoteMemoryToKnowledge(backend.root, record)
     return { ok: true, path, id: record.id }
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** Read one knowledge note for the editor. */
+export function knowledgeNote(backend, raw) {
+  if (backend.root === null) throw new PanelInputError('memory root is unavailable')
+  const input = asObject(raw)
+  const file = typeof input.file === 'string' ? input.file : ''
+  try {
+    return readKnowledgeNote(backend.root, file)
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** Save one knowledge note; a stale mtime returns `{ saved: false, reason: 'conflict' }`. */
+export function knowledgeSave(backend, raw) {
+  if (backend.root === null) throw new PanelInputError('memory root is unavailable')
+  try {
+    return saveKnowledgeNote(backend.root, asObject(raw))
   } catch (error) {
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }

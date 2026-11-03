@@ -24,7 +24,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     model: null,
     reasoningEffort: null,
     maxInputTokens: 12000,
-    maxOutputTokens: 600,
+    maxOutputTokens: 400,
   }),
   inject: Object.freeze({
     enabled: true,

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { appendUsage } from '../host/usage-log.js'
 import { MemoryIndex } from '../host/search.js'
 import { MemoryStore } from '../host/store.js'
 import {
@@ -639,4 +640,46 @@ test('knowledgePromote writes a long-term note and graph exposes it', (t) => {
   const graph = backend.knowledgeGraph({ scope: 'project', projectKey: KEY })
   assert.ok(graph.nodes.some((node) => node.type === 'note'))
   assert.ok(graph.edges.some((edge) => edge.type === 'knowledge'))
+})
+
+
+test('stats exposes extraction telemetry', (t) => {
+  const { backend } = setup(t)
+  backend.getLastExtraction = () => ({ at: 1, promptTokens: 812, transcriptChars: 4200, items: 2, applied: 2 })
+  const stats = backend.stats({})
+  assert.equal(stats.lastExtraction.promptTokens, 812)
+  assert.equal(stats.lastExtraction.applied, 2)
+})
+
+test('stats exposes a seven-day token usage series', (t) => {
+  const { backend, root } = setup(t)
+  appendUsage(root, { at: Date.now(), kind: 'inject', tokens: 320, items: 3, budget: 352 })
+  appendUsage(root, { at: Date.now(), kind: 'extract', tokens: 700, items: 1, applied: 1, calls: 1 })
+  const stats = backend.stats({})
+  assert.equal(stats.usage.windowDays, 7)
+  assert.equal(stats.usage.days.length, 7)
+  assert.equal(stats.usage.totals.injectTokens, 320)
+  assert.equal(stats.usage.totals.extractTokens, 700)
+  assert.equal(stats.usage.days[6].inject.calls, 1)
+})
+
+test('knowledgeNote reads and knowledgeSave writes a promoted note', (t) => {
+  const { backend } = setup(t)
+  const record = seed(backend.store, backend.index, { content: '知识笔记编辑测试', topic: '存储' })
+  const promoted = backend.knowledgePromote({ id: record.id, scope: 'project', projectKey: KEY })
+  const file = promoted.path.split('/').pop()
+  const note = backend.knowledgeNote({ file })
+  assert.equal(note.title, '知识笔记编辑测试')
+  assert.equal(note.topic, '存储')
+  const saved = backend.knowledgeSave({
+    file,
+    title: '编辑后的标题',
+    body: note.body,
+    topic: '持久化',
+    tags: ['jsonl'],
+    expectedMtimeMs: note.mtimeMs,
+  })
+  assert.equal(saved.saved, true)
+  assert.equal(backend.knowledgeNote({ file }).title, '编辑后的标题')
+  assert.equal(backend.knowledgeList().notes[0].title, '编辑后的标题')
 })

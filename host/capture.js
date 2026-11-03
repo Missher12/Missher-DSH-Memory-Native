@@ -17,6 +17,7 @@
 
 import { buildExtractionPrompt, parseExtraction } from './extract.js'
 import { projectIdentity } from './paths.js'
+import { estimateTokens } from './recall.js'
 import { buildRecord } from './records.js'
 import { tokenize } from './tokenize.js'
 
@@ -103,6 +104,7 @@ export class CapturePipeline {
   #clock
   #onWrite
   #logger
+  #onExtraction
   #buffers = new Map()
   #queue = Promise.resolve()
   #callsToday = 0
@@ -122,6 +124,7 @@ export class CapturePipeline {
     this.#clock = typeof options.clock === 'function' ? options.clock : () => Date.now()
     this.#onWrite = typeof options.onWrite === 'function' ? options.onWrite : () => {}
     this.#logger = options.logger
+    this.#onExtraction = typeof options.onExtraction === 'function' ? options.onExtraction : () => {}
   }
 
   /** Replace the live config so panel settings apply without a restart. */
@@ -242,6 +245,9 @@ export class CapturePipeline {
     }
     const items = []
     let calls = 0
+    let promptTokens = 0
+    let transcriptChars = 0
+    let truncated = 0
     for (const chunk of selected) {
       if (calls > 0 && !explicit && !this.#admitCall()) {
         this.#logger?.warn?.('[dsh-memory] capture budget exhausted mid-turn; remaining chunks skipped')
@@ -258,16 +264,35 @@ export class CapturePipeline {
         limit: 10,
       }).map((hit) => hit.record)
       const prompt = buildExtractionPrompt({ transcript: chunkTranscript, existing, now: this.#clock() })
-      const text = await this.#collect(route, prompt)
+      promptTokens += estimateTokens(prompt)
+      transcriptChars += chunkTranscript.length
+      const result = await this.#collect(route, prompt)
       if (this.#disposed) return
-      const parsed = parseExtraction(text)
+      if (result.truncated) {
+        truncated += 1
+        this.#logger?.warn?.('[dsh-memory] extraction hit the output cap; keeping complete items')
+      }
+      const parsed = parseExtraction(result.text)
       if (parsed.items.length > 0) items.push(...parsed.items)
     }
+    const telemetry = {
+      at: this.#clock(),
+      promptTokens,
+      transcriptChars,
+      chunks: selected.length,
+      calls,
+      truncated,
+      items: items.length,
+      applied: 0,
+    }
     if (items.length === 0) {
+      this.#onExtraction(telemetry)
       this.#logger?.info?.('[dsh-memory] extraction: nothing to store')
       return
     }
     const applied = this.#apply(items, { scopes, identity, session, explicit })
+    telemetry.applied = applied
+    this.#onExtraction(telemetry)
     if (applied > 0) this.#logger?.info?.(`[dsh-memory] captured ${applied} memory item(s) for ${identity.key}`)
   }
 
@@ -336,8 +361,11 @@ export class CapturePipeline {
       if (chunk.type === 'text-delta') text += chunk.text
       else if (chunk.type === 'finish') finish = chunk.reason
     }
+    // A capped response still carries complete leading items; the parser
+    // salvages them instead of losing the whole pass.
+    if (finish?.kind === 'length' && text.trim() !== '') return { text, truncated: true }
     if (finish?.kind !== 'stop') throw new Error(`extraction stream ended with ${finish?.kind ?? 'missing-finish'}`)
-    return text
+    return { text, truncated: false }
   }
 
   /** Fold a near-identical statement into the existing record (same kind and scope). */

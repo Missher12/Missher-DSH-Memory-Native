@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildRecord, nextRevision } from '../host/records.js'
-import { classifyRecallHits, compileMemoryContext, estimateTokens, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, rankHits, recallQueries } from '../host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, rankHits, recallQueries } from '../host/recall.js'
 
 const NOW = 1_700_000_000_000
 const KEY = 'DSH-Memory-abc'
@@ -165,4 +165,13 @@ test('rankHits boosts records matching the inferred topic', () => {
   ]
   const ranked = rankHits(hits, { now: NOW, minScore: 0, topicHint: '布局' })
   assert.equal(ranked[0].record.id, second.id)
+})
+
+
+test('adaptiveInjectionBudget scales with hit count and follow-ups', () => {
+  assert.equal(adaptiveInjectionBudget(360, 1, false), 200)
+  assert.equal(adaptiveInjectionBudget(360, 3, false), 256)
+  assert.equal(adaptiveInjectionBudget(360, 6, false), 352)
+  assert.equal(adaptiveInjectionBudget(360, 6, true), 220)
+  assert.equal(adaptiveInjectionBudget(200, 6, false), 200)
 })
