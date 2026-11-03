@@ -132,7 +132,12 @@ window.__ModuleLoader__.load({
         'library.syncExport': 'Sync to Obsidian',
         'library.syncImport': 'Import from Obsidian',
         'knowledge.title': 'Knowledge map',
-        'knowledge.hint': 'Topics are hubs; lines are shared tags. Click a node for details.',
+        'knowledge.hint': 'Topics are hubs; lines are shared tags. Drag to pan, scroll to zoom, click a node for details.',
+        'knowledge.search': 'Search memories or topics',
+        'knowledge.zoomIn': 'Zoom in',
+        'knowledge.zoomOut': 'Zoom out',
+        'knowledge.reset': 'Reset',
+        'knowledge.topicChip': 'Topic: {topic}',
         'knowledge.empty': 'No memories to visualize yet.',
         'knowledge.loading': 'Building the knowledge map…',
         'knowledge.failed': 'Knowledge map failed: {reason}',
@@ -342,7 +347,12 @@ window.__ModuleLoader__.load({
         'library.syncExport': '\u540c\u6b65\u5230 Obsidian',
         'library.syncImport': '\u4ece Obsidian \u5bfc\u5165',
         'knowledge.title': '\u77e5\u8bc6\u56fe\u8c31',
-        'knowledge.hint': '\u4e3b\u9898\u662f\u4e2d\u5fc3\u8282\u70b9\uff0c\u8fde\u7ebf\u662f\u5171\u4eab\u6807\u7b7e\u3002\u70b9\u51fb\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
+        'knowledge.hint': '\u4e3b\u9898\u662f\u4e2d\u5fc3\u8282\u70b9\uff0c\u8fde\u7ebf\u662f\u5171\u4eab\u6807\u7b7e\u3002\u62d6\u52a8\u5e73\u79fb\u3001\u6eda\u8f6e\u7f29\u653e\uff0c\u70b9\u51fb\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
+        'knowledge.search': '\u641c\u7d22\u8bb0\u5fc6\u6216\u4e3b\u9898',
+        'knowledge.zoomIn': '\u653e\u5927',
+        'knowledge.zoomOut': '\u7f29\u5c0f',
+        'knowledge.reset': '\u91cd\u7f6e',
+        'knowledge.topicChip': '\u4e3b\u9898\uff1a{topic}',
         'knowledge.empty': '\u6682\u65e0\u53ef\u53ef\u89c6\u5316\u7684\u8bb0\u5fc6\u3002',
         'knowledge.loading': '\u6b63\u5728\u6784\u5efa\u77e5\u8bc6\u56fe\u8c31\u2026',
         'knowledge.failed': '\u77e5\u8bc6\u56fe\u8c31\u52a0\u8f7d\u5931\u8d25\uff1a{reason}',
@@ -672,6 +682,9 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-group{margin-top:0}',
       '.dsh-memory-settings-head+.dsh-memory-settings-group{margin-top:20px}',
       '.dsh-memory-settings-group+.dsh-memory-settings-group{padding-top:22px;border-top:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-settings-tabs{display:flex;gap:2px;flex-wrap:wrap;margin:6px 0 10px;padding-bottom:8px;border-bottom:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-settings-tab{border:0;background:transparent;padding:4px 10px;border-radius:7px;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
+      '.dsh-memory-settings-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-2,#f5f6f8);color:var(--dsw-alias-label-primary,#1f2328);font-weight:600}',
       '.dsh-memory-settings-group-title{margin:0 0 2px;font-size:11px;font-weight:500;line-height:16px;letter-spacing:.02em;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
       '.dsh-memory-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;box-sizing:border-box;min-height:48px;font-size:13.5px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-row+.dsh-memory-settings-row{border-top:.5px solid var(--dsh-memory-card-border)}',
@@ -681,7 +694,15 @@ window.__ModuleLoader__.load({
       '.dsh-memory-view-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}',
       '.dsh-memory-knowledge{display:flex;flex-direction:column;gap:8px}',
       '.dsh-memory-knowledge-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}',
-      '.dsh-memory-graph-wrap{overflow:hidden;border:.5px solid var(--dsh-memory-card-border);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dsh-memory-graph-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.dsh-memory-graph-search{box-sizing:border-box;height:28px;min-width:0;flex:1 1 180px;max-width:280px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px}',
+      '.dsh-memory-graph-btn{box-sizing:border-box;height:28px;min-width:28px;padding:0 8px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;cursor:pointer}',
+      '.dsh-memory-graph-chip{box-sizing:border-box;height:28px;padding:0 10px;border:.5px solid var(--dsw-alias-state-business-primary,#2f6df6);border-radius:14px;background:transparent;color:var(--dsw-alias-state-business-primary,#2f6df6);font:inherit;font-size:12px;cursor:pointer}',
+      '.dsh-memory-graph-wrap{overflow:hidden;border:.5px solid var(--dsh-memory-card-border);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);cursor:grab;touch-action:none}',
+      '.dsh-memory-graph-hit{fill:transparent}',
+      '.dsh-memory-graph-node-group{cursor:pointer}',
+      '.dsh-memory-graph-results{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;max-height:180px;overflow:auto}',
+      '.dsh-memory-graph-result{display:flex;justify-content:space-between;gap:10px;width:100%;border:0;background:transparent;padding:4px 2px;font:inherit;font-size:12px;text-align:left;color:var(--dsw-alias-label-primary,#1f2328);cursor:pointer}',
       '.dsh-memory-graph{display:block;width:100%;height:auto}',
       '.dsh-memory-graph-edge{stroke:var(--dsw-alias-border-l3,rgba(127,127,127,.35));stroke-width:1;opacity:.55}',
       '.dsh-memory-graph-edge[data-type="tag"]{stroke:var(--dsw-alias-state-business-primary,#2f6df6);stroke-dasharray:3 3;opacity:.45}',
@@ -1272,6 +1293,7 @@ window.__ModuleLoader__.load({
       const [obsidianFolder, setObsidianFolder] = React.useState('DSH Memory')
       const [baseline, setBaseline] = React.useState(null)
       const [savedAt, setSavedAt] = React.useState('')
+      const [settingsGroup, setSettingsGroup] = React.useState('capture')
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState('')
       const fileRef = React.useRef(null)
@@ -1478,39 +1500,49 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dsh-memory-settings-badge', 'data-off': maintenance ? 'false' : 'true' },
             h('i', null),
             maintenance ? t('settings.badge.on') : t('settings.badge.off'))),
-        h('div', { className: 'dsh-memory-settings-group' },
-          h('h4', { className: 'dsh-memory-settings-group-title' }, t('settings.group.capture')),
-          switchRow(t('settings.capture'), capture, setCapture),
-          switchRow(t('settings.inject'), inject, setInject),
-          numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value))),
-        h('div', { className: 'dsh-memory-settings-group' },
-          h('h4', { className: 'dsh-memory-settings-group-title' }, t('settings.group.retention')),
-          numberRow(t('settings.retention'), retention, '天', '0', '36500', '10', (event) => setRetention(event.target.value)),
-          switchRow(t('settings.maintenance'), maintenance, setMaintenance)),
-        h('div', { className: 'dsh-memory-settings-group' },
-          h('h4', { className: 'dsh-memory-settings-group-title' }, t('settings.group.data')),
-          h('div', { className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, t('settings.data.label')),
-            h('div', { className: 'dsh-memory-settings-buttons' },
-              button(t('data.export'), exportAll),
-              button(t('data.import'), () => fileRef.current?.click()),
-              button(t('data.backup'), backupNow),
-              h('input', {
-                ref: fileRef,
-                type: 'file',
-                accept: 'application/json',
-                className: 'dsh-memory-file-input',
-                onChange: importAll,
-              })))),
-        h('div', { className: 'dsh-memory-settings-group' },
-          h('h4', { className: 'dsh-memory-settings-group-title' }, t('settings.group.obsidian')),
-          textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
-          textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
-          h('div', { className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, t('obsidian.actions')),
-            h('div', { className: 'dsh-memory-settings-buttons' },
-              button(t('obsidian.export'), obsidianExport),
-              button(t('obsidian.import'), obsidianImport)))),
+        h('div', { className: 'dsh-memory-settings-tabs', role: 'tablist' },
+          [['capture', 'settings.group.capture'], ['retention', 'settings.group.retention'], ['data', 'settings.group.data'], ['obsidian', 'settings.group.obsidian']]
+            .map(([value, label]) => h('button', {
+              key: value,
+              type: 'button',
+              role: 'tab',
+              'aria-selected': settingsGroup === value,
+              'data-active': settingsGroup === value ? 'true' : 'false',
+              className: 'dsh-memory-settings-tab',
+              onClick: () => setSettingsGroup(value),
+            }, t(label)))),
+        settingsGroup === 'capture'
+          ? h('div', { className: 'dsh-memory-settings-group' },
+            switchRow(t('settings.capture'), capture, setCapture),
+            switchRow(t('settings.inject'), inject, setInject),
+            numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value)))
+          : settingsGroup === 'retention'
+            ? h('div', { className: 'dsh-memory-settings-group' },
+              numberRow(t('settings.retention'), retention, '天', '0', '36500', '10', (event) => setRetention(event.target.value)),
+              switchRow(t('settings.maintenance'), maintenance, setMaintenance))
+            : settingsGroup === 'data'
+              ? h('div', { className: 'dsh-memory-settings-group' },
+                h('div', { className: 'dsh-memory-settings-row' },
+                  h('span', { className: 'dsh-memory-settings-label' }, t('settings.data.label')),
+                  h('div', { className: 'dsh-memory-settings-buttons' },
+                    button(t('data.export'), exportAll),
+                    button(t('data.import'), () => fileRef.current?.click()),
+                    button(t('data.backup'), backupNow),
+                    h('input', {
+                      ref: fileRef,
+                      type: 'file',
+                      accept: 'application/json',
+                      className: 'dsh-memory-file-input',
+                      onChange: importAll,
+                    }))))
+              : h('div', { className: 'dsh-memory-settings-group' },
+                textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
+                textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
+                h('div', { className: 'dsh-memory-settings-row' },
+                  h('span', { className: 'dsh-memory-settings-label' }, t('obsidian.actions')),
+                  h('div', { className: 'dsh-memory-settings-buttons' },
+                    button(t('obsidian.export'), obsidianExport),
+                    button(t('obsidian.import'), obsidianImport)))),
         notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
         h('div', { className: 'dsh-memory-settings-foot' },
           h('span', { className: 'dsh-memory-settings-state', 'data-dirty': dirty ? 'true' : 'false' },
@@ -1527,6 +1559,11 @@ window.__ModuleLoader__.load({
     function KnowledgeView(props) {
       const { graph, loading, error, t, onPromote, promoting } = props
       const [selected, setSelected] = React.useState(null)
+      const [scale, setScale] = React.useState(1)
+      const [offset, setOffset] = React.useState({ x: 0, y: 0 })
+      const [query, setQuery] = React.useState('')
+      const [topicFilter, setTopicFilter] = React.useState(null)
+      const dragRef = React.useRef(null)
       if (loading) return h('p', { className: 'dsh-memory-muted', role: 'status' }, t('knowledge.loading'))
       if (error !== '') return h('p', { className: 'dsh-memory-error-text', role: 'alert' }, t('knowledge.failed', { reason: error }))
       if (graph === null || !Array.isArray(graph.nodes) || graph.nodes.length === 0) {
@@ -1559,7 +1596,51 @@ window.__ModuleLoader__.load({
           })
         })
       })
+      const lowered = query.trim().toLowerCase()
+      const matches = (node) => {
+        if (topicFilter !== null && node.topic !== topicFilter) return false
+        if (lowered === '') return true
+        return (String(node.label) + ' ' + String(node.topic) + ' ' + String(node.kind)).toLowerCase().includes(lowered)
+      }
+      const visibleNodes = graph.nodes.filter(matches)
+      const visibleIds = new Set(visibleNodes.map((node) => node.id))
+      const visibleHubs = topicFilter === null ? hubs : hubs.filter((hub) => hub.label === topicFilter)
+      const resetView = () => {
+        setScale(1)
+        setOffset({ x: 0, y: 0 })
+        setQuery('')
+        setTopicFilter(null)
+      }
+      const zoomBy = (factor) => {
+        setScale((value) => Math.min(3, Math.max(0.4, Math.round(value * factor * 100) / 100)))
+      }
+      const onWheel = (event) => {
+        event.preventDefault()
+        zoomBy(event.deltaY < 0 ? 1.12 : 0.89)
+      }
+      const onPointerDown = (event) => {
+        if (event.button !== 0) return
+        const rect = event.currentTarget.getBoundingClientRect()
+        const factor = 800 / Math.max(1, rect.width)
+        dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y, factor }
+        if (typeof event.currentTarget.setPointerCapture === 'function') {
+          event.currentTarget.setPointerCapture(event.pointerId)
+        }
+      }
+      const onPointerMove = (event) => {
+        const drag = dragRef.current
+        if (drag === null) return
+        setOffset({
+          x: drag.ox + (event.clientX - drag.x) * drag.factor,
+          y: drag.oy + (event.clientY - drag.y) * drag.factor,
+        })
+      }
+      const onPointerUp = () => {
+        dragRef.current = null
+      }
       const edgeNodes = graph.edges.map((edge, index) => {
+        if (!visibleIds.has(edge.source) && !visibleHubs.some((hub) => hub.id === edge.source)) return null
+        if (!visibleIds.has(edge.target) && !visibleHubs.some((hub) => hub.id === edge.target)) return null
         const from = positions.get(edge.source)
         const to = positions.get(edge.target)
         if (from === undefined || to === undefined) return null
@@ -1573,30 +1654,40 @@ window.__ModuleLoader__.load({
           'data-type': edge.type,
         })
       })
-      const hubNodes = hubs.map((hub) => {
+      const hubNodes = visibleHubs.map((hub) => {
         const point = positions.get(hub.id)
         if (point === undefined) return null
-        return h('g', { key: hub.id, className: 'dsh-memory-graph-hub' },
-          h('circle', { cx: point.x, cy: point.y, r: 9 }),
-          h('text', { x: point.x, y: point.y - 14, className: 'dsh-memory-graph-hub-label', textAnchor: 'middle' }, hub.label))
+        return h('g', {
+          key: hub.id,
+          className: 'dsh-memory-graph-hub',
+          onClick: () => setTopicFilter((value) => (value === hub.label ? null : hub.label)),
+        },
+          h('circle', { cx: point.x, cy: point.y, r: 10 }),
+          h('text', { x: point.x, y: point.y - 15, className: 'dsh-memory-graph-hub-label', textAnchor: 'middle' }, hub.label))
       })
-      const memoryNodes = graph.nodes.map((node) => {
+      const memoryNodes = visibleNodes.map((node) => {
         const point = positions.get(node.id)
         if (point === undefined) return null
-        return h('circle', {
+        return h('g', {
           key: node.id,
-          cx: point.x,
-          cy: point.y,
-          r: 4.5 + Math.max(0, Math.min(1, node.confidence)) * 3,
-          className: 'dsh-memory-graph-node',
-          'data-kind': node.kind,
+          className: 'dsh-memory-graph-node-group',
           tabIndex: 0,
           role: 'button',
           'aria-label': node.label,
           onClick: () => setSelected(node),
           onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') setSelected(node) },
-        }, h('title', null, node.label))
+        },
+          h('circle', { cx: point.x, cy: point.y, r: 12, className: 'dsh-memory-graph-hit' }),
+          h('circle', {
+            cx: point.x,
+            cy: point.y,
+            r: 4.5 + Math.max(0, Math.min(1, node.confidence)) * 3,
+            className: 'dsh-memory-graph-node',
+            'data-kind': node.kind,
+          }),
+          h('title', null, node.label))
       })
+      const resultRows = (query.trim() === '' && topicFilter === null) ? [] : visibleNodes.slice(0, 20)
       return h('section', { className: 'dsh-memory-card dsh-memory-knowledge' },
         h('div', { className: 'dsh-memory-knowledge-head' },
           h('h3', { className: 'dsh-memory-settings-title' }, t('knowledge.title')),
@@ -1606,9 +1697,41 @@ window.__ModuleLoader__.load({
             tags: String(graph.tagCount ?? 0),
           }))),
         h('p', { className: 'dsh-memory-muted' }, t('knowledge.hint')),
+        h('div', { className: 'dsh-memory-graph-tools' },
+          h('input', {
+            className: 'dsh-memory-graph-search',
+            type: 'search',
+            value: query,
+            placeholder: t('knowledge.search'),
+            'aria-label': t('knowledge.search'),
+            onChange: (event) => setQuery(event.target.value),
+          }),
+          h('button', { type: 'button', className: 'dsh-memory-graph-btn', onClick: () => zoomBy(0.8), 'aria-label': t('knowledge.zoomOut') }, '−'),
+          h('button', { type: 'button', className: 'dsh-memory-graph-btn', onClick: () => zoomBy(1.25), 'aria-label': t('knowledge.zoomIn') }, '+'),
+          h('button', { type: 'button', className: 'dsh-memory-graph-btn', onClick: resetView }, t('knowledge.reset')),
+          topicFilter === null ? null : h('button', {
+            type: 'button',
+            className: 'dsh-memory-graph-chip',
+            onClick: () => setTopicFilter(null),
+          }, t('knowledge.topicChip', { topic: topicFilter }) + ' ×')),
         h('div', { className: 'dsh-memory-graph-wrap' },
-          h('svg', { viewBox: '0 0 ' + width + ' ' + height, className: 'dsh-memory-graph', role: 'img', 'aria-label': t('knowledge.title') },
-            edgeNodes, hubNodes, memoryNodes)),
+          h('svg', {
+            viewBox: '0 0 ' + width + ' ' + height,
+            className: 'dsh-memory-graph',
+            role: 'img',
+            'aria-label': t('knowledge.title'),
+            onWheel,
+            onPointerDown,
+            onPointerMove,
+            onPointerUp,
+            onPointerLeave: onPointerUp,
+          },
+            h('g', { transform: 'translate(' + offset.x + ' ' + offset.y + ') scale(' + scale + ')' },
+              edgeNodes, hubNodes, memoryNodes))),
+        resultRows.length === 0 ? null : h('ul', { className: 'dsh-memory-graph-results' }, resultRows.map((node) => h('li', { key: node.id },
+          h('button', { type: 'button', className: 'dsh-memory-graph-result', onClick: () => setSelected(node) },
+            h('span', null, String(node.label).slice(0, 56)),
+            h('span', { className: 'dsh-memory-muted' }, node.topic))))),
         graph.truncated === true ? h('p', { className: 'dsh-memory-muted' }, t('knowledge.truncated')) : null,
         h('div', { className: 'dsh-memory-knowledge-detail' },
           h('h4', { className: 'dsh-memory-settings-group-title' }, t('knowledge.detail')),
