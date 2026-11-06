@@ -32,6 +32,7 @@ export function sanitizeSettings(raw) {
   if (typeof input.injectMaxTokens === 'number') out.injectMaxTokens = clampInteger(input.injectMaxTokens, 600, LIMITS.injectMaxTokens)
   if (typeof input.retentionEpisodeDays === 'number') out.retentionEpisodeDays = clampInteger(input.retentionEpisodeDays, 90, LIMITS.retentionEpisodeDays)
   if (typeof input.maintenanceEnabled === 'boolean') out.maintenanceEnabled = input.maintenanceEnabled
+  if (typeof input.obsidianAutoSync === 'boolean') out.obsidianAutoSync = input.obsidianAutoSync
   if (typeof input.obsidianVaultPath === 'string') out.obsidianVaultPath = input.obsidianVaultPath.trim()
   if (typeof input.obsidianFolder === 'string' && input.obsidianFolder.trim() !== '') out.obsidianFolder = input.obsidianFolder.trim().slice(0, 64)
   return out
@@ -66,8 +67,9 @@ export function settingsToConfig(settings) {
   }
   if (typeof value.retentionEpisodeDays === 'number') out.retention = { episodeDays: value.retentionEpisodeDays }
   if (typeof value.maintenanceEnabled === 'boolean') out.maintenance = { enabled: value.maintenanceEnabled }
-  if (typeof value.obsidianVaultPath === 'string' || typeof value.obsidianFolder === 'string') {
+  if (typeof value.obsidianAutoSync === 'boolean' || typeof value.obsidianVaultPath === 'string' || typeof value.obsidianFolder === 'string') {
     out.obsidian = {
+      ...(typeof value.obsidianAutoSync === 'boolean' ? { autoSync: value.obsidianAutoSync } : {}),
       ...(typeof value.obsidianVaultPath === 'string' ? { vaultPath: value.obsidianVaultPath === '' ? null : value.obsidianVaultPath } : {}),
       ...(typeof value.obsidianFolder === 'string' ? { folder: value.obsidianFolder } : {}),
     }

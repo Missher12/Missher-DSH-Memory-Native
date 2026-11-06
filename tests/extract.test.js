@@ -61,7 +61,7 @@ test('parse defaults missing fields safely', () => {
 })
 
 
-test('extraction prompt stays compact and truncates long transcripts', () => {
+test('extraction prompt keeps the full segment and only bounds existing memories', () => {
   const prompt = buildExtractionPrompt({
     transcript: '长'.repeat(30000),
     existing: Array.from({ length: 12 }, (_, index) => ({
@@ -71,8 +71,8 @@ test('extraction prompt stays compact and truncates long transcripts', () => {
       content: '很长的旧记忆内容'.repeat(20),
     })),
   })
-  assert.ok(prompt.length < 18000)
-  assert.ok(estimateTokens(prompt) < 17200)
+  assert.ok(prompt.length > 30000)
+  assert.match(prompt, /长{30000}/u)
   assert.match(prompt, /最多输出 4 条/u)
   assert.equal((prompt.match(/^- \[mem_/gmu) ?? []).length, 6)
 })

@@ -24,7 +24,8 @@ export const DEFAULT_CONFIG = Object.freeze({
     model: null,
     reasoningEffort: null,
     maxInputTokens: 12000,
-    maxOutputTokens: 400,
+    // Some host routes count reasoning inside this cap, including with "off".
+    maxOutputTokens: 4096,
   }),
   inject: Object.freeze({
     enabled: true,
@@ -44,6 +45,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     backupKeep: 7,
   }),
   obsidian: Object.freeze({
+    autoSync: false,
     vaultPath: null,
     folder: 'DSH Memory',
   }),
@@ -116,6 +118,7 @@ export function resolveConfig(raw) {
       backupKeep: integerIn(maintenance.backupKeep, DEFAULT_CONFIG.maintenance.backupKeep, 1, 100),
     }),
     obsidian: Object.freeze({
+      autoSync: obsidian.autoSync === true,
       vaultPath: optionalString(obsidian.vaultPath),
       folder: optionalString(obsidian.folder) ?? DEFAULT_CONFIG.obsidian.folder,
     }),

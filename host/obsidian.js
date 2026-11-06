@@ -19,10 +19,12 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
+import { parseFrontmatter } from './frontmatter.js'
 import { KNOWLEDGE_DIR, extractWikiLinks, isKnowledgeFile, parseKnowledgeNote, splitNoteBody } from './knowledge.js'
 import { isValidProjectKey } from './paths.js'
-import { MEMORY_KINDS, MEMORY_STATUSES } from './records.js'
+import { MEMORY_KINDS, MEMORY_STATUSES, nextRevision } from './records.js'
 
 export const DEFAULT_FOLDER = 'DSH Memory'
 export const INDEX_FILE = '_index.md'
@@ -74,31 +76,10 @@ export function serializeMemory(record) {
   return lines.join('\n')
 }
 
-/** Parse YAML-ish frontmatter + body; returns null when there is no frontmatter. */
+/** Parse Obsidian properties and body, including block-style YAML lists. */
 export function parseMemoryNote(text) {
-  const match = String(text ?? '').match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/u)
-  if (match === null) return null
-  const data = {}
-  for (const line of match[1].split(/\r?\n/u)) {
-    const separator = line.indexOf(':')
-    if (separator <= 0) continue
-    const key = line.slice(0, separator).trim()
-    const raw = line.slice(separator + 1).trim()
-    let value = raw
-    if (raw === 'null') value = null
-    else if (raw === 'true') value = true
-    else if (raw === 'false') value = false
-    else if (/^-?\d+(?:\.\d+)?$/u.test(raw)) value = Number(raw)
-    else if (raw.startsWith('"') || raw.startsWith('[')) {
-      try {
-        value = JSON.parse(raw)
-      } catch {
-        value = raw
-      }
-    }
-    data[key] = value
-  }
-  return { data, body: String(text).slice(match[0].length).trim() }
+  const parsed = parseFrontmatter(text)
+  return parsed === null ? null : { data: parsed.data, body: parsed.body.trim() }
 }
 
 function writeAtomic(file, content) {
@@ -183,12 +164,24 @@ export function importFromObsidian(options) {
     const existing = store.find(data.id, scopes)
     const status = MEMORY_STATUSES.includes(data.status) && data.status !== 'deleted' ? data.status : 'active'
     const patch = {
+      kind: data.kind,
       content,
       topic: typeof data.topic === 'string' ? data.topic : null,
       tags: Array.isArray(data.tags) ? data.tags.filter((tag) => typeof tag === 'string') : [],
       importance: typeof data.importance === 'number' ? data.importance : 0.5,
       confidence: typeof data.confidence === 'number' ? data.confidence : 0.5,
       status,
+    }
+    if (existing !== undefined) {
+      let normalized
+      try { normalized = nextRevision(existing, patch) } catch {
+        skipped += 1
+        continue
+      }
+      if (Object.keys(patch).every((key) => isDeepStrictEqual(existing[key], normalized[key]))) {
+        skipped += 1
+        continue
+      }
     }
     if (dryRun) {
       preview.push({ file: name, id: data.id, action: existing === undefined ? 'create' : 'update', content: content.slice(0, 80) })
@@ -212,7 +205,7 @@ export function importFromObsidian(options) {
         tags: patch.tags,
         confidence: patch.confidence,
         importance: patch.importance,
-        status: 'active',
+        status: patch.status,
       }, { id: data.id })
       if (built.ok === true) {
         index.upsert(built.record)

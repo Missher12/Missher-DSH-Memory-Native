@@ -458,3 +458,369 @@ node scripts/bench-recall.mjs
 - 单测 **176/176**（+knowledge-sync 5、+contract 1）；eval hit@5 1.000 / precision@5 0.989。
 - harness：导出提示「已导出 1 条 · 跳过 1 条。」；图谱 `vaultCircles=1`、`knowledgeCircles=1`、`wikiEdges=1`，搜索 Vault 后详情类型显示「Vault 笔记」；735/430 `__errors=[]`，scrollWidth=430 无溢出。
 - 截图：`docs/demo/v10-knowledge-sync.png`、`docs/demo/v10-knowledge-sync-430.png`、`docs/demo/v10-graph-vault.png`。
+
+## 44. Codex 评审 P0：完整采集、证据更新、共享遗忘（2026-11-04）
+
+- **持久采集**：新增 `host/capture-journal.js`。每条允许采集的消息先写入 `<root>/capture/sources/src_<hash>.json`（0600，写入后立即回读校验全文）；长消息按字符区间分段，所有分段落盘为 `capture/tasks.jsonl` 任务（`cap_<hash>`，含 segment.index/total、sourceIds、route）。不再有单消息 4000 字符截断、缓冲移除旧消息、只取前三段或预算耗尽直接跳过。
+- **任务状态与恢复**：任务区分 `pending / running / done / partial / failed / unknown / skipped` 与 `callState: not-sent / requested / completed / failed / unknown`。进程重启时，`requested` 任务改为 `unknown`（不自动重发），未发送任务回到 `pending`；`captureRetry` 需要显式调用，`unknown` 还需 `confirmUnknown=true`。预算不足的任务保持 `pending`，不增加丢弃计数或假成功。
+- **证据**：记录新增 `captureKey`、`captureTaskId`、`evidenceRole`、`quoted`；`sourceRefs` 增加 sourceId、角色、时间、摘录（≤240 字）。抽取 prompt 要求模型返回 `[src_…]` evidence；没有用户直接证据的条目落为 candidate，助手推测/引用/用户转述不会被写成用户确认事实。UPDATE/合并会用 `mergeSourceRefs` 保留旧证据。
+- **替换安全**：SUPERSEDE 先构建并校验新记录、写入新记录，成功后才把旧记录标记 superseded；新项被拒绝或写入失败时旧记录保持 active。重复 turn 靠确定性 task/source id 与 `captureKey` 去重；A→B→A 保留三条历史，最新 A active。
+- **共享与遗忘**：项目键仍来自 cwd，同一项目跨会话共享、其他项目不可见；global 才跨项目。`MemoryStore.listAll({includeDeleted:true})` 供删除守卫使用，待处理任务遇到同内容 tombstone 跳过；画像只聚合 active；删除不改写/删除知识笔记或用户 vault 文件。面板「捕获与注入」显示待处理/未知/失败/完成计数，并提供手动重试入口。
+- **统计口径**：`stats` 新增 `capture` 计数与 `deleted`；usage 的 `tokens` 保留为估算 prompt token，provider 返回的输入/输出/总用量另存为 `extractProvider*`，缺失字段为 null 而非 0。截断输出任务标记 `partial`，不当作整段完成。
+- **评测**：`scripts/eval-recall.mjs` 保留 30 题回归，新增 11 题独立难例（长消息首/中/尾、超过三段、跨会话、多事实组合、语义改写、时间更新、无答案）。明确 `precisionAtMost5` 与标准 `precisionAt5`；输出 `kind: retrieval-only`，不冒充真实模型回答测试。
+- **检查**：测试 **212/212** 通过；eval 回归 hit@5 1.000、precisionAtMost5 0.989、必要证据覆盖 0.640、错误召回 1 题、注入率 1.00；难例必要证据覆盖 0.917、错误召回 3/11、无答案误注入 0/2、注入率 0.818。新增故障/恢复/幂等/证据/scope 测试 30 余项。
+- **界面夹具**：harness 捕获与注入页显示「采集队列：待处理 1 · 未知 1 · 失败 0 · 完成 3」、重试按钮与 Provider 用量行，`__errors=[]`；截图 `docs/demo/v10-capture-queue.png`。
+- **未验证/限制**：按本轮边界未安装、重启真实宿主，未做真实 profile 与真实模型端到端验证；provider usage 依赖模型流返回 usage，真实 provider 字段覆盖情况未实测；source 文件按完整原文保留（受本地磁盘约束），尚未做自动清理；面板重试 UI 仅通过静态检查与客户端契约测试，未在真实页面点击验证。
+
+## 45. Codex 复核返工（2026-11-04）
+
+针对 `docs/tasks/codex-reliability-review.test.mjs` 的 7 个隔离实测缺口逐项返工；该文件原样保留并已 7/7 通过，同时把稳定用例并入 `tests/capture-recovery.test.js`。
+
+1. **同 native message id 重放**：`sourceIdOf` 不再把处理时钟计入身份；优先使用 `messageId`，其次使用宿主事件 `seq`/`time`，三者都没有时才用 role+text 退化并记录 `identityKind`。同 id 稍后重投不会再生成新 source/task。
+2. **turn/end 后异步入队前退出**：turn/end 同步写 `capture-turns.jsonl` intake（session、projectKey、sourceIds、explicit、route、状态），异步只负责路由/分段；重启 `resume()` 先恢复 pending intake，再建 task，不再产生孤儿原文。
+3. **跨项目同内容**：`#apply` 的去重、tombstone、target 校验改为按 `global` / `project:<key>` 作用域分桶；项目 A 删除或已有同内容事实不再阻止项目 B。
+4. **partial 恢复**：`retry(partial)` 返回 ok，清除旧结果并标记 `completion`，显式重跑时把输出上限翻倍；partial 仍不等于 done，也不会自动重试。未实现按剩余片段自动拆分。
+5. **completed 结果恢复**：请求前持久化 `requested`；模型返回后先把 `resultText/resultUsage/truncated` fsync 到 task，再解析/应用。重启时 `running+completed+resultText` 走本地重放（0 次模型调用）；completed 但无结果标记 unknown，绝不当作 not-sent 自动重发。
+6. **来源级遗忘**：tombstone 记录的 `sourceRefs.sourceId` 会阻止同来源的待处理改写复活；只封禁该来源，不封禁整个项目；用户以新来源显式“记住”同内容允许重新记录，后台自动任务仍被 tombstone hash 阻止。
+7. **替换中断**：新记录 append 前写 `capture-replacements.jsonl` intent；append 成功、旧项 superseded 失败时启动协调按 intent 完成旧项失效；replacement 缺失则 abort，旧项保持有效。恢复只做本地写入，不再调用模型。
+
+同链路补充：
+- `capture.minTurnChars` 恢复生效（低于阈值且非显式记忆的 turn 记 skipped intake，不建 task）。
+- `index.js` 在启动 2s 后、每 5 分钟、以及设置保存后调用 `capture.resume()`；下一天预算和解除预算不再依赖测试专用 flush。
+- journal/source/intake/replacement 写入改为 fsync + 原子 rename；requested/completed 在模型请求与应用前落盘；损坏 journal 行计入 `status.health.corruptTasks` 与 `status.degraded`，不再静默宣称完整恢复。
+- 正式测试：**212/212** 通过（`tests/capture-recovery.test.js` 9 项、`tests/capture-reliability.test.js` 若干恢复/来源测试）。Codex 前一轮 7/7 通过，新增两项见 §46。
+
+仍未验收/限制：
+- 按任务边界没有安装、重启真实宿主，没有使用真实 profile 或真实模型做端到端；真实宿主的 `session/event` envelope 身份字段仅依据仓库调研资料（`messageId`/`seq`/`time` 依次退化），未在真实事件流采样核对。
+- 来源原文保留尚无自动清理/容量上限，长期磁盘增长未验收。
+- partial 补全仍是同一分段重试并提高输出上限，没有按已应用条目拆分剩余工作。
+- 替换协调旧限制已由 §46 的当前进程回退/索引隐藏处理；store 完全不可写时仍只能保持 degraded 并在恢复时修复。
+- 检索难例是固定检索测试，不代表真实模型回答正确率。
+
+## 46. 最终复核：替换一致性与来源确认（2026-11-04）
+
+- **live 生效视图**：新增 `supersedeRecord`：先走 `store.update`，失败时回退到 store 现有锁/fsync 的 `append(nextRevision(...))`；两条路径都失败时把旧记录从内存索引移除、replacement intent 保持 pending，并保留 degraded/恢复状态。`#apply` 在应用前也会协调 pending intent。当前进程不再同时用两条矛盾 active 事实回答，新用例在未重建 pipeline 的情况下同时核对 store 与 index。
+- **来源类别**：消息来源 `source.kind/form` 随 source 落盘并写入 evidence `sourceRefs`；只有 `role=user && source.kind=user` 才算用户亲口确认。`model-selection` 等内部 `role=user` 上下文保留为内部上下文（prompt 标注、候选处理），不能仅凭 role 或词重合变成 active 用户事实；缺失来源按 unknown 保守处理。
+- **夹具与检查**：`tests/capture-recovery.test.js` 已同步 Codex 最新 9 条用例；正式测试夹具补 `role`/`source:{kind:'user'}`，没有把非用户负例改成用户来源。Codex 命令 9/9 通过；正式测试 **212/212**。
+- **未验收**：真实宿主安装/重启、真实 profile、真实模型端到端仍未执行；真实事件 envelope 的来源字段来自静态源码核对与夹具，不是线上采样；替换回退路径在 store 写入完全不可用时只能隐藏索引并标 degraded，store 文件可能仍保留双 active 直到恢复。
+
+## 47. Codex 独立验收与原子替换修正（2026-11-04）
+
+- Codex 经原 DSH 会话完成一轮开发及两轮返工，独立复测 7 条、随后 9 条问题用例。进一步查明 §46 的 update→append 回退仍使用同一底层写路径，且实际 degraded 计算未覆盖 pending replacement；因此该实现不能作为存储故障下的一致性保证。
+- 用临时目录上的真实 MemoryStore/CapturePipeline，向 `fs.writeSync` 注入 EIO；修复前可复现权威文件已新增替代项、旧项仍 active。测试只使用模拟模型，无真实模型请求或真实记忆数据。
+- `MemoryStore.replace` 现在在现有进程锁内刷新状态，保留文件历史，将旧项失效与新项写入同一临时文件，fsync 后原子 rename，再发布缓存和索引。提交前任何写入失败都不发布其中一半；该路径不再依赖 §46 的索引隐藏或再次 append 补救。原来的已保存模型结果仍用于显式本地重试，避免再次请求模型。
+- `tests/atomic-replacement.test.js` 已观察到修复前失败、修复后通过：核对原文件未变、内存与索引一致、重开存储结果、历史保留，以及恢复仅使用 1 次模拟模型请求。旧单写入模拟用例随替换入口更新，核心断言保留。
+- 最终执行 `node --test --test-reporter=spec tests/*.test.js`：**213/213 通过**，包括正式的 9 条复核回归；日志在被忽略的 `docs/tasks/codex-final-tests-20261104.log`。文档与 diff 格式检查通过。
+- 仍未安装/重启真实宿主，未做真实 profile 与模型端到端验收。partial 仍为显式提高输出预算重试；原文容量治理、50k 性能及同作用域文件原子重写的成本尚未验收。不能据此宣称全部原生功能或真实回答质量已通过。
+
+## 48. 原生安装与 50k 容量/性能实测（2026-11-05，历史；性能/容量结论由 §50 复测取代）
+
+- **安装**：从本仓库源码打包 `@missher/dsh-memory@0.2.0-native.20261105`，先移除旧 link 安装，再经 `plugin_manager.install_bundle` 安装并从 profile 回读为真实 tarball（非 link）；正常重载 applied。随后源码继续修改，最终重新打包 `0.2.1-native.20261105` 并安装；profile 回读 `node_modules/@missher/dsh-memory/package.json` 为 `0.2.1-native.20261105`，pnpm-lock 为同名 tarball（非 link）。客户端 inspect 的 `settings.section` occupants 包含 `memory`（active），panel-transport 当前走受支持的 web-server fallback（`selfTest` 为 false，原因 transport is web-server；Typert 绑定失败原因未在产品中暴露，未绕过鉴权排查）。
+- **真实模型链路（部分）**：通过 `session_scratch` 创建隔离 QA 会话，`session_send` 投递消息由真实宿主/真实 provider 处理。测试消息 7771 字符（<8000，单段），真实抽取调用 1 次，provider 返回 input 2316 / output 56 / total 2628；因来源是 `session-bridge`（非 `source.kind=user`），按来源门控未写成 active 用户事实，`resultText` 明确 `skipReason`。这验证了非用户来源门控和真实 provider usage，但没有完成“用户亲口长消息 3 段以上”的验收。
+- **未完成的原生项**：DSH Web GUI 有 loopback 鉴权，独立浏览器无法进入设置页；未绕过鉴权。因不能从用户键盘直接向 QA 会话发送 >8000 字符的 user-role 消息，长消息只到 7771 字符/1 段；跨会话同项目、真实设置页队列/重试、真实遗忘注入均未完成。`sourceKind=session-bridge` 的 QA 输入按设计不产生 active 用户事实，不能当作用户长消息验收。
+- **容量治理（已由 §50 取代）**：早期实现曾按 30 天保留期回收 done 来源；该策略已移除，用户原文改为全量保留 + gzip 压缩。任务/回合/替换账本超阈值时保留最新 revision 压缩；`status.storage` 暴露来源数/字节/任务数/回合数；面板捕获页显示来源数与体积。测试见 `tests/capture-capacity.test.js`：有引用来源保留、旧孤儿删除、窗口内不删。
+- **50k 性能（真实测，Intel i9-9880H / 16GB，隔离临时 50k JSONL）**：store 冷加载 **405ms**、索引构建 **926ms**、启动可用 **1331ms**、搜索中位 **29.33ms**、p95 **38.98ms**、heap **160MB**、磁盘 **27.7MB**。相对旧基线（1028ms 构建、p95 99.19ms、heap 110MB），检索 p95 明显下降，但构建/启动与 heap 未达到 ≤300ms/≤150MB 目标；未通过少测数据或 warm-index 冒充。合成 bench（无 store 加载）为构建 1046ms、p95 38.63ms、heap 95MB。
+- **检查**：`node --test tests/*.test.js` **215/215**；`node scripts/eval-recall.mjs` 回归 hit@5 1.000 / 必要证据覆盖 0.640 / precisionAtMost5 0.989；难例覆盖 0.917、无答案误注入 0/2。
+- **限制（§50 已取代部分）**：真实用户键盘长消息、同项目跨会话注入/回答、设置页按钮点击、真实遗忘后另一会话注入由 Codex 后续验收；早期容量删除策略已移除；来源原文现在全量保留并压缩。
+
+## 49. 提炼完整性、容量真回收与搜索复测（2026-11-05，历史；最终策略见 §50）
+
+- **提炼完整性**：`MAX_MEMORIES_PER_PASS=4` 达到时不再把该段标 done，而是保留已应用条目、把原覆盖范围按字符连续拆成两个持久化子任务（`parentTaskId`、`depth`、确定性 task id），直至最小 1200 字符/深度 4；子任务在同一 drain 内继续。输出截断（length/max-tokens 且有文本）同样走拆分；空文本 `max-tokens` 视为已知容量事件，拆分而不标记 failed/unknown，也不整段重发。`extraction.maxOutputTokens` 默认 400→800，避免真实 provider 把 JSON 输出预算压空。历史 12 条真实 `max-tokens` failed 任务保留原 callState/reason，不自动重付；需要人工 `retry`。
+- **测试**：`tests/capture-completeness.test.js` 用一个 >3 段、10 个头中尾事实的源和“每次最多 4 条”的模拟模型，验证所有事实最终 active、存在 parent/child 任务且不重复记录；另一个空 max-tokens 用例验证递归拆分、状态 partial/complete、不 failed。模拟结果不代表真实模型全量提炼。
+- **容量（§50 取代）**：现在不再删除任何用户 source；全量保留并 gzip 压缩。`capture.maintain()` 压缩来源并压缩账本，source id/task id 不变。`tests/capture-capacity.test.js` 覆盖压缩后逐字读回、旧内联压缩、账本身份保留。
+- **搜索**：移除不准确的“inverted candidate pruning”注释；保留 topK min-heap、BM25 常量预计算、作用域/状态/遗忘过滤。50k 冷测（Intel i9-9880H/16GB，隔离临时 JSONL）store 405ms、index 926ms、启动 1331ms、p95 38.98ms、heap 160MB、磁盘 27.7MB；p95 达标，heap/启动未达标。尝试过真实倒排 postings，实测 p95 60–66ms、heap 150–160MB、构建更慢，已回退，保留简单扫描+topK。
+- **最终安装**：重新打包 `0.2.2-native.20261105` 并安装；profile 回读版本/锁/核心文件哈希一致，重载 applied（panel-transport 为 web-server fallback）。
+- **测试**：`node --test tests/*.test.js` **218/218**；eval 指标保持（回归 hit@5 1.000 / 必要证据覆盖 0.640 / precisionAtMost5 0.989；难例覆盖 0.917 / 无答案误注入 0/2）。
+- **仍限制**：真实用户 keyboard 长消息、同项目跨会话、GUI 设置点击、真实遗忘注入仍由 Codex 后续原生 QA；capacity 未在真实 50k 数据上执行；启动/heap 目标未达；未提交 Git。
+
+## 50. 最终修复：父任务归并、length 已知结束、全量原文压缩（2026-11-05，性能旧口径由 §53 取代）
+
+- **父任务归并**：`#settleAll` 在 drain 开始与结束运行，只有所有直接子任务均为 `done`/`skipped` 才把 `partial` 父任务改为 `done`；failed/unknown/叶子 partial 阻止归并；多级与重启后一致。已纳入 `tests/capture-completeness.test.js`（多级 cascading + 阻塞状态）。
+- **length 空输出**：`#collect` 对任何收到的终止 `finish`（含 `length`、`max-tokens`）设 `completed=true`，未知只留给缺失 finish/断网；空 length 走已定义拆分，不再标 unknown。Codex 原两项 review 用例现已通过，回归已移入 `tests/capture-completeness.test.js`。
+- **内部段不付费**：任务来源若没有 `role=user && sourceKind=user`（兼容旧 `unknown`）的直接用户证据，直接标 `skipped`/`callState=not-sent`，不请求模型；runtime-context / skill-catalog / memory / plugin 内容 / bridge 单独不生成用户事实。`tests/capture-completeness.test.js` 用 runtime-context + assistant 段断言 0 次模型调用。
+- **原文压缩**：新来源写 `<id>.json.gz`（gzip level 6）+ `<id>.json` 元数据（id/kind/hash/bytes），`readSource` 透明解压并校验 sha256；不再按 30 天删除 done/skipped 用户原文，source id、task id、sourceRefs 全部保留。维护时压缩旧内联 `.json`，仍可逐字读回。临时目录测试证明压缩后体积明显下降且 `readSource` 字节相等；真实源未做删除实验，未改旧 TDAI/MSE/Context。
+- **性能新测（本轮，Intel i9-9880H/16GB，完整 50k JSONL）**：store 冷加载 **365ms**、index 构建 **675ms**、启动 **1040ms**、搜索中位 **21.92ms**、p95 **28.51ms**、heap **130MB**、磁盘 27.7MB。p95/heap 达标；启动仍高于 300ms，主因 store 365ms + 全量索引构建；未实现持久化索引缓存，未再用更慢的 postings 方案。合成 bench：构建 798ms、p95 32.85ms、heap 104MB。
+- **原子替换 50k**：同作用域单条替换 **1091ms**、重写 28.7MB；旧记录 superseded、新记录 active、仅一条 active。保留 Codex §47 原子事务修复。
+- **真实 QA 复用（Codex 独立证据，不是本轮新发请求）**：31,537 字符 user 来源原文逐字回读相等，9 个事实/偏好全覆盖；同项目新会话真实注入命中头中尾 3 项、无工具调用。另 52,709 字符在进入模型前被 MSE `prepare()` 的 32,768 上限以 `invalid_prompt` 拒绝，未产生模型消耗；这是外部入口限制，不归因于 Memory，也不宣称无限长。
+- **测试**：`node --test tests/*.test.js` **223/223**；最终安装 `0.2.3-native.20261105`。
+
+## 51. 查询分页修复与最终 0.2.4（2026-11-05，性能/索引由 §53 取代）
+
+- **分页**：`listMemories` 的查询分支不再用 `PANEL_LIMIT.max` 截断 `index.search`；改为取完整匹配集后再按 kind/topic/status 过滤、计算 total 并 slice 当前页。单页仍 ≤200，total/offset 对全部匹配负责。新增 `tests/remote.test.js` 250 条匹配分页回归：第一页 200、第二页 50、total=250、ID 并集 250。Codex `docs/tasks/codex-native-pagination-review.test.mjs` 已通过。
+- **标签**：捕获页 storage 文案从“任务版本数”改为“任务数”，不再把最新任务条数误报为 revision 数。
+- **测试**：`node --test tests/*.test.js` **224/224**；Codex continuation review 2/2 通过；分页 review 1/1 通过。
+- **性能/容量复测**（本轮，50k 完整 JSONL，Intel i9-9880H/16GB）：store 365ms、index 675ms、启动 1040ms、p95 28.51ms、heap 130MB、磁盘 27.7MB；50k 同作用域原子替换 1091ms、重写 28.7MB，旧 superseded/新 active 且仅一条 active。启动未达 300ms，未实现持久索引缓存；未使用更慢的 postings。
+- **安装**：最终打包 `0.2.4-native.20261105` 并经插件管理器安装/重载；版本、lock、核心文件哈希回读一致。未新增真实模型请求，真实 QA 复用 Codex 证据（31,537 字符逐字保存、9/9 覆盖；同项目新会话头中尾 3 项注入；跨项目全局偏好命中且项目事实不泄漏；删除后新会话不注入；无工具调用）。52,709 字符被 MSE `prepare()` 的 32,768 入口限制以 `invalid_prompt` 拒绝，未产生模型消耗，不归因 Memory。
+- **限制**：捕获任务仍可能有叶子 partial；启动/heap 持久化索引未落地；gzip 只对 source 文件透明压缩，不改变任务/账本结构；真实 50k 未做清理/压缩实验（仅临时目录）。
+
+## 52. 短写安全与 gzip 发布顺序（2026-11-05）
+
+- **短写修复**：`writeAtomic` / `appendDurable` 改为按 Buffer 字节偏移循环调用 `writeSync`，每次核对返回字节数；返回 0/无进展立即失败。原子临时文件失败不 rename、不发布元数据；append 失败回滚到原文件大小，避免留下截断的 task/turn 身份行。
+- **压缩发布顺序**：压缩旧内联 source 时，先写 gzip，读回 gunzip 并核对 sha256 与原文完全相等，之后才用元数据替换内联正文；元数据写后再次 `readSource` 校验，失败则恢复原内联正文。故障路径保留原文，不发布删除 text 的元数据。
+- **回归**：Codex `docs/tasks/codex-source-short-write-review.test.mjs` 通过；正式测试新增合法半量短写、0 进度短写失败、旧内联恢复、压缩/读回四种（`tests/capture-capacity.test.js`）。`node --test tests/*.test.js` **226/226**。
+- **真实运行时说明**：profile 0.2.4 文件已匹配，但安装后运行中的维护仍把旧 QA source 保持内联（`compressed` 未设置，94,207 磁盘字节），说明宿主热重载仍复用旧依赖/模块；本轮只安装 0.2.5 并保存回执，不主动重启正在执行本会话的宿主。Codex 空闲后正常重启，需以真实 gzip 格式/新采集行为复验，不把本轮安装当压缩已生效。
+- **安装**：`0.2.5-native.20261105`，最终包 `dsh-memory-0.2.5-native.20261105.tgz`；安装后回读版本/核心文件哈希。真实 source 未注入故障，未在真实记忆上做压缩/清理实验。
+- **保留限制**：启动 1040ms 未达 300ms；持久索引缓存未落地；叶子最小子段仍可能 partial；MSE 32,768 入口限制不归因 Memory。
+
+## 53. 紧凑数值索引与真实分页（2026-11-05，churn/分页修复由 §54 取代）
+
+- **索引表示**：每文档改为 `Int32Array` 词项 id + `Uint16Array` 词频，词项用数值字典；热点查询走 postings（term id → slot/tf 数组）累加 BM25，不再为每文档保留 `Map<string, tf>` 全扫描。JSONL 仍是唯一权威，索引可随时重建；upsert/remove/rebuild 同步维护 slot、df、postings（批量删除后重建 postings）。
+- **分页**：新增 `MemoryIndex.searchPage`，一次扫描统计 total/kindCounts/topicCounts，只为 `offset+limit` 的页构建 hit 对象；`listMemories` 查询分支改用该接口，单页 ≤200，250 条 total/offset 回归与 Codex pagination review 通过。不再构造完整 50k hits/termScores。
+- **公开 50k 冷进程 benchmark**（`scripts/bench-storage.mjs 50000`，父进程生成/子进程加载，OS 页缓存未清，非 warm-index）：store **588.51ms**、index **1320.92ms**、indexReady **1909.42ms**、firstQuery **28.18ms**、中位 **8.91ms**、p95 **19.48ms**、heapAfterQueries **238.71MB**、GC 后 **115.88MB**、indexSizeAfterGc **50000**、磁盘 **30.03MiB**、50000 同作用域原子替换 **844.02ms** 且重开正确。热查询和 GC 后内存较旧口径明显下降；indexBuild/indexReady 仍高于旧口径，启动目标未达，未用缩小数据/old warm 数字冒充。
+- **短写**：`writeAtomic`/`appendDurable` 循环写完、0 进度失败回滚；gzip 先读回/哈希验证再发布元数据（§52）。
+- **测试**：`node --test tests/*.test.js` **226/226**；recall eval 保持 hit@5 1.000 / 必要证据覆盖 0.640 / precisionAtMost5 0.989；hard 0.917、无答案误注入 0/2。
+- **真实运行**：0.2.5 已由 Codex 重启后验证真实 gzip/提炼/注入/遗忘；本轮不改真实记忆、不发真实模型请求。0.2.6 安装后若热重载仍复用旧模块，需 Codex 重启复验 gzip 与索引行为。
+- **安装**：最终包 `0.2.6-native.20261105` 已由插件管理器安装（`applied`），profile package/lock/核心文件哈希匹配；未主动重启宿主，若热重载复用旧模块需 Codex 正常重启复验。
+- **限制**：indexBuild/indexReady 未达 ≤300ms；未引入持久索引缓存；叶子最小子段仍可能 partial；MSE 32,768 入口限制不归因 Memory。
+
+## 54. 索引churn回收、确定性分页与截断无JSON补全（2026-11-05）
+
+- **Churn 容量**：`upsert` 在派生槽位超过 `2×live + 64` 时用存活记录重建全部派生结构（slots/lengths/docTerms/docFreqs/词项字典/postings）；1 条记录更新 5000 次后查询 scratch 分配 ≤4096，`size=1`，旧词项不可查。正式回归在 `tests/search.test.js`。
+- **确定性分页**：heap 的 `worse/better`、边界替换与最终排序统一使用全序：score 降序、updatedAt 降序、id 升序。350 条同分同时间混合词频、每页 37 条不再重复/遗漏；250 条 total/kind/topic 分页回归保持。
+- **截断无 JSON**：`#applyStoredResult` 在 `meta.truncated=true` 且 `parseExtraction` 抛错时，不再 failed；保留原付费 `resultText/resultUsage`，按原覆盖范围拆分有界子任务，父任务 partial，子任务完成后 `settleAll` 归并。未截断坏 JSON 仍 failed；unknown/网络不明不自动重发；叶子如实 partial。合成解释性文本 + 长度终止 + 临时 MemoryStore 用例，不含真实 MSE 正文。
+- **公开 50k 复测**：完整数据在新子进程加载，OS 文件缓存未清；Codex 独立复测的完整数值见 §56，后续分词优化数值见 §64，避免把后续版本的测量回填为本阶段结果。
+- **测试**：`node --test tests/*.test.js` **229/229**；Codex index-churn review 2/2、short-write 1/1、pagination 1/1、continuation 2/2；recall eval 保持。
+- **安装**：打包 `0.2.7-native.20261105` 并经插件管理器安装（applied），profile package/核心文件哈希一致；未主动重启，热重载可能复用旧模块，待 Codex 空闲正常重启复验。真实 QA 证据复用 Codex（31,534 字/9 项、跨会话/遗忘）未重发模型。
+- **限制**：indexReady 1856ms 未达 300ms，无持久索引缓存；叶子仍可能 partial；真实 0.2.7 运行态待重启验收。
+
+## 55. remove 回收与截断 usage 补齐（2026-11-05）
+
+- **remove 回收**：`#maybeCompact` 从 `upsert` 抽为私有方法，`remove` 在每次删除后执行同一阈值回收；清空/大量遗忘后 slots/lengths/docTerms/docFreqs/零 df 词典/postings 一并重建。5000 条删除 4999 条后查询 scratch ≤4096，剩下 1 条仍可查；无需再写一条才回收。
+- **截断 usage**：`#applyStoredResult` 的“truncated 且无 JSON”catch 在拆分后复用一条最小 `onExtraction` 通知：`items/applied/rejected=0`、`truncated=1`、`status=partial`、`calls` 与 `usage` 来自原付费结果；replay 时 `calls=0`。父任务账本保留 `resultUsage`，usage 总量与 calls 不再少记。未截断坏 JSON 仍 failed，unknown/网络不明不自动重发。
+- **正式回归**：新增 remove 回收、截断父 usage 通知断言；Codex index-churn review 第三例、truncated-usage review 均通过。`node --test tests/*.test.js` **230/230**。
+- **性能**：不重复运行公开 50k；沿用 Codex 独立复测 p95 **18.61ms**、indexReady 约 **1.88s**、heapAfterQueries **211.86MB**、GC 后 **115.88MB**（GC 后不是峰值）且 index 仍 50000；启动 300ms 目标仍未达，未声称达标。
+- **安装**：`0.2.8-native.20261105` 打包安装，回读版本/文件哈希；未重启、未发真实模型请求，重启验收交 Codex。
+
+## 56. Codex 独立原生验收与本轮结论（2026-11-05）
+
+- **最终运行版本**：DSH 在原开发会话完成开发、打包与插件管理器安装。Codex 回读 desktop profile 的 `0.2.8-native.20261105`，确认入口、客户端、capture/journal、RPC、索引和 store 与本仓库代码逐字一致。所有会话和提炼任务空闲后落盘重启意图，正常退出/启动宿主；新进程 Typert 的 stats/list/profile/knowledge 自检通过。未切换默认模型，未修改 MSE、Context 或旧 TDAI 项目，未推送/发布。
+- **真实长消息**：通过原生 `session/prompt`，使用当前宿主 `deepseek-account/deepseek-flash`，输入来源实测为 `user`，发送 **31,536 字符**。完整原文 gzip 读回逐字一致，根分段的范围连续覆盖全文；首、中、尾 **9/9** 项测试信息成为有效记忆（5 条项目记忆、1 条全局偏好）。共 3 个根任务及 2 个自动子任务：4 次真实提炼完成，1 段纯内部上下文未请求模型并 skipped；父任务在子任务完成后正确结束。原始回执和 provider usage 已保存。
+- **跨会话召回**：另一会话的提问不含答案；真实 `source.kind=memory` 事件注入了仓库代号、构建节点别名、归档桶名，最终回答三项命中，工具调用为 0。另一个项目的会话只注入全局报告结束标记，项目专属代号未注入，回答“不记得”。
+- **遗忘**：通过原生 `removeMemory` 遗忘项目代号后，在未见过新代号的另一会话提问；该值不再进入 pre-step 注入，最终回答“不记得”，工具调用为 0。随后仅通过同一原生接口清理其余 5 条本轮测试记忆；QA 项目/全局无剩余有效测试记忆，设置与默认模型和基线一致。此前及本轮 QA 任务合计 done 17 / skipped 2，无 pending/running/failed/unknown。测试会话与审计原文保留，不声称物理擦除了全部测试痕迹。
+- **来源容量**：0.2.5 激活时曾冷态核对 150 条既有原文，压缩后逐条正文哈希一致；原文 336,417 字节，对应 gzip + 元数据 208,092 字节。0.2.8 新长消息再次验证完整读回。测试填充文本重复率较高，不能将其压缩率推广到所有真实对话。原文不按时间自动删除；磁盘仍有限。
+- **独立复现与修复**：先复现同分分页 350 条只覆盖 175 个唯一 id、连续更新/批量遗忘后残留槽位、截断无 JSON 停止补全、截断父调用漏计 usage，修复后用相同输入通过。最终改动的 search/capture-completeness/usage 及独立复现 **28/28**；前一版相关 search/scope/remote/recovery 复核 **67/67**。DSH 记录完整套件 **230/230**，Codex 未为未变代码重复整套测试。
+- **完整 50k 测量**：公开 `scripts/bench-storage.mjs 50000` 使用完整、单一正确项目作用域 JSONL；父进程生成，新的子进程加载，**没有清 OS 文件缓存**。Codex 实测 store 617.73ms、index 1257.68ms、可检索 1875.41ms、首查询 37.05ms、中位 8.92ms、p95 **18.61ms**；查询结束时 heap **211.86MiB**，GC 后保留 **115.88MiB** 且索引仍含 50,000 条；磁盘 **30.03MiB**。同作用域原子替换 966.59ms，重开验证旧项失效、新项有效且数量不变。测量在 0.2.7 完成，0.2.8 仅补 remove/upsert 回收和截断 usage，未改此初建/查询路径，按要求复用该证据。相同数据旧索引 p95 为 69.28ms、GC 后 165.28MiB，但启动较旧的 1376.85ms 变慢；这是查询/保留内存收益与初始化成本的取舍，不能称全部性能目标达标。
+- **原生页面边界**：0.2.5 已观察正常 Memory 页面、队列/容量读数，无横向溢出或错误；后续客户端未改。0.2.8 使用真实宿主 RPC 与模型验收上述链路，没有再次执行完整 UI/卸载循环。
+- **仍有限制**：启动 300ms 目标未达；查询后 heap 不是 150MiB 以下，GC 后数值不是峰值。固定检索回归必要证据覆盖 0.640；11 个难例覆盖 0.917、错误召回 3 题、无答案误注入 0/2，最终 hard MRR 为 0.889（稳定同分排序改变了顺序），不代表任意问题的真实回答质量。已知持续截断达到拆分边界仍保留 partial；真正结果未知不自动重发。当前宿主 MSE 在 Memory 前拒绝超过 32,768 字符的单次 prompt，本轮未修改该限制。
+- **当时的历史任务状态（后续恢复见 §64）**：最后重启前已有 failed 18 / partial 1，之后本轮 QA 未新增失败。前 17 个失败来自早期输出预算问题，新增的截断无 JSON 子任务已定位并修复未来处理路径；原历史失败及被阻塞的父任务保留，未自动付费重跑，也未通过改账本清零来伪装恢复。用户原有记忆未被测试清理操作删除。
+
+原始意图、回执、测试日志、事件和 proof 保存在忽略的 `docs/tasks/codex-native-qa-20261105/`；这里仅记录不含用户原文的公开结论。真实宿主对合成 QA 内容的验收、临时目录的合成故障测试、固定检索评测和 50k 合成容量测试分别陈述。
+
+
+## 57. 干净打包与 0.2.9 元信息核验（2026-11-05）
+
+- **根因**：旧打包命令直接 `cp` + macOS `tar`，把 AppleDouble `._*` 与 `com.apple.provenance` PAX/xattr 带入 tarball；monkey-patch 无法解决，必须换打包流程。
+- **修复**：新增 `scripts/pack-plugin.py`：显式文件白名单、Python `tarfile` USTAR（无 PAX/xattr）、过滤 `._*`/`.DS_Store`/`__MACOSX`/`.tmp`，打包后回读校验成员、AppleDouble magic、locale 必须仅 `en.json`/`zh.json`，输出 sha256。`package.json` 增加 `pack` 脚本。
+- **0.2.9 包核验**：`dsh-memory-0.2.9-native.20261105.tgz`，sha256 `babf0ccc53ed04b4518c984469945087deaa6a364ad67ec604c3fe93167306e4`；28 个成员，无 `._*`、无 PAX/xattr；locale 只有 `en.json`/`zh.json`。安装后 profile locale 同样只有这两个文件，插件管理器 bundle 列表显示 `@missher/dsh-memory 0.2.9-native.20261105`、`include:dsh-memory` active，未再出现非法 locale 元信息。
+- **安装**：插件管理器 `application: applied`；未主动重启；`docs/tasks/native-install-0.2.9.json` 记录版本、包 SHA256、locale、元信息与待重启状态。未改宿主忽略非法文件，也未手改 profile package/cordis。
+- **测试**：230/230；本轮未发真实模型请求、未重试历史任务、未改真实原文。
+
+## 58. 历史恢复时间守卫与遗忘授权（2026-11-05）
+
+- **观察时间**：`#apply` 不再使用处理时钟；每条 item 的 `observedAt` 取选中用户证据的原始 `at`（多个取最新；无用户时间时保守使用已知证据时间/处理时钟）。`buildRecord` 新增 `observedAt` 选项。
+- **旧来源保护**：旧来源的 UPDATE/SUPERSEDE 在目标 `observedAt` 更新时不再覆盖目标，而是保存为 `candidate` 历史；ADD 命中自动相似替换时同样保护；同内容 merge 保留较新观察时间。有效旧信息因此可见而不改写较新事实。
+- **遗忘授权**：`manual=true` 不再等于用户重新授权；只有 `task.explicit===true` 且来源时间明确晚于 tombstone 才允许恢复相同内容。旧来源/手动重试尊重 source tombstone 与 content tombstone，不会复活用户已遗忘内容。
+- **提示时间**：提炼 transcript 每个来源带 `来源时间 ISO`，避免把旧“现在”解释成恢复当天。
+- **回归**：`tests/capture-time-guard.test.js` 用 T1 旧来源排队、T2 现有事实、T3 恢复，覆盖 UPDATE/SUPERSEDE/ADD 自动相似三条路径，目标保持 active/T2、旧值保留 candidate/T1；另有用例验证删除后 manual 恢复不复活。`node --test tests/*.test.js` **232/232**；既有 230 项保持。
+- **真实恢复**：未执行任何真实任务；逐项计划见 `docs/tasks/history-recovery-plan-20261105.md`，恢复由 Codex 安装后执行。
+- **安装**：最终包 **0.2.10-native.20261105** 已打包安装并保存回执；未主动重启、未发真实模型请求。
+
+## 59. 启动分词优化与历史恢复缺口（2026-11-05）
+
+- **启动热路径**：`tokenize` 改用 code-point 数值区间快路径（CJK/ASCII word），去掉每字符两次正则；保留 NFKC、大小写折叠、CJK unigram+bigram、词频与顺序语义。`tokenize` 回归通过。公开 50k 同数据/查询：index **1089ms**（旧 1258ms）、indexReady **1676ms**（旧 1875ms基线 / 上轮 1711ms）、store **587ms**、firstQuery **33.37ms**、p95 **17.89ms**、heapAfterQueries **211.87MB**、GC 后 **115.87MB**（index 50000 仍可达）、磁盘 30.03MiB、替换 **767.82ms** 重开正确。启动 300ms 目标仍未达；首次/后续未用缓存冒充。
+- **历史时间守卫范围**：上一版 `staleSource` 看整个 scope，导致无关新记录把全部旧 ADD 打成 candidate；现在仅 UPDATE/SUPERSEDE 目标或 `#findSimilar` 同一事实冲突做时间保护，无关旧事实按正常置信度 active 并保留 T1 observedAt。`codex-history-safety-review` **5/5**。
+- **保存截断恢复**：`retry` 对 `resultTruncated=true && callState=completed` 的已保存结果先本地 replay/split，父 attempts 不增加、原 resultText/usage 保留；已有 child 的 partial 父只递归恢复未完成叶子，不重发 done 子任务；manual 子任务继承 `manual=true`，不全局放宽预算；unknown 仍不自动重发。`codex-saved-truncation-recovery-review` 通过。
+- **恢复计划**：`docs/tasks/history-recovery-plan-20261105.md` 明确 3 条纯 assistant 本地 skipped、`cap_7c024...` 本地 replay split、14 条 known empty max-tokens 显式 manual 恢复、父 `cap_99d607...` 等所有孩子结算；本阶段未执行真实任务/未发模型请求。
+- **测试**：`node --test tests/*.test.js` **232/232**；既有 recall eval 保持 hit@5 1.000 / coverage 0.640 / precisionAtMost5 0.989。
+- **安装**：0.2.11 干净包已打包安装（见回执）；未重启、未改真实任务。
+
+## 60. 完成标记与有界补全（2026-11-05）
+
+- **complete 标记**：抽取协议新增完整 JSON 布尔 `complete`；`parseExtraction` 返回 `true/false/undefined`。`complete:true` 且 provider 未截断时，恰好 4 条也直接 done；provider `length/max-tokens` 截断永远 partial；旧结果无标记仍按 4 条上限保守处理，不被强制改成 done。
+- **有界补全**：无法继续按字符拆分（密集小段/已到最小粒度）的 partial 会创建持久化补全子任务（`completionOf`、`completionDepth`、`appliedContents`），最多 2 轮。补全 prompt 带「本段已应用，勿重复」以及已应用事实，要求只输出遗漏；子任务继承 manual 授权，但全局预算不变。
+- **无进展/未知**：补全轮 `applied=0` 时停止自动补全并保留真实 partial 原因；unknown 不自动重发；done/skipped 子任务不重发；父任务仅在全部孩子 done/skipped 后 settle。旧 partial 的显式 retry 保留原付费 `resultText/attempts/usage`，不重发整个父段。
+- **防编造**：prompt 明确禁止把 assistant 文本提到的项目名/实体加到用户未指定的事实；补全同样受来源门控与 tombstone 约束。
+- **测试**：新增 `tests/capture-completion-marker.test.js` 覆盖 4 条 complete=true、complete=false 有界补全、provider 截断不可伪完成、无进展停止、旧 partial 显式重试保留结果。全量 **239/239**；`docs/tasks/codex-history-safety-review` 5/5、`codex-saved-truncation-recovery-review` 通过。
+- **启动实测**：tokenize code-point 快路径后公开 50k：store 587ms、index 1089ms、indexReady **1676ms**、firstQuery 33.37ms、p95 **17.89ms**、heapAfterQueries **211.87MB**、GC 后 **115.87MB**（index 50000 仍可达）；启动 300ms 目标仍未达。
+- **恢复计划**：`docs/tasks/history-recovery-plan-20261105.md` 已按 19 条真实任务列出 3 条纯 assistant skipped、1 条 saved truncation split、14 条 known empty max-tokens manual、父任务孩子结算；本轮未执行真实恢复、未发真实模型请求。
+- **安装**：0.2.13 干净包由插件管理器安装；未重启，Codex 重启后执行真实恢复/QA。
+
+## 61. 分段意图、消息开头语境与同源事实（2026-11-05）
+
+- **明确保存意图**：`task.explicit` 已从 turn intake 传到每个分段；本轮把它传入提炼 prompt。所有分段（含 from>0 的尾段）都看到“明确保存意图”，不再只看尾部中性填充。
+- **尾段语境**：from>0 的 entry 会附带同一 source 的前 600 字「消息开头语境（仅供解释，不是本次证据）」，实际 evidence 范围/offset/provenance 不变；模型不得从语境区写证据。
+- **同源优先上下文**：prompt 的已有记忆先取当前项目/global 中 sourceRefs 命中本任务 source ids 的 active/candidate（最多 6 条），再补通用 search；去重后送入，避免同 source 前面根段已提炼事实在尾段丢失，也不重复写入。
+- **短标识规则**：prompt 明确用户要求长期保存的项目名、代号、配置标识即使很短/像测试内容也要保存；纯填充可忽略；secret/scope/遗忘约束不覆盖。
+- **split 子任务**：`#scheduleContinuations` 现在继承 `appliedContents`，避免子段再返回父段同 4 条改写；补全仍最多 2 轮。
+- **测试**：新增 `tests/capture-segment-context.test.js` 3 项，覆盖尾段意图/开头语境、同源已提炼事实优先、explicit=false 不注入保存意图；相关 capture/extract/time/source 回归 **35/35**。按指示未重跑完整 suite/benchmark。
+- **安装**：0.2.15 干净包安装并回读，未重启、未发真实模型请求；真实恢复/QA 仍由 Codex 重启后执行。
+
+## 62. 内部来源证据隔离与混合证据（2026-11-05）
+
+- **模型输入隔离**：`#processTask` 先从模型可见 entries 中剔除 `role=user` 且 `sourceKind` 非 `user`/`unknown` 的内部消息（memory/runtime/skill/tool/bridge 等）；正常 assistant 上下文保留；仅内部消息的段仍直接 skipped。消息开头 context 同样只从过滤后的 entries 构造。
+- **落库独立防守**：`#evidenceFor` 仅允许真实用户/正常 assistant；用户证据除了词覆盖，还要求 statement 中的实体标识与数字都在用户原文出现（避免“只有问句、没有值”的 user 消息确认内部 memory 值）。模型显式引用内部 source 且无真实用户支持时整条 rejected；混合 user+assistant 只有 assistant 匹配时为 candidate，不能仅因同批有 user 升级 active。
+- **时间/provenance**：observedAt 只取真实用户证据 at；internal user 时间不再参与；遗忘 tombstone 仍需更新用户来源才可重新授权。
+- **回归**：新增 `tests/capture-internal-evidence.test.js` 3 项：user 问句 + internal memory 引用被拒、mixed user+assistant 为 candidate、真实 user 值 + internal 注入仍 active。相关 extract/capture/segment/time 回归 **38/38**。
+- **安装**：0.2.17 干净包安装并回读；未重启、未发真实模型/QA/恢复请求。真实 final-recall 会话与旧混合样例验证由 Codex 重启后完成。
+
+## 63. 内部来源引用无条件拒绝（2026-11-05）
+
+- `host/capture.js` 的 `citedInternal` 守卫改为**无条件拒绝**：只要模型显式引用了 memory/runtime/skill/tool/bridge 等内部 user 来源，该条结果即 rejected，不再允许用户问句的词覆盖为其授权。
+- 保持其他证据选择逻辑不变；真实用户事实只要只引用真实 user id，即使同回合存在内部 memory 注入仍可正常 active。
+- Codex 新增纯中文偏好回归与实坏返回回放，相关内部来源用例 **5/5**，前置相关 **30 项**未回退；按指示未重跑整套/性能。
+- 本轮仅打包安装 0.2.18，未重启、未发真实模型请求、未操作真实数据/历史恢复。
+
+## 64. Codex 最终原生复核：元信息、启动、历史恢复与遗忘（2026-11-05）
+
+- **最终安装与元信息**：由原 DSH 开发会话打包安装 `0.2.18-native.20261105`。Codex 用 Python tarfile 回读实际包：无 AppleDouble `._*`、无 PAX 扩展属性，locale 仅 `en.json`/`zh.json`；安装时 27 个文件与共享源码及 desktop profile 逐字一致。所有会话和提炼调用空闲后正常退出/启动宿主，新进程 Typert 自检通过，`include:dsh-memory` 为 active。真实插件页显示该版本、1 个组件运行中，无包元信息错误。随后仅更新公开文档，未推送/发布。
+- **启动优化的独立测量**：同一完整 50,000 条 JSONL、同一查询集，新子进程加载，未清 OS 文件缓存。分词 code-point 快路径后 store 500.83ms、index 919ms、可检索 1419.83ms（此前 1875.41ms，约下降 24%）、首查询 26.28ms、中位 7.95ms、p95 17.53ms；查询结束 heap 211.89MiB，GC 后 115.87MiB 且索引仍含 50,000 条；磁盘 30.03MiB。同作用域原子替换 702.15ms，重开正确。这是 Memory 数据加载与索引就绪时间，不是整个 DSH 的启动时间，也不是磁盘冷缓存测量。后续证据校验改动未碰此路径，未重复跑 benchmark。
+- **历史任务实际处理**：原 18 个 failed 和 1 个受阻 partial 已逐项核对。15 个原失败恢复成功，3 个只含助手/内部来源的原失败本地 skipped、未新增模型调用，受阻父任务随子任务完成而 done；原 19 项最终为 16 done / 3 skipped。包含拆分/补全子任务的恢复族共 27 项，22 done / 5 skipped，无遗留 pending/running/partial/failed/unknown。已保存的截断结果先本地重放，不重新发送原付费父段；只有已知失败且经用户授权的任务创建新调用，本次恢复新增 20 次 provider 提炼尝试。
+- **恢复结果与原数据**：新增 69 条 active、2 条 candidate；最初恢复中出现的 4 条重复改写已通过原生批量归档处理，保留正确原记录。恢复前 90 条来源原文长度与正文哈希保持，既有有效记录未被恢复修改，原 16 条 deleted 墓碑保持。原调用结果、usage、attempts 与来源时间保留，未改账本来伪装清零。`exportData` 不包含墓碑，因此墓碑核对使用恢复基线时刻的权威 revision，而不是把导出中缺失当作删除失效。
+- **真实长消息与召回**：0.2.14 的 30,684 字符试验先发现尾段遗漏 3 项；修复明确保存意图、同消息开头语境和同源已知事实后，0.2.15 用新标记重测。完整原文 gzip 逐字读回、根范围连续覆盖全文，首/中/尾及全局偏好 10/10 项提炼为 4 条有效记忆；3 个根任务加 2 个子任务全部结算，4 次真实提炼、1 段内部内容未调用模型。另一会话实际 `source.kind=memory` 注入首中尾值，最终回答全部命中；另一项目只收到 global 偏好，项目代码未注入且答“不记得”；删除项目代码后另一会话不再收到该值。问题不含答案，均无工具调用。后续来源门控用相关分段/提炼回归复核，未在每次打包后重复相同长消息付费测试。
+- **收尾发现并修好的两个问题**：重启时把手动恢复和明确保存任务误计入自动每日预算，导致 3 个 QA 后续任务滞留；0.2.16 持久化自动调用计数、保留手动重试前已用自动预算，3 项在实际 reload 后自动完成，各 1 次调用，未提高用户上限。它们又暴露了内部 memory 注入被混入用户证据、把已遗忘 global 偏好重新写回的问题。0.2.17 排除模型输入中的内部来源，Codex 额外复现纯中文偏好仍可穿过词覆盖校验；0.2.18 无条件拒绝显式引用内部来源的结果。正常用户直接给出的事实仍可保存，助手建议不能仅因同批有用户问句成为 active；来源时间不取内部注入时间。
+- **最终版本的真实全局遗忘**：0.2.18 正常重启后，在未见过该偏好值的既有 QA 会话只询问名称，不提供答案。原生事件中没有注入被删值，模型回答“不记得”，工具调用 0；随后自动提炼完成，未再次创建该偏好。QA 项目及全局新增记录均已通过原生接口清理，按 QA taskId/sourceRefs 复核无剩余有效测试记忆、无既有记录被加入 QA 证据；测试会话、来源和任务审计保留。
+- **必要回归**：分阶段复核完成标记/恢复 40/40、分段来源 3/3、配额及相关 capture/recovery 54/54。内部来源修改后相关 reliability/time/segment/source 30 项通过；独立真实坏返回重放最初因测试工具误用不存在的 `store.create` 未执行，改用实际 `buildRecord`/`append` 后通过。最后纯中文来源修复后，内部来源 4 项及同一真实坏返回的隔离重放合计 5/5。重放使用假 provider，不产生新的真实模型调用。旧 0.2.13 全套 239/239 是当时结果，未冒充最终版本的整套重跑。
+- **最终运行与页面**：原生队列 total 87、done 61、skipped 26；pending/running/partial/failed/unknown 均 0。浏览器打开真实宿主「设置 → 记忆 → 捕获与注入」，显示待处理 0、未知 0、失败 0、完成 61，自动捕获/注入开启、预算 360；七项用户设置及宿主默认模型与本轮基线一致。仅删除本轮 QA 的有效记忆，没有清空用户数据；未动 MSE、Context、旧 TDAI 项目或默认模型。
+- **仍有边界**：50k 索引就绪未达到 300ms，查询后 heap 仍高于 150MiB，GC 后保留量不能当峰值；未引入持久索引缓存。持续截断且有界补全无进展仍如实 partial，真正未知的付费调用不盲目重发。宿主 MSE 的 32,768 字符单次入口限制未修改；上述是当前宿主模型对合成 QA 内容的实测，不代表所有模型、任意措辞或无限容量的记忆质量。
+
+私有回执、真实来源、原生事件和独立 proof 位于被忽略的 `docs/tasks/codex-startup-history-qa-20261105/`；公开文档只保留结果与测量口径。浏览器、原生模型、假 provider 故障重放与合成 50k 性能测试分别陈述。
+
+## 65. 50k 启动与首问：派生缓存候选包（2026-11-05）
+
+- 候选版本 `0.2.19-native.20261105-fast1`。本节是隔离目录、固定时间、全新 Node 24.22.1 进程的测试；OS 文件缓存未清空。没有修改真实 desktop profile、真实记忆或调用模型。本候选包尚未做原生安装和真实宿主验收。
+- JSONL 仍是权威数据。首次启动完整读取最新 revision、建立原 BM25 索引并准备画像/图谱，然后自动写入权限为 0600 的派生缓存；正常写入后合并刷新，缓存缺失、损坏、V8 版本或权威文件状态变化时重建。跨进程文件新建、同字节数修改、替换和删除通过文件状态检测；物理 purge 同步移除旧派生文件。画像按原聚类、证据和时间衰减规则提前准备，时间跨越未来记录时更新排序。
+
+| 完整 50,000 条测量 | 实测 |
+|---|---:|
+| 首次无缓存：store / 索引 / 画像与图谱准备 | 374.06 / 687.71 / 58.84 ms |
+| 首次生成缓存额外耗时 / 从打开到插件 `apply` 返回 | 645.06 / 1771.64 ms |
+| 缓存重开：3 个新进程到全部索引就绪 | 250.71 / 249.05 / 250.95 ms |
+| 缓存重开：3 次实际 `agent/pre-step` 钩子 | 39.10 / 40.05 / 40.61 ms |
+| 包含模拟 gateway 五项自检的打开到首问完成 | 373.60 / 366.98 / 374.15 ms |
+| 缓存重开后 200 次搜索中位 / p95 | 5.72 / 14.14 ms |
+| 同一语料旧版 0.2.18 搜索中位 / p95 | 5.78 / 12.77 ms |
+| 权威 JSONL / 附加缓存 | 33,135,280 / 37,334,210 字节（31.60 / 35.60 MiB） |
+| 同作用域 50k 原子替换 / 替换后新进程缓存重开 | 803.18 / 268.93 ms |
+
+- 缓存重开达到“索引就绪 300ms”目标的三次单机测量；首次无缓存及包含 gateway 自检的首问总耗时均未达 300ms。缓存生成是同步工作，50k 数据写入后的自动缓存刷新也可能暂时占用事件循环；以上不是整个 DSH 启动或真实磁盘冷缓存指标。gateway 测试以隔离 shim 调用真实 panel backend 和 `agent/pre-step`，不是原生 Typert 宿主测试。三次重开 gateway 的 `profile` 为 1.00–1.23ms、`knowledgeGraph` 为 15.60–17.55ms，未把全量画像聚类或图谱构建推迟到第一问。
+- 完整性：50,000 条原文逐条与权威 JSONL 相同，50,000 条唯一数字词均指向其记录；200 次完整查询结果及额外 3 个分页与已安装的只读 0.2.18 包在同一固定时刻逐项一致。替换后新进程仍有 50,000 条 active、50,001 条含 superseded 的索引记录，旧记录 superseded、新记录 active，历史可读。此前同一固定语料的旧版实际钩子正例用时 131,982.15ms，与当时新路径注入文本完全一致；最终迭代复用该旧版结果，未再重复旧版画像计算。另用 1,200 条混合记录、4 个时刻和 3 个画像条数与旧包逐项对照，统计和全局图谱一致。
+- 增量、删除、物理 purge、导入、面板修改、项目隔离、外部同大小修改/项目增删、缓存损坏/缺失、未来时间及缓存刷新时文件系统错误均有隔离回归。相关检查此前 117/117；最终画像与缓存路径变更后针对性复核 30/30。检索 eval 的固定集 hit@5 为 1.000、必要证据覆盖 0.640、precisionAtMost5 为 0.989；hard 必要证据覆盖 0.917，1 条 hard 问题仍缺一项证据，无答案误注入 0/2，不能视为真实模型验收。
+- 可复跑入口：`scripts/bench-startup.mjs 50000`（默认只读本机已装 0.2.18；`DSH_MEMORY_REFERENCE` 可指定参考包）、`scripts/compare-reference.mjs`、`tests/startup-cache.test.js` 和 `tests/profile-cache.test.js`。原始本机数值在被忽略的 `docs/tasks/codex-startup-cache-50k-delivery-20261105.json`；旧版实际钩子原始数值在 `docs/tasks/codex-startup-cache-50k-20261105.json`。干净候选包使用 `scripts/pack-plugin.py` 生成，需由主会话独立复核、安装并完成真实宿主测试。
+- 候选包回读：`dsh-memory-0.2.19-native.20261105-fast1.tgz` 共 30 个成员、21 个 host JS，所有文件与当前源码逐字一致，包含 `host/startup.js` 和 `host/cache-records.js`，无 AppleDouble 或 PAX。解包到独立临时目录后，实际钩子产生记忆注入，另一个全新进程命中缓存并检索到同一记录。
+
+## 66. 全文读回后的搜索性能修复候选包（2026-11-05）
+
+- 候选版本 `0.2.19-native.20261105-fast2`。定位确认：fast1 缓存记录读回正文时，先删除再重建全部目标对象属性，V8 检测到该对象由 fast properties 变为 dictionary properties；搜索热路径持有同一对象，因此完整浏览/导出后变慢。fast2 为正常记录预设权威字段顺序，填充时保留快速属性；字段缺失、旧式或额外字段等非标准结构仍走通用路径以保持真实字段和序列化顺序。
+- 直接修改仍立即反映在当前对象和搜索过滤中，但不是 JSONL revision：缓存刷新发现未提交的直接修改时不写入不一致的派生快照；后续重新打开以权威 JSONL 为准。如果用户通过现有 compact 等操作将修改写入 JSONL，缓存可以正常重建。初次读取的普通对象使用内存中的 SHA-256 摘要识别未提交修改，避免长期保留整个 JSONL 文本；该摘要不写入权威文件。
+- 同一固定时间、原始完整 50,000 条，分别先逐条深度读回并比较 JSON 字段顺序，再执行相同 10 个查询预热及 30 个计时查询；新旧结果及额外 3 个分页完全一致。各项为全新 Node 24.22.1 进程，OS 文件缓存未清空，未操作真实 profile：
+
+| 版本 | 全文读回后搜索中位数 | p95 | 缓存重开时间 |
+|---|---:|---:|---:|
+| 0.2.18 参考 | 7.75 ms | 16.08 ms | 不适用 |
+| 已安装 fast1，只读参考 | 12.89 / 14.84 ms | 33.43 / 36.94 ms | 422.89 / 258.62 ms |
+| fast2 候选，3 次新进程 | 5.71 / 7.93 / 5.26 ms | 12.51 / 17.81 / 13.40 ms | 259.50 / 394.42 / 277.13 ms |
+
+- fast2 在该语料上消除了全文读回后的明显搜索回退；重开有两次低于 300ms、一次为 394.42ms，不能宣称稳定低于目标。fast2 还直接复用了 fast1 生成的缓存，完整读回后搜索中位 5.49ms、p95 12.48ms，该次打开 317.49ms。首次无缓存构建 fast2 为 2398.67ms，同轮 fast1 为 2146.22ms；负载和首次缓存生成成本均包含在内。非标准字段顺序或结构使用通用物化路径，若大量数据均为此类结构，全文读回后的性能可能不同。
+- 相关测试 `83/83` 通过，涵盖普通及非标准结构的属性顺序、直接赋值/删除/定义属性、嵌套修改、未提交改动的缓存防护、正式 compact 后重开、外部变化、分页及原子替换。`scripts/compare-reference.mjs` 使用保留的只读 0.2.18 包时，1,200 条混合记录的画像、统计和全局图谱对照通过；`scripts/bench-materialized.mjs` 可复跑本次全文读回测试。原始数值保存在被忽略的 `docs/tasks/fast2-materialization-final.json`；没有为追求目标筛掉超标样本。
+- 打包回读：fast2 `.tgz` 共 30 个成员、21 个 host JS，全部文件与当前源码逐字一致，无 AppleDouble 或 PAX。临时目录中先由只读 fast1 包创建缓存，解包后的 fast2 直接命中该缓存；直接修改、正式 revision、再次全新进程重开及实际召回钩子均通过。未安装候选包或改动真实 profile。
+- 后续独立复核发现并修复 compact 提交直接正文修改后倒排仍是旧词的问题：实际有记录变化时同步重建索引；普通未改变记录的压缩不重新分词。隔离回归覆盖已缓存与首次构建两条路径，验证提交后立即及新进程重开后新正文/新标签可检索、旧词不再命中；相关检查 **34/34** 通过。
+- 升级安全：旧 format 6 缓存本身可能已经包含上述错误倒排，因此现改为 format 7，首次启动自动从 JSONL 重建；随后新进程命中新缓存。已在临时目录用已安装的只读 fast1 包构造错误旧缓存，验证新版本首次拒绝旧缓存并正确检索、第二次命中新缓存且结果正确。上文“直接复用 fast1 缓存”的结果属于修复前版本，现已不适用；上文 50k 性能数字也来自修复前，按要求未重复整套基准。
+
+## 67. fast2 实际安装与独立验收（2026-11-05）
+
+- 按用户指定，在独立 GPT-6.1 Terra / max 会话完成开发，主会话独立检查并负责安装和原生验证。复核先后发现完整读回后的搜索性能回退，以及 compact 提交新正文后仍使用旧倒排的问题，两项均修复后才交付最终包。
+- `0.2.19-native.20261105-fast2` 已经插件管理器安装到实际 desktop profile，并在会话和捕获调用空闲时正常重启。包内 29 个文件逐字核对源码，安装后另核对 26 个运行及 locale 文件。原生 Typert 自检通过，插件 fiber 为 active，包元信息校验正常，实际派生缓存为 format 7。
+- 升级前后 8 个权威 JSONL 文件的内容摘要相同，原生导出的 566 条既有记忆逐项一致。七项现有设置及宿主默认模型也已核对。测试结束后再次逐项比较了原有记录，测试新增记忆通过原生删除接口清理完成。
+
+使用已安装包进行独立容量测试，语料为隔离的完整 50,000 条数据。每次使用新 Node 24.22.1 进程，保留 OS 文件缓存。在测得打开耗时后，逐条比较全部正文，再预热并计时搜索。三次查询结果也逐项一致。
+
+| 最终已安装 fast2 | 首次构建 | 缓存重开 1 | 缓存重开 2 |
+|---|---:|---:|---:|
+| 打开至全部索引可检索 | 2193.68 ms | 244.97 ms | 249.52 ms |
+| 逐条原文比较 | 50,000 条通过 | 50,000 条通过 | 50,000 条通过 |
+| 全文读回后搜索中位数 | 5.25 ms | 8.29 ms | 6.26 ms |
+| 全文读回后搜索 p95 | 11.12 ms | 19.36 ms | 14.72 ms |
+
+- 两次最终缓存重开低于 300ms。开发期间同机出现过 394.42ms 等负载样本，详见 §66。性能目标仍受机器负载和数据结构影响。首次构建含约 1025ms 缓存生成成本，自动缓存刷新仍为同步工作，数据量大时可能短暂占用事件循环。这里测量的是插件存储和索引可用时间，整个应用启动及模型回复有各自的额外耗时。
+- 最终版原生测试采用宿主当前默认的 `qwen-token-plan / qwen3.7-plus`。在一个隔离 QA 会话提供两项新项目事实，完整用户消息落入来源日志，自动提炼完成并生成含两项值的 active 记录。另一个既有 QA 会话只询问事实名称，原生事件中出现实际 `source.kind=memory` 注入，最终回答准确包含两项值，工具调用为 0。两次提炼均完成，测试记录删除后原生搜索不再返回测试值。
+- compact 回归由主会话先独立复现，再独立复测。修改正文并显式 compact 后，立即查询和缓存重开都命中新词，旧词查询为空。开发会话相关定向检查为 34/34，此前 materialization 相关检查为 83/83。容量数据、隔离回归与真实模型对话分别提供证据。
+- 本轮另外发现另一项目在 fast2 安装前已产生 12 条 `Qwen3.8-Flash` partial 任务，包含拆分与有界补全子任务，记录原因均为输出预算耗尽且无可用文本。安装前后的这组状态一致，最终读取仍为 partial 12。此次启动优化没有完成这组提炼恢复。最终全局队列为 total 111、done 71、skipped 28、partial 12，pending/running/failed/unknown 均为 0。
+
+安装回执、原文逐条比较、独立容量数值及真实事件证明保存在忽略目录 `docs/tasks/codex-terra-50k-fast2-20261105/`。公开记录只包含测量结果和范围。README 在验收后更新，已安装包中的运行文件核对证据仍对应本次最终包。
+- 上述修复后的 fast2 已重新打包并回读：30 个成员、21 个 host JS 与源码一致，无 AppleDouble/PAX；解包到临时目录后，以只读 fast1 构造带错误倒排的旧缓存，验证新包拒绝旧缓存、重建后查询正确，再次修改正文并 compact 后立即及新进程命中新缓存时查询均正确。
+
+
+## 68. 真实 Obsidian 往返与属性兼容修复（2026-11-05）
+
+- `0.2.20-native.20261105-obsidian1` 已通过插件管理器安装到 desktop profile。实际 Obsidian 为 1.15.0，在用户已打开的 vault 中使用独立 QA 文件夹测试；没有把全部真实记忆导出到 vault。测试过程不调用模型。
+- 原生导出产生 Markdown，在 Obsidian 中实际修改正文，并用属性编辑器添加标签。Obsidian 将标签改写成标准 YAML 列表后，旧解析器导回得到空标签，问题已在真实宿主复现。现在使用共享的标准 YAML 解析器（精确依赖 `yaml@2.9.1`），记忆和知识笔记均支持块式标签、引号字段；无效 YAML 笔记跳过。同步同时修复 kind 未更新、候选记录被默认提升为 active、重复导入仍增加 revision 的问题。
+- 安装新版后，通过真实 Typert 接口导回同一份 Obsidian 编辑过的文件，正文新值与两个标签均正确；旧值的独有查询词不再命中。再次导入报告 updated 0 / skipped 1，记录及 revision 不变。临时导出目录中的第二次导出写入 0。
+- 通过原生接口提升 QA 记忆为知识笔记，导出后在 vault 修改同名文件，导入准确报告 conflict 1，宿主原文保持不变；新增知识笔记导入成功，标签、主题和双链解析正确。项目图谱出现知识节点和对应 wiki 连线。全局图谱超过 24 个主题时会将小主题汇总到“其他”，未独立展示的主题不会生成单独的 wiki 连线；这属于现有图谱展示规则，不能据此声称所有双链都在全局图谱中可见。
+- 回归检查：`tests/obsidian.test.js`、`tests/knowledge-sync.test.js`、`tests/knowledge-edit.test.js` 共 **20/20**；`tests/remote.test.js` 中 Obsidian/knowledge 定向检查 **6/6**。新增用例先复现失败再修复通过。上述为自动化检查，前述 Obsidian 编辑与真实原生接口调用另有实际记录；没有把它们混称为完整 GUI 按钮验收。
+- 包含新增依赖的安装产物回读通过，无 AppleDouble/PAX。正常退出后首次由 macOS 启动返回 `-609`，随后从原生应用入口恢复启动，真实 Typert 自检通过、fiber active、元信息无错误。升级前后 8 个权威 JSONL 文件与包含 QA 的 567 条记录一致，既有设置及默认模型一致。
+- 测试完成后，将已打开的 vault 配置为默认路径，正式同步文件夹为 `DSH Memory`，通过原生设置接口保存并读回持久化配置。同步仍由面板的导出/导入动作触发。只删除本轮 QA 的 1 条有效记忆、5 个 Markdown 文件及空测试文件夹，并清除本轮临时同步摘要；有效记录恢复为 566 条，其他设置未变。记忆删除保留正常 tombstone 和测试审计，不宣称擦除全部历史痕迹。
+- 本版未修改存储与索引实现，也没有重跑 50k 性能基准；§67 的性能数字仍仅对应上一版。本轮未处理既有模型提炼 partial 任务，也未推送或发布。
+
+私有回执位于忽略目录 `docs/tasks/codex-obsidian-qa-20261105/` 与 `docs/tasks/codex-obsidian-install-20261105/`，包含实际属性编辑文件、原生导入/导出结果、知识冲突结果、安装与清理验证。公开记录不包含真实记忆正文或用户 vault 路径。
+
+
+## 69. Obsidian 自动同步与完整图谱安装验收（2026-11-05）
+
+实际安装版本 `0.2.21-native.20261105-auto1`。所有会话空闲后，通过插件管理器安装到 desktop profile，并正常退出、重新启动 DSH。原生 Typert 自检通过、fiber active、元信息无错误；28 个运行、locale 和 package 文件与已验收源码逐字一致。升级前后 8 个权威文件、569 条原有记忆、七项设置和宿主默认模型一致。
+
+- 新增可关闭的自动双向同步，宿主运行时在上一轮结束后约 5 秒检查一次；默认关闭，避免升级替用户导出数据。本用户已要求启用，现已在原生设置界面开启并保存到已配置的 vault。同步基线按记忆数据目录与目标目录独立持久化；单边修改同步，双边修改或删除冲突保持原件，并保留双方副本。界面可比较全文后选择版本，过期选择会被拒绝。被替换的文件放入 `_history`，冲突副本放入 `_conflicts`，不自动清理这些恢复内容。已遗忘的记录不会从旧笔记重新导回。
+- 图谱不再把小主题合并成“其他”，全量图谱查询绕过启动预览的 1,000 条限制，搜索和分页覆盖全部当前记录。新增笔记之间、记忆正文内的双链、带路径/标题锚点/别名显示文字的链接及 Markdown 内链；显示可点击的出链、反链和未解析目标。处理范围为插件记忆和同步目录中的知识笔记，不扫描用户整个 vault 的所有私人笔记。
+- 自动同步 8 个行为用例通过，涵盖更改导入/导出、记忆笔记重命名、重复同步无额外 revision、重启保留冲突、过期冲突选择、错误 YAML 保留、遗忘防复活、知识笔记冲突/删除以及无 RPC 触发的定时同步。配置/设置、激活、客户端方法契约和定向 RPC 检查通过。图谱 8 个用例通过，包含 1,250 条全量分页/尾部搜索、超过 24 个小主题、双链/反链与页码失效恢复。知识同步/编辑 14 个用例沿用本轮通过结果，未重复整套测试。
+- ego-browser 使用实际 `client.js`、隔离 MemoryStore/同步控制器与真实面板后端检查界面，数据为 125 条合成记忆和测试笔记：开关保存、展开双方全文并选择 Obsidian 版本、第二页 101–128 项、跨页搜索、小主题、链接跳到另一页并显示反链通过。520px 图谱页面 document scrollWidth 与 viewport 相等。该环境使用 HTTP 测试传输，不属于原生宿主 GUI 验收。
+- 真实自动往返：独立 QA 记忆由后台定时器导出；在 Obsidian 1.15.0 实际编辑 Markdown 正文后，不点同步按钮，原生 Memory 查询自动读到新值（revision 2）。再从原生 Memory 修改正文，Obsidian 已打开页面自动刷新为新值。知识笔记从 vault 自动导入、原生编辑后自动导出也通过；含锚点和显示别名的原有双链未被文件替换改写，Obsidian 实际点击能打开更新后的目标正文。
+- 真实冲突：暂停同步后分别修改同一 QA 记忆的两侧，恢复自动同步后出现一项冲突，两份原件未被覆盖，双方副本均存在。在原生设置展开全文并选择 Obsidian 版本后，Memory 正确更新、冲突归零，双方恢复副本仍保留。该操作只处理 QA 冲突。
+- 真实图谱：两个独立 QA 知识笔记被后台自动导入后，原生接口与原生页面均显示单独小主题、A→B 出链、B→A 反链与未解析目标。点击出链正确切换到 B，并显示返回 A 的正反链接。1,250 条分页覆盖和跨页跳转仍分别依据前述自动化与隔离浏览器结果，不宣称做了相同规模的真实 GUI 数据写入。
+- 清理与终态：经原生删除接口遗忘 QA 记忆，后台自动将其 vault 文件移入历史，未重新导回；仅删除本轮两份 QA 知识笔记及自有恢复副本。最终原有 569 条记录逐项比较一致，正式 vault 中对应 569 个文件的正文、范围、类型、主题、标签、状态、置信度和重要度均逐项匹配。原生设置显示自动同步开启、冲突 0；实际同步 errors 0，插件继续 active。
+- 仍有原先的提炼任务：total 149、pending 3、running 0、done 74、partial 39、failed 0、unknown 0、skipped 33。三个 pending 均为 `not-sent`、每日提取预算已用尽，升级前后逐项保留；本轮没有调高预算、重发或处理这些既有任务。
+- 范围限制：自动同步需要 DSH 运行；首次 50k 完整同步耗时、长期运行及极端并发编辑未实测。本版未改变存储与召回实现、未重跑 50k 性能基准，没有调用额外模型、修改 MSE/Context、推送或发布。
+
+私有脚本、实际自动往返/冲突/图谱/清理回执和浏览器图像在 `docs/tasks/obsidian-auto-20261105/`。插件管理器安装回执、重启自检和升级前后对照在 `docs/tasks/codex-obsidian-auto-install-20261105/`。这些目录由 Git 忽略，公开文档不含用户记忆正文。README 在验收后更新，运行文件核验对应实际安装包。
+
+## 70. 排队与空输出 partial 恢复及原生验收（2026-11-05–06）
+
+- 起始原生快照为 167 个任务：pending 21、partial 39、done 74、skipped 33、running/failed/unknown 均为 0。用户此前看到的 3 个 pending 仍在其中，后来又增加 18 个；39 个 partial 包含父任务和子任务，实际为 8 个未完成末级分段，另有一棵树依赖原排队子任务。
+- 根因由代码和真实回执交叉确认：旧版把 max-tokens/length 且无正文的结果继续拆分并补全，消耗自动配额；自动补全字段缺失使额度翻倍未生效。宿主自定义 Qwen 路由的 off 映射为不发送推理参数，实际仍生成 reasoning-delta。首个恢复请求在 4096 上限下产出完整 JSON，使用 outputTokens 3534；旧 800 上限不能容纳这次真实推理与正文。旧空输出路径没有保存 usage，无法补算旧请求费用，不声称旧调用免费。
+- 修改：默认输出上限 4096，补全额外余量实际传给宿主；无正文终止记录 finish/usage/推理字符数并暂停同路由相同额度的连续调用。显式恢复创建确定 ID 的缺失段子任务，保留旧付费回执，已完成分支和 unknown 不自动重发。恢复再次无正文则停止。旧版空输出祖先消耗的补全轮次只纠正一次，有效结果仍受有界补全与无进展保护。
+- 明确不保存记忆，以及没有要求记住的虚构验收材料，在请求模型前跳过；长消息后段和旧付费结果本地重放同样遵守。来源保留，跳过不写成成功提炼；任务实际状态和次数保留。原生面板显示 partial，提供末级任务恢复入口，未知结果要求显式确认。
+- 定向检查：最后一轮恢复/完整标记/内部证据 22/22 通过。此前相关检查 140 项中的两个失败分别为旧的空输出拆分预期、UPDATE 测试原文缺失其模型声称的事实；按新行为及实际用户证据修正后复测通过。未重复 50k 性能基准、Obsidian 全套或无关模块检查。
+- 最终 `0.2.22-native.20261105-recovery2` 已在其他会话与捕获调用空闲后通过插件管理器安装，并正常退出、重启。28 个运行/locale/package 文件与源码匹配，fiber active、元信息无错误、Typert 自检通过。两次安装各自核对了当时的 569 / 631 条既有记录、权威文件、用户设置及宿主默认模型均未因升级改变。最终包 SHA-256 为 `92492b445956e49cd742b742ee5409e39567588ce4315a67169eeddfcb621248`；验收后的 README 更新不改变该已安装包。
+- 逐项核对：原 3 个 pending 均 done，39 个 partial 及其缺失分支均已完成。起始 21 个 pending 中，6 个完成，15 个明确禁止保存或仅为虚构验收的任务在本地 skipped、模型调用为 0；期间新增的 6 个真实排队任务也已完成。没有删除任务或强改状态清零。最终原生账本为 **188 个任务：done 138、skipped 50，pending/running/partial/failed/unknown 全部为 0**；原生「设置 → 记忆 → 捕获与注入」刷新后显示相同的完成数和四项零计数。
+- 调用审计：起始所有已发送任务的 attempts、原结果文本和原 usage 逐项保持。恢复过程新增 23 次实际提取调用，分别为未发送的排队任务及必要的缺失段/补全子任务；没有重发已成功分支或结果未知的请求。它们不是免费恢复，仍按 provider 的真实用量计费。另有 3 次 QA 对话及其 2 次分段提取；QA 召回/遗忘轮明确禁止保存，均为零次提取的 skipped。每日自动预算未提高，未来达到预算的新任务仍会等待下一周期或显式恢复。
+- 最终版真实模型验收使用当时的宿主默认模型，仅设置隔离 QA 会话，不改变全局默认：17,407 字符用户消息逐字保存，两个连续分段完整覆盖原文，两次自动提取均 done；位于首、中、尾的 3 项事实全部成为 active 记忆。输入明确要求记住，验证的是显式记忆的自动分段路径，没有把它描述为耗尽日预算后的普通对话自动提取。
+- 另一 QA 会话只询问事实名称，没有给出答案；原生事件出现实际 `source.kind=memory` 注入，三项值均在注入和模型回答中。通过原生删除接口清理这三条测试记录后，第三个会话无这三项注入，回答“不记得”。三次对话均无工具调用。自动 Obsidian 同步后对应的三个正式 Markdown 文件已移出同步目录，原生查询未重新出现测试记忆；同步保持开启，errors/conflicts 均为 0。这是实际宿主和模型结果，与前述自动化测试分开记录。
+
+私有逐项 intent、receipt、模型终止回执、安装核验和最终 `final-proof.json` 位于 Git 忽略目录 `docs/tasks/capture-resolution-20261105/`。原始来源与恢复历史保留，只有本轮三条 QA 记忆经原生接口删除；未推送或发布。本轮没有重复容量、长期运行或全部 provider 的测试，不能据此保证任意模型、任意长度或所有查询都能完美提炼召回。
+
+## 71. P0/P1：pnpm 与 Node 组合召回的原生验收（2026-11-06–07）
+
+- **先复现，再修复。** 两个隔离的 DSH 会话分别写入项目的 pnpm 和 Node 版本，各自提炼成功。第一版装到真实宿主后，新的读会话同时询问两项，模型答出 pnpm，却回答“Node：不记得”。两条事实都在库里；漏项发生在构造回答前的记忆文本时。问句附带的答题格式、禁用工具和不保存指令干扰了事实匹配。
+- **P0 和 P1 的变化。** P0 直接评估交给模型的文本，区分必需、可替代、仅相关和禁止出现的证据；保留旧的记录 ID 指标。P1 将问题中的事实与答题指令分开，识别共用属性和版本号。问题含多个对象时，先为每个对象选一条有依据的事实，再用剩余额度补充；召回本身不新增模型调用。
+- **离线结果。** 捕获、激活、召回相关检查 51/51 通过。[独立 40 题评测](../scripts/eval-recall-heldout.mjs)中，必需事实找回 47/48；复合题答全 15/16，单项题 16/16，8 道无依据、遗忘或隔离题均未注入。旧版在这 40 题的总分相同。仍有一个具体漏项：“每日快照时间、保留期限分别是什么？”能找回保留期限，但漏掉时间 03:17。这些数字衡量注入文本，不代表 40 次真实模型回答。
+- **安装与盲测。** 通过 DSH 插件管理器安装 `0.2.23-native.20261107-recall2`（包 SHA-256：`64e9c6795cb73e49f01c86f9f1d6dffc223b07c25e8f31c7b2996db8e206a286`）。宿主重启后插件 active，自检通过，32 个安装文件与验收包一致。保留之前写入的两条记忆，另开一个全新 DSH 会话，用第一次失败的原句提问，没有带版本号。模型回答 **pnpm：9.12.3；Node：22.13.1**。宿主实际只注入了这两项记忆；工具调用 0，“不要保存这次问答”产生的新提炼任务 0。
+- **清理边界。** 用插件原生接口移除两条 QA 记忆。清理后原有 649 条记录逐条一致，原有 11 个范围的数据文件内容和宿主默认设置均未变。未推送或发布。
+
+## 72. 快照多项召回与 P2 原句证据（2026-11-07）
+
+两个隔离的真实 DSH 会话验证了普通聊天写入和跨会话问答。第一个会话说“我们决定把星湾快照改到每天 04:26 执行，快照保留 23 天，因为原时段会撞上票据归档写入。”没有要求记住。宿主默认的 DeepSeek Flash 完成了一次普通自动提炼。活动决策的来源是用户消息，原文按 UTF-16 区间 `[11, 59)` 切出，与保存的引文逐字一致。
+
+第二个全新会话只问“星湾快照每天几点执行、保留多久、为什么改？”，并要求不用工具、不保存问答。原生事件显示插件注入了一条决策原文。回答同时给出了 **每天 04:26、保留 23 天、原时段与票据归档写入冲突**。工具调用和本轮新增提炼任务均为零。随后经插件接口移除唯一一条测试记忆，该隔离项目的活动记录回到零。
+
+- 召回先确定问题中的对象，再用它查执行时刻、保留时长和原因。原 40 题的必需事实从 47/48 提高至 48/48，复合题完整 16/16，8 道负例均无注入。另用其他任务的时间和保留期限作干扰，实际 pre-step 只带回指定对象的三项。这里的离线数字衡量交给模型的文本。
+- 普通短决定可以进入原有自动提炼额度。提炼器返回来源和原话，插件核对原文后保存位置。决策保留整句的原因、否定和条件。找不到可靠定位的决策留作候选。兼容旧来源及已保存的提炼结果。相关测试 151 项通过，另有一项专门验证短决定、疑问、假设和禁止保存的差别，通过。
+- `0.2.24-native.20261107-evidence1` 通过插件管理器安装。正常重启后插件 active、Typert 自检通过，32 个文件与验收包一致。升级前后原有 658 条记录和 12 个范围的数据文件一致。
+- 补测使用隔离的 50,000 条记录和新 Node 进程。候选版两次命中缓存，打开到索引可用约 705 / 991 ms，普通查询的 pre-step p95 约 52 / 45 ms。两个样本均超过 300 ms 打开目标。同次旧版缓存打开约 802 ms。数据来自工作中的同一台机器，样本量不足以判定两版的速度差。
+
+## 73. 大库启动、原句补查与真实宿主验收（2026-11-07）
+
+`0.2.25-native.20261107-local.2` 已通过 DSH 插件管理器安装到 desktop profile。正式包 SHA-256 为 `cb538d3244c4b9e3b4fe831d11517d368de94a0902d934cb8851eb295f0aecca`。重启后 34 个文件与包一致，插件 active，Typert 自检通过。第一步升级前后原有 662 条记录一致。第二步升级时逐项保留了这 662 条及一条新建的 QA 记录。
+
+- **5 万条记忆。** 相同语料、独立 Node 进程和同机交替测量。旧版缓存重开至索引可检索分别为 1341、482、486 ms，新实现为 244、213、199 ms。对应新版本的第一条查询为 45、45、39 ms。改动仅涉及答题提示的最终包独立测得打开 190 ms、第一问 47 ms、30 次索引查询的 p95 为 19 ms。按 ID 和记录顺序回读 50,000 条，序列化后的每一行与权威 JSONL 一致。首次生成新格式缓存还需约 4.6 秒。这些测量使用已有 OS 文件缓存，计时从插件打开数据到索引就绪，宿主启动耗时另算。
+- **本地补查。** 时间、保留期限或原因缺失时，最多读取四份当前项目的来源。只有当前有效记录、提炼任务实际授权的记录版本和原文区间均匹配时，才把原句带入本轮回答。权限或归属不明的旧来源只沿用原有摘要。同源记录被遗忘、清理或改写后，补查受到持久标记约束。多个引文含义可能不同时停止补查。这个步骤使用本地索引和原文，不额外请求模型。
+- **隔离评测。** 在生产 pre-step 测试中，索引摘要没有“琥珀巡检”，通过核对来源找回了这个原因。另一项目无法取得，删除并清理同源的另一条记录后也无法取得。321 项测试全部通过。最终回答约束改动后，定向 33 项通过，离线 40 题找到 48/48 项必需事实，16/16 道复合题完整，8 道负例均无注入。
+- **真实 DSH。** 第一个会话用普通聊天说出栖竹快照的调整，宿主 DeepSeek Flash 自动提炼一次，保存时核对用户原句的位置。第一次盲测的三项值正确，但模型还补出了时区、清理机制和锁竞争。修正版明确了回答范围和本轮禁止提炼状态。保留原测试记忆，另开会话重问同一句，实际回答为每天 **03:52**、保留 **26 天**、原时段会撞上**冷库对账写入**。该轮已有记忆保存着完整决定，宿主直接注入了这一条。
+- **隔离与遗忘。** 记忆仍有效时，另一项目的新会话对三项都答不知道。经原生接口只删除一条 QA 记录后，原项目的新会话也对三项都答不知道。三次读取均未调用工具或触发新提炼。真实对话与上述“摘要缺原因”的隔离测试分别核验。

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { CapturePipeline } from '../host/capture.js'
+import { readTurnIntakes } from '../host/capture-journal.js'
 import { resolveConfig } from '../host/config.js'
 import { projectIdentity } from '../host/paths.js'
 import { MemoryIndex } from '../host/search.js'
@@ -54,12 +55,12 @@ function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a', onExt
     header: { cwd },
     requestHeader: () => ({ config: { provider: 'deepseek', model: 'chat', reasoningEffort: 'max' } }),
   }
-  return { store, index, llm, capture, session, writes, config }
+  return { root, store, index, llm, capture, session, writes, config }
 }
 
 function feed(capture, session, userText, assistantText = '好的，我记下了。') {
-  capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: userText }] } })
-  capture.observe(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: assistantText }] } } })
+  capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: userText }] } })
+  capture.observe(session, { type: 'assistant/message', data: { message: { role: 'assistant', source: { kind: 'assistant' }, content: [{ type: 'text', text: assistantText }] } } })
   capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
 }
 
@@ -107,7 +108,7 @@ test('a duplicate statement is not stored twice', async (t) => {
 test('UPDATE rewrites the target record instead of adding a second one', async (t) => {
   const holder = { reply: REPLY }
   const { store, capture, session } = setup(t, { reply: () => holder.reply })
-  feed(capture, session, '记住：这个仓库用 pnpm。')
+  feed(capture, session, '记住：这个仓库用 pnpm，要求 Node 22 以上。')
   await capture.flush()
   const key = projectIdentity(session.header.cwd).key
   const first = store.list('project', key)[0]
@@ -116,13 +117,15 @@ test('UPDATE rewrites the target record instead of adding a second one', async (
   holder.reply = JSON.stringify({ memories: [
     { op: 'UPDATE', targetId: first.id, kind: 'fact', scope: 'project', content: '该仓库使用 pnpm 并要求 Node 24 以上', tags: ['pnpm'], confidence: 0.95, importance: 0.8 },
   ] })
-  feed(capture, session, '更正：Node 版本要求是 24 以上。')
+  feed(capture, session, '更正：这个仓库使用 pnpm，Node 版本要求是 24 以上。')
   await capture.flush()
 
   const records = store.list('project', key)
   assert.equal(records.length, 1)
   assert.match(records[0].content, /Node 24/u)
   assert.equal(records[0].revision, 2)
+  assert.ok(records[0].sourceRefs.length >= 2)
+  assert.ok(records[0].sourceRefs.every((ref) => ref.role === 'user'))
 })
 
 test('credential-looking content is rejected', async (t) => {
@@ -141,6 +144,7 @@ test('a truncated extraction keeps the complete leading items', async (t) => {
   feed(capture, session, '记住：这个仓库用 pnpm，要求 Node 24 以上。')
   await capture.flush()
   assert.equal(store.list('project', projectIdentity(session.header.cwd).key).length, 2)
+  assert.ok(capture.status().counts.partial >= 1, 'the parent and its bounded completion child remain explicitly partial')
 })
 
 test('budget exhaustion skips non-explicit turns', async (t) => {
@@ -159,7 +163,7 @@ test('an explicit remember request bypasses the exhausted budget', async (t) => 
 
 test('an incomplete turn is ignored', async (t) => {
   const { llm, capture, session } = setup(t, { reply: REPLY })
-  capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: '记住：这个仓库用 pnpm。' }] } })
+  capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '记住：这个仓库用 pnpm。' }] } })
   capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'aborted' } } })
   await capture.flush()
   assert.equal(llm.calls(), 0)
@@ -197,10 +201,10 @@ test('a long turn is extracted in chunks', async (t) => {
   }
   const { store, capture, session, llm } = setup(t, { reply, config: { extraction: { maxInputTokens: 1000 } } })
   const long = '这是一段很长的用户描述，'.repeat(300)
-  capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: long }] } })
-  capture.observe(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '收到，继续。' }] } } })
-  capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: long }] } })
-  capture.observe(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '好的。' }] } } })
+  capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: long }] } })
+  capture.observe(session, { type: 'assistant/message', data: { message: { role: 'assistant', source: { kind: 'assistant' }, content: [{ type: 'text', text: '收到，继续。' }] } } })
+  capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: long }] } })
+  capture.observe(session, { type: 'assistant/message', data: { message: { role: 'assistant', source: { kind: 'assistant' }, content: [{ type: 'text', text: '好的。' }] } } })
   capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
   await capture.flush()
 
@@ -215,30 +219,37 @@ test('the daily budget stops mid-turn chunking', async (t) => {
   ] })
   const { capture, session, llm } = setup(t, { reply, config: { extraction: { maxInputTokens: 1000 }, capture: { maxCallsPerDay: 1 } } })
   const long = '这是一段很长的用户描述，'.repeat(300)
-  capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: long }] } })
-  capture.observe(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '收到。' }] } } })
-  capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: long }] } })
+  capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: long }] } })
+  capture.observe(session, { type: 'assistant/message', data: { message: { role: 'assistant', source: { kind: 'assistant' }, content: [{ type: 'text', text: '收到。' }] } } })
+  capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: long }] } })
   capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
   await capture.flush()
 
   assert.equal(llm.calls(), 1)
 })
 
-test('a very long turn is extracted before turn/end', async (t) => {
+test('a very long turn keeps every source and extracts after turn/end', async (t) => {
   const reply = JSON.stringify({ memories: [
     { op: 'ADD', kind: 'fact', scope: 'project', content: '增量抽取测试记录一条', tags: [], confidence: 0.85, importance: 0.6 },
   ] })
-  const { store, capture, session, llm } = setup(t, { reply })
+  const { store, capture, session, llm } = setup(t, { reply, config: { extraction: { maxInputTokens: 1000 } } })
   const long = '这是一段很长的用户描述，'.repeat(300)
   for (let index = 0; index < 6; index += 1) {
-    capture.observe(session, { type: 'user/message', data: { content: [{ type: 'text', text: long }] } })
-    capture.observe(session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '收到。' }] } } })
+    capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: long }] } })
+    capture.observe(session, { type: 'assistant/message', data: { message: { role: 'assistant', source: { kind: 'assistant' }, content: [{ type: 'text', text: '收到。' }] } } })
   }
   await capture.flush()
+  assert.equal(llm.calls(), 0)
+  const status = capture.status()
+  assert.equal(status.counts.total, 0)
+  assert.ok(status.counts.pending === 0)
 
+  capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await capture.flush()
   assert.ok(llm.calls() >= 1)
   const records = store.list('project', projectIdentity(session.header.cwd).key)
   assert.ok(records.length >= 1)
+  assert.ok(capture.status().counts.done >= 1)
 })
 
 test('preferences merge in the 0.85–0.9 gray zone while facts stay separate', async (t) => {
@@ -256,9 +267,9 @@ test('preferences merge in the 0.85–0.9 gray zone while facts stay separate', 
       ] })
     }
     const setupResult = setup(t, { reply })
-    feed(setupResult.capture, setupResult.session, '记住：我喜欢简洁直接的回答。')
+    feed(setupResult.capture, setupResult.session, statements[0])
     await setupResult.capture.flush()
-    feed(setupResult.capture, setupResult.session, '以后都简洁直接一点。')
+    feed(setupResult.capture, setupResult.session, statements[1])
     await setupResult.capture.flush()
     return setupResult.store.listAll().filter((record) => record.kind === kind)
   }
@@ -302,6 +313,24 @@ test('setConfig disables capture at runtime', async (t) => {
   feed(capture, session, '记住：这个仓库用 pnpm，要求 Node 22 以上。')
   await capture.flush()
   assert.equal(llm.calls(), 0)
+})
+
+test('an explicit current-turn no-save clause skips extraction before the paid model call', async (t) => {
+  const { root, store, capture, session, llm } = setup(t, { reply: '{"memories":[]}' })
+  const prompt = '这个项目的 pnpm 和 Node 版本分别是多少？只根据已有记忆回答。不要调用工具，也不要保存这次问答。'
+  feed(capture, session, prompt, 'pnpm：9.12.3；Node：不记得。')
+  await capture.flush()
+  assert.equal(llm.calls(), 0)
+  assert.equal(readTurnIntakes(root).intakes[0].status, 'skipped')
+  assert.match(readTurnIntakes(root).intakes[0].reason, /明确要求不保存/u)
+  assert.equal(store.listAll().length, 0)
+})
+
+test('a quoted no-save example in a discussion is not treated as a current-turn opt-out', async (t) => {
+  const { capture, session, llm } = setup(t, { reply: '{"memories":[]}' })
+  feed(capture, session, '请解释示例“不要保存这次问答”在隐私规则中的含义。', '这是对示例规则的讨论。')
+  await capture.flush()
+  assert.equal(llm.calls(), 1)
 })
 
 

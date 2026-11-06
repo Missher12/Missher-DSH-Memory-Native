@@ -17,6 +17,7 @@
 
 import { statSync } from 'node:fs'
 
+import { hotRecord } from './cache-records.js'
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { deriveProfile } from './profile.js'
 import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
@@ -42,7 +43,7 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */
@@ -193,43 +194,70 @@ export function listMemories(backend, raw) {
 
   const statuses = status === undefined ? PANEL_FILTER_STATUSES.filter((value) => value !== 'deleted') : [status]
   let records
+  let queryPage = null
   if (status === 'deleted') {
     records = backend.store.list(scope, scope === 'project' ? resolvedProjectKey : null, { includeDeleted: true })
-      .filter((record) => record.status === 'deleted')
+      .filter((record) => hotRecord(record).status === 'deleted')
     if (query !== undefined) {
       const needle = query.toLowerCase()
       records = records.filter((record) => String(record.content ?? '').toLowerCase().includes(needle))
     }
   } else if (query !== undefined) {
-    const hits = backend.index.search(query, {
+    // The page limit applies to the RETURNED page. The index counts/facets all
+    // matches without materialising 50k hits or their term explanations.
+    queryPage = backend.index.searchPage(query, {
       statuses,
       scopes: [scope],
       projectKey: scope === 'project' ? resolvedProjectKey : null,
+      kinds: kind === undefined ? null : [kind],
+      ...(topic === undefined ? {} : { topic }),
       now: Date.now(),
-      limit: PANEL_LIMIT.max,
+      limit,
+      offset,
     })
-    records = hits.map((hit) => hit.record)
+    records = []
   } else {
     records = backend.store.list(scope, scope === 'project' ? resolvedProjectKey : null).filter((record) => {
-      return statuses.includes(record.status)
+      return statuses.includes(hotRecord(record).status)
     })
+  }
+
+  if (queryPage !== null) {
+    const kindCounts = { preference: 0, fact: 0, decision: 0, episode: 0 }
+    for (const [key, count] of Object.entries(queryPage.kindCounts)) {
+      if (Object.hasOwn(kindCounts, key)) kindCounts[key] = count
+    }
+    return {
+      scope,
+      projectKey: resolvedProjectKey,
+      currentProjectKey: currentProjectKey(backend.store),
+      items: queryPage.hits.map((hit) => projectRecord(hit.record)),
+      shown: queryPage.hits.length,
+      total: queryPage.total,
+      offset,
+      kindCounts,
+      topicCounts: { __none__: 0, ...queryPage.topicCounts },
+    }
   }
 
   const kindCounts = { preference: 0, fact: 0, decision: 0, episode: 0 }
   const topicCounts = { __none__: 0 }
   const byKind = records.filter((record) => {
-    if (Object.hasOwn(kindCounts, record.kind)) kindCounts[record.kind] += 1
-    return kind === undefined || record.kind === kind
+    const entry = hotRecord(record)
+    if (Object.hasOwn(kindCounts, entry.kind)) kindCounts[entry.kind] += 1
+    return kind === undefined || entry.kind === kind
   })
   for (const record of byKind) {
-    const value = typeof record.topic === 'string' && record.topic !== '' ? record.topic : null
+    const entry = hotRecord(record)
+    const value = typeof entry.topic === 'string' && entry.topic !== '' ? entry.topic : null
     if (value === null) topicCounts.__none__ += 1
     else topicCounts[value] = (topicCounts[value] ?? 0) + 1
   }
   const filtered = topic === undefined
     ? byKind
     : byKind.filter((record) => {
-      const value = typeof record.topic === 'string' && record.topic !== '' ? record.topic : null
+      const entry = hotRecord(record)
+      const value = typeof entry.topic === 'string' && entry.topic !== '' ? entry.topic : null
       return topic === '__none__' ? value === null : value === topic
     })
   const total = filtered.length
@@ -251,16 +279,41 @@ export function listMemories(backend, raw) {
  * Header counters and read-only capture/injection state.
  * @param {{ store: object, config: object }} backend
  */
+/** Durable capture queue counts (pending/unknown/failed are separate). */
+export function captureStatus(backend) {
+  return typeof backend.getCaptureStatus === 'function'
+    ? backend.getCaptureStatus()
+    : { counts: { total: 0, pending: 0, running: 0, done: 0, partial: 0, failed: 0, unknown: 0, skipped: 0 }, tasks: [] }
+}
+
+/** Explicit retry of a failed/unknown capture task; never automatic. */
+export function captureRetry(backend, raw) {
+  const input = asObject(raw)
+  const taskId = typeof input.taskId === 'string' ? input.taskId : ''
+  if (taskId === '') throw new PanelInputError('taskId is required')
+  if (typeof backend.retryCapture !== 'function') throw new PanelInputError('capture retry is unavailable')
+  const result = backend.retryCapture(taskId, { confirmUnknown: input.confirmUnknown === true })
+  if (result === null || typeof result !== 'object' || result.ok !== true) {
+    throw new PanelInputError(result?.reason ?? 'capture task could not be retried')
+  }
+  return result
+}
+
 export function computeStats(backend, raw) {
   const input = asObject(raw)
   const { scope, projectKey } = normalizeScope(input)
-  const records = backend.store.listAll()
+  const allRecords = backend.store.listAll({ includeDeleted: true })
+  let total = 0
+  let deleted = 0
   const counts = { active: 0, candidate: 0, archived: 0, superseded: 0 }
   const kinds = { preference: 0, fact: 0, decision: 0, episode: 0 }
   let confidenceSum = 0
   let confidenceCount = 0
   let lastCapturedAt = 0
-  for (const record of records) {
+  for (const item of allRecords) {
+    const record = hotRecord(item)
+    if (record.status === 'deleted') { deleted += 1; continue }
+    total += 1
     if (Object.hasOwn(counts, record.status)) counts[record.status] += 1
     if (Object.hasOwn(kinds, record.kind) && (record.status === 'active' || record.status === 'candidate')) {
       kinds[record.kind] += 1
@@ -280,7 +333,8 @@ export function computeStats(backend, raw) {
     candidate: counts.candidate,
     archived: counts.archived,
     superseded: counts.superseded,
-    total: records.length,
+    total,
+    deleted,
     projects: backend.store.listProjects().length,
     kinds,
     currentProjectKey: current,
@@ -292,11 +346,14 @@ export function computeStats(backend, raw) {
     lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
     lastExtraction: typeof backend.getLastExtraction === 'function' ? backend.getLastExtraction() : null,
     usage: computeUsageSummary(backend.root),
+    capture: typeof backend.getCaptureStatus === 'function' ? backend.getCaptureStatus()?.counts ?? null : null,
+    captureStorage: typeof backend.getCaptureStatus === 'function' ? backend.getCaptureStatus()?.storage ?? null : null,
     captureEnabled: backend.config?.capture?.enabled === true,
     injectEnabled: backend.config?.inject?.enabled === true,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
     retentionEpisodeDays: backend.config?.retention?.episodeDays ?? null,
     maintenanceEnabled: backend.config?.maintenance?.enabled === true,
+    obsidianAutoSync: backend.config?.obsidian?.autoSync === true,
     obsidianVaultPath: backend.config?.obsidian?.vaultPath ?? null,
     obsidianFolder: backend.config?.obsidian?.folder ?? 'DSH Memory',
   }
@@ -346,7 +403,9 @@ export function computeActivity(backend, raw) {
 export function computeProfile(backend, raw) {
   const input = asObject(raw)
   const limit = optionalInteger(input.limit, 'limit', 10, 1, 50)
-  return deriveProfile(backend.store.listAll(), { limit, now: Date.now() })
+  return typeof backend.getProfile === 'function'
+    ? backend.getProfile(limit, Date.now())
+    : deriveProfile(backend.store.listAll(), { limit, now: Date.now() })
 }
 
 const PANEL_SETTINGS_FIELDS = Object.freeze([
@@ -355,6 +414,7 @@ const PANEL_SETTINGS_FIELDS = Object.freeze([
   'injectMaxTokens',
   'retentionEpisodeDays',
   'maintenanceEnabled',
+  'obsidianAutoSync',
   'obsidianVaultPath',
   'obsidianFolder',
 ])
@@ -651,6 +711,7 @@ function obsidianTargetFrom(backend, input) {
 
 /** Export memories to the Obsidian vault as one Markdown file each. */
 export function obsidianExport(backend, raw) {
+  if (backend.config?.obsidian?.autoSync && backend.syncService) return backend.syncService.run().then(r => ({ ...r, written:r.exported, updated:r.imported, imported:0, skipped:0, preview:[] }))
   const input = asObject(raw)
   const { vaultPath, folder } = obsidianTargetFrom(backend, input)
   let summary
@@ -669,6 +730,7 @@ export function obsidianExport(backend, raw) {
 
 /** Import Markdown notes back into memory (dryRun previews without writing). */
 export function obsidianImport(backend, raw) {
+  if (backend.config?.obsidian?.autoSync && backend.syncService) return backend.syncService.run().then(r => ({ ...r, written:r.exported, updated:r.imported, imported:0, skipped:0, preview:[] }))
   const input = asObject(raw)
   const { vaultPath, folder } = obsidianTargetFrom(backend, input)
   let summary
@@ -699,13 +761,25 @@ export function obsidianStatus(backend) {
     vaultPath: backend.config?.obsidian?.vaultPath ?? null,
     folder: backend.config?.obsidian?.folder ?? 'DSH Memory',
     lastSync: backend.root ? readSyncSummary(backend.root) : null,
+    automatic: backend.syncService?.status() ?? null,
   }
+}
+
+export function syncObsidian(backend) {
+  if (!backend.syncService) throw new PanelInputError('自动同步服务不可用')
+  return backend.syncService.run()
+}
+
+export function resolveObsidianConflict(backend, raw) {
+  if (!backend.syncService) throw new PanelInputError('自动同步服务不可用')
+  return backend.syncService.resolve(asObject(raw))
 }
 
 /** Topic-oriented graph for the panel's knowledge map. */
 export function knowledgeGraph(backend, raw) {
   const input = asObject(raw)
   let records
+  let totalRecords
   if (input.scope === 'all') {
     records = backend.store.listAll()
   } else {
@@ -727,8 +801,12 @@ export function knowledgeGraph(backend, raw) {
     ...localNotes.map((note) => ({ ...note, source: 'knowledge' })),
     ...vaultNotes,
   ]
-  const profile = deriveProfile(records, { limit: 12 })
-  return buildKnowledgeGraph(records, { maxNodes: limit, notes, traits: profile.traits })
+  const profile = input.scope === 'all' && typeof backend.getProfile === 'function'
+    ? backend.getProfile(12, Date.now())
+    : deriveProfile(records, { limit: 12 })
+  const visibleIds = new Set(records.map(r => r.id))
+  const scopedNotes = input.scope === 'all' ? notes : notes.filter(n => n.memoryId ? visibleIds.has(n.memoryId) : input.scope === 'global')
+  return buildKnowledgeGraph(records, { maxNodes: limit, notes: scopedNotes, traits: profile.traits, query: input.query, topic: input.topic, offset: input.offset, focus: input.focus })
 }
 
 /** Promote one memory into a long-term Markdown knowledge note. */
@@ -770,6 +848,7 @@ export function knowledgeSave(backend, raw) {
 
 /** Sync knowledge notes to/from the Obsidian vault. */
 export function knowledgeSync(backend, raw) {
+  if (backend.config?.obsidian?.autoSync && backend.syncService) return backend.syncService.run().then(r => ({ direction: 'sync', ...r, written:r.exported, skipped:0, conflicts:r.conflicts.length }))
   if (backend.root === null) throw new PanelInputError('memory root is unavailable')
   const input = asObject(raw)
   const direction = input.direction === 'import' ? 'import' : input.direction === 'export' ? 'export' : null

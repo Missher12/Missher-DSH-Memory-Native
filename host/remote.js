@@ -50,11 +50,15 @@ import {
   knowledgePromote,
   knowledgeSave,
   knowledgeSync,
+  captureRetry,
+  captureStatus,
   memoryHistory,
   mergeTopics,
   obsidianExport,
   obsidianImport,
   obsidianStatus,
+  syncObsidian,
+  resolveObsidianConflict,
   purgeMemory,
   restoreMemory,
   restoreRevision,
@@ -106,9 +110,15 @@ export function createPanelBackend(options) {
   const backend = {
     store: options.store,
     index: options.index,
+    synchronize: typeof options.synchronize === 'function' ? options.synchronize : null,
+    getProfile: typeof options.getProfile === 'function' ? options.getProfile : null,
+    getGraphRecords: typeof options.getGraphRecords === 'function' ? options.getGraphRecords : null,
     root: options.root ?? null,
+    syncService: options.obsidianSync ?? null,
     getLastInjection: typeof options.getLastInjection === 'function' ? options.getLastInjection : null,
     getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
+    getCaptureStatus: typeof options.getCaptureStatus === 'function' ? options.getCaptureStatus : null,
+    retryCapture: typeof options.retryCapture === 'function' ? options.retryCapture : null,
     get config() {
       return typeof options.getConfig === 'function' ? options.getConfig() : (options.config ?? {})
     },
@@ -135,18 +145,23 @@ export function createPanelBackend(options) {
   backend.obsidianExport = (input) => obsidianExport(backend, input)
   backend.obsidianImport = (input) => obsidianImport(backend, input)
   backend.obsidianStatus = () => obsidianStatus(backend)
+  backend.obsidianSync = () => syncObsidian(backend)
+  backend.obsidianResolve = input => resolveObsidianConflict(backend, input)
   backend.knowledgeGraph = (input) => knowledgeGraph(backend, input)
   backend.knowledgePromote = (input) => knowledgePromote(backend, input)
   backend.knowledgeList = () => knowledgeList(backend)
   backend.knowledgeNote = (input) => knowledgeNote(backend, input)
   backend.knowledgeSave = (input) => knowledgeSave(backend, input)
   backend.knowledgeSync = (input) => knowledgeSync(backend, input)
+  backend.captureStatus = () => captureStatus(backend)
+  backend.captureRetry = (input) => captureRetry(backend, input)
   const logCall = makePanelCallLogger(backend.root)
   for (const method of PANEL_METHODS) {
     const operation = backend[method]
     backend[method] = (input) => {
       const at = Date.now()
       try {
+        backend.synchronize?.()
         const value = operation(input)
         if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
           return value.then(
@@ -270,6 +285,10 @@ export async function bindTypertRemote(ctx, backend) {
       return this.delegate.obsidianImport(input)
     }
 
+    async obsidianSync(input) { return this.delegate.obsidianSync(input) }
+
+    async obsidianResolve(input) { return this.delegate.obsidianResolve(input) }
+
     async obsidianStatus(input) {
       return this.delegate.obsidianStatus(input)
     }
@@ -296,6 +315,14 @@ export async function bindTypertRemote(ctx, backend) {
 
     async knowledgeSync(input) {
       return this.delegate.knowledgeSync(input)
+    }
+
+    async captureStatus(input) {
+      return this.delegate.captureStatus(input)
+    }
+
+    async captureRetry(input) {
+      return this.delegate.captureRetry(input)
     }
   }
 

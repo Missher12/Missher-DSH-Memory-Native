@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildRecord, nextRevision } from '../host/records.js'
-import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, rankHits, recallQueries } from '../host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallQueries, recallQueryPlan } from '../host/recall.js'
+import { analyzeUserMessageControls } from '../host/user-controls.js'
 
 const NOW = 1_700_000_000_000
 const KEY = 'DSH-Memory-abc'
@@ -62,7 +63,7 @@ test('compileMemoryContext emits a compact bounded block', () => {
   assert.ok(block.estimatedTokens <= 600)
 })
 
-test('compileMemoryContext dedupes profile lines and caps item length', () => {
+test('compileMemoryContext dedupes profile lines and keeps complete memory statements', () => {
   const record = make({ content: '用户偏好简洁直接的表达方式' })
   const block = compileMemoryContext([{ record, score: 1 }], {
     maxTokens: 600,
@@ -75,9 +76,10 @@ test('compileMemoryContext dedupes profile lines and caps item length', () => {
   assert.equal(block.itemCount, 0)
   assert.doesNotMatch(block.text, /- \[事实\]/u)
   const long = make({ content: '这是一条非常长的记忆内容'.repeat(10) })
-  const clipped = compileMemoryContext([{ record: long, score: 1 }], { maxTokens: 600, itemMaxChars: 20 })
-  assert.ok(clipped !== null)
-  assert.match(clipped.text, /…/u)
+  const complete = compileMemoryContext([{ record: long, score: 1 }], { maxTokens: 600 })
+  assert.ok(complete !== null)
+  assert.match(complete.text, new RegExp(long.content, 'u'))
+  assert.doesNotMatch(complete.text, /…/u)
 })
 
 test('compileMemoryContext respects the token budget and drops content that cannot fit', () => {
@@ -91,6 +93,19 @@ test('compileMemoryContext respects the token budget and drops content that cann
   assert.ok(roomy !== null)
   assert.ok(roomy.ids.length >= 1)
   assert.ok(estimateTokens(roomy.text) <= 200)
+})
+
+test('compileMemoryContext keeps searching after an over-budget record without clipping facts', () => {
+  const long = make({ content: `仅适用于 staging，且不得用于生产环境；该限定必须保留。${'长配置说明'.repeat(35)}` })
+  const short = make({ content: '当前项目固定使用 pnpm 9' })
+  const block = compileMemoryContext([
+    { record: long, score: 2 },
+    { record: short, score: 1 },
+  ], { maxTokens: 100, maxItems: 2, itemMaxChars: 30 })
+  assert.ok(block !== null)
+  assert.deepEqual(block.ids, [short.id])
+  assert.match(block.text, /当前项目固定使用 pnpm 9/u)
+  assert.doesNotMatch(block.text, /staging|…/u)
 })
 
 test('compileMemoryContext returns null for no memories', () => {
@@ -154,6 +169,94 @@ test('recallQueries tries the last two user messages for follow-ups', () => {
   assert.deepEqual(recallQueries('继续', '召回门控怎么定', true), ['召回门控怎么定 继续', '召回门控怎么定', '继续'])
   assert.deepEqual(recallQueries('继续', undefined, true), ['继续'])
   assert.deepEqual(recallQueries('pnpm 版本', '召回门控怎么定', false), ['pnpm 版本'])
+})
+
+test('recallQueries keeps a compound root question and adds bounded subquestions', () => {
+  assert.deepEqual(recallQueries('pnpm 依赖和 Node 版本', undefined, false), [
+    'pnpm 依赖和 Node 版本', 'pnpm 依赖', 'Node 版本',
+  ])
+  assert.ok(recallQueries('pnpm 依赖、Node 版本、数据库版本、缓存版本', undefined, false).length <= 4)
+})
+
+test('recallQueryPlan carries an entity anchor into an attribute-only child', () => {
+  const plan = recallQueryPlan('甲设备温度和湿度', undefined, false)
+  assert.deepEqual(plan.map(({ query, role }) => [query, role]), [
+    ['甲设备温度和湿度', 'root'], ['甲设备温度', 'subquestion'], ['甲设备 湿度', 'subquestion'],
+  ])
+  assert.deepEqual(plan[1].entityTerms, plan[2].entityTerms)
+  const otherEntity = { record: { content: '乙设备湿度保持在 80% 以上' } }
+  assert.equal(matchesRecallEntity(otherEntity, plan[2].entityTerms), false)
+})
+
+test('recallQueryPlan extracts facts and shared attributes from the natural two-value prompt', () => {
+  const prompt = '这个项目的 pnpm 和 Node 版本分别是多少？只根据已有记忆，每项用“工具名：版本号”回答。没有依据的那项就写不记得。不要调用工具，也不要保存这次问答。'
+  const plan = recallQueryPlan(prompt, undefined, false)
+  const queries = plan.map((item) => item.query).join(' | ')
+  assert.ok(plan.length <= 4)
+  assert.match(queries, /pnpm 版本/u)
+  assert.match(queries, /Node 版本/u)
+  assert.doesNotMatch(queries, /分别|只根据|工具名|调用工具|保存这次问答|不记得/u)
+  const nodeQuery = plan.find((item) => item.role === 'subquestion' && /Node 版本/u.test(item.query))
+  assert.deepEqual(nodeQuery.entityTerms, ['node'])
+  for (const query of ['Node 和 pnpm 的版本分别是多少？', 'pnpm 和 Node 版本分别是多少？']) {
+    const local = recallQueries(query, undefined, false)
+    assert.ok(local.some((part) => /pnpm(?: 的| )版本/u.test(part)))
+    assert.ok(local.some((part) => /Node 版本/u.test(part)))
+  }
+})
+
+test('recall query cleaning keeps isolated and multi-sentence factual questions', () => {
+  assert.ok(recallQueries('Node 版本是多少？', undefined, false).some((query) => /Node 版本/u.test(query)))
+  const multi = recallQueries('pnpm 版本是多少？Node 版本是多少？只根据记忆回答。', undefined, false)
+  assert.ok(multi.some((query) => /pnpm 版本/u.test(query)))
+  assert.ok(multi.some((query) => /Node 版本/u.test(query)))
+  assert.ok(multi.length <= 4)
+  assert.doesNotMatch(multi.join(' '), /只根据记忆/u)
+})
+
+test('recall query cleaning strips leading directives but preserves the factual question', () => {
+  const questions = [
+    '只根据已有记忆回答：这个项目的 pnpm 和 Node 版本分别是多少？',
+    '不调用工具，只根据已有记忆回答：这个项目的 pnpm 和 Node 版本分别是多少？',
+    '只根据已有记忆回答这个项目的 pnpm 和 Node 版本分别是多少？',
+  ]
+  for (const prompt of questions) {
+    const plan = recallQueryPlan(prompt, undefined, false)
+    const queries = plan.map((item) => item.query).join(' | ')
+    assert.ok(plan.length <= 4)
+    assert.ok(plan.some((item) => /pnpm(?: 的| )版本/u.test(item.query)))
+    assert.ok(plan.some((item) => /Node 版本/u.test(item.query)))
+    assert.doesNotMatch(queries, /只根据|不调用工具/u)
+  }
+  assert.equal(analyzeUserMessageControls('不调用工具').retrievalQuery, '')
+})
+
+test('qualified gray evidence is eligible only for value questions and retains a numeric limit', () => {
+  const qualified = { record: { content: '运行时最低版本要求是 Node 22 以上' }, matched: ['node'] }
+  const unqualified = { record: { content: 'Node.js 运行时包含 3 个事件阶段' }, matched: ['node'] }
+  const port = { record: { content: 'Node 服务监听端口至少为 7419' }, matched: ['node'] }
+  const cache = { record: { content: 'Node 进程缓存上限是 64 MiB' }, matched: ['node'] }
+  assert.equal(isQualifiedValueCandidate(qualified, 'Node 版本'), true)
+  assert.equal(isQualifiedValueCandidate(unqualified, 'Node 版本'), false)
+  assert.equal(isQualifiedValueCandidate(port, 'Node 版本'), false)
+  assert.equal(isQualifiedValueCandidate(cache, 'Node 版本'), false)
+  assert.equal(isQualifiedValueCandidate(qualified, 'Node.js 如何处理异步任务'), false)
+  assert.equal(isQualifiedValueCandidate({ ...qualified, matched: ['异步'] }, 'Node 版本'), false)
+})
+
+test('subquestion attribute matching excludes Node port and cache limit from version evidence', () => {
+  const version = { record: { content: 'Node 版本最低要求是 22 以上' }, matched: ['node'] }
+  const port = { record: { content: 'Node 服务端口至少为 7419' }, matched: ['node'] }
+  const cache = { record: { content: 'Node 进程缓存上限是 64 MiB' }, matched: ['node'] }
+  assert.equal(matchesRecallAttribute(version, 'Node 版本'), true)
+  assert.equal(matchesRecallAttribute(port, 'Node 版本'), false)
+  assert.equal(matchesRecallAttribute(cache, 'Node 版本'), false)
+})
+
+test('profile injection is reserved for explicit preference questions', () => {
+  assert.equal(isPreferenceQuery('用户喜欢什么风格的回答'), true)
+  assert.equal(isPreferenceQuery('回复语言要求'), true)
+  assert.equal(isPreferenceQuery('pnpm 依赖和 Node 版本'), false)
 })
 
 test('rankHits boosts records matching the inferred topic', () => {

@@ -37,7 +37,8 @@ test('buildKnowledgeGraph groups by topic and links shared tags', () => {
 test('buildKnowledgeGraph truncates at the node limit', () => {
   const records = Array.from({ length: 20 }, (_, index) => record(`m${index}`, { topic: 't' + (index % 4) }))
   const graph = buildKnowledgeGraph(records, { maxNodes: 10 })
-  assert.equal(graph.memoryCount, 10)
+  assert.equal(graph.nodes.length, 10)
+  assert.equal(graph.memoryCount, 20)
   assert.equal(graph.truncated, true)
 })
 
@@ -59,13 +60,52 @@ test('promoteMemoryToKnowledge writes a markdown note and the graph includes it'
   assert.ok(graph.edges.some((edge) => edge.type === 'knowledge'))
 })
 
-test('buildKnowledgeGraph caps topic hubs and includes profile traits', () => {
+test('buildKnowledgeGraph preserves topic hubs and includes profile traits', () => {
   const records = Array.from({ length: 60 }, (_, index) => record(`m${index}`, { topic: 'topic' + index }))
   const traits = [{ id: 'trait_1', statement: '用户偏好简洁回答', confidence: 0.9, evidence: [{ id: 'm0' }] }]
   const graph = buildKnowledgeGraph(records, { traits })
-  assert.ok(graph.hubs.length <= 25)
+  assert.equal(graph.hubs.length, 61)
   assert.ok(graph.hubs.some((hub) => hub.label === '用户画像'))
-  assert.ok(graph.hubs.some((hub) => hub.label === '其他'))
+  assert.ok(graph.hubs.some((hub) => hub.label === 'topic59'))
   assert.ok(graph.nodes.some((node) => node.type === 'trait'))
   assert.ok(graph.edges.some((edge) => edge.type === 'profile'))
+})
+
+test('all small topics remain distinct and note links include notes, topics, unresolved targets and backlinks',()=>{
+ const records=Array.from({length:60},(_,i)=>record('m'+i,{topic:'topic'+i}))
+ const notes=[{file:'A.md',title:'# A',topic:'topic59',body:'[[B#标题|别名]] [[topic59]] [[未创建]]'}, {file:'B.md',title:'# B',topic:'topic58',body:'[[A]]'}]
+ const graph=buildKnowledgeGraph(records,{notes,maxNodes:100})
+ assert.equal(graph.hubs.filter(h=>h.label.startsWith('topic')).length,60)
+ assert.ok(graph.edges.some(e=>e.type==='wiki'&&e.source==='note:A.md'&&e.target==='note:B.md'))
+ assert.ok(graph.edges.some(e=>e.type==='wiki'&&e.source==='note:B.md'&&e.target==='note:A.md'))
+ assert.ok(graph.edges.some(e=>e.type==='wiki'&&e.target==='topic:topic59'))
+ assert.ok(graph.nodes.some(n=>n.type==='unresolved'&&n.label==='未创建'))
+ assert.ok(graph.edges.every(e=>e.source!==null&&e.target!==null))
+})
+
+test('graph pages and search reach every record beyond the old cap',()=>{
+ const records=Array.from({length:1250},(_,i)=>record('m'+i,{topic:'topic'+i,content:'完整记忆'+i}))
+ const ids=new Set()
+ for(let offset=0;offset<1250;offset+=200){
+  const graph=buildKnowledgeGraph(records,{maxNodes:200,offset})
+  assert.equal(graph.total,1250)
+  graph.nodes.forEach(n=>ids.add(n.id))
+ }
+ assert.equal(ids.size,1250)
+ const found=buildKnowledgeGraph(records,{maxNodes:10,query:'完整记忆1249'})
+ assert.ok(found.nodes.some(n=>n.id==='m1249'))
+})
+
+test('Obsidian paths, Markdown links and memory-note links resolve to the actual note',()=>{
+ const graph=buildKnowledgeGraph([record('mem_linkqa',{content:'记忆内也有 [[A note]] 双链',topic:'小主题'})],{notes:[
+  {file:'A note.md',title:'# A note',body:'[[DSH Memory/knowledge/B#说明|别名]] [另一个](B.md#说明)'},
+  {file:'B.md',title:'# B',body:'[[mem_linkqa]]'}]})
+ assert.ok(graph.edges.some(e=>e.source==='mem_linkqa'&&e.target==='note:A note.md'&&e.type==='wiki'))
+ assert.ok(graph.edges.some(e=>e.source==='note:A note.md'&&e.target==='note:B.md'&&e.type==='wiki'))
+ assert.ok(graph.edges.some(e=>e.source==='note:B.md'&&e.target==='mem_linkqa'&&e.type==='wiki'))
+})
+
+test('graph clamps a stale page after records disappear',()=>{
+ const graph=buildKnowledgeGraph([record('left')],{maxNodes:10,offset:100})
+ assert.equal(graph.offset,0);assert.equal(graph.nodes[0].id,'left');assert.equal(graph.nextOffset,null)
 })

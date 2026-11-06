@@ -605,8 +605,8 @@ test('Obsidian RPC exports and imports through the panel backend', (t) => {
   const exported = backend.obsidianExport({})
   assert.equal(exported.written, 1)
   const imported = backend.obsidianImport({ dryRun: true })
-  assert.equal(imported.preview.length, 1)
-  assert.equal(imported.preview[0].action, 'update')
+  assert.equal(imported.preview.length, 0)
+  assert.equal(imported.skipped, 1)
   const status = backend.obsidianStatus({})
   assert.equal(status.folder, 'DSH Memory')
   assert.ok(status.lastSync !== null)
@@ -699,4 +699,44 @@ test('knowledgeSync exports notes to the vault and imports them back', (t) => {
   assert.equal(imported.skipped, 1)
   assert.equal(imported.conflicts, 0)
   assert.throws(() => backend.knowledgeSync({ direction: 'sideways' }), PanelInputError)
+})
+
+test('stats exposes capture queue counts and retry reports the original reason', (t) => {
+  const { backend } = setup(t)
+  const counts = { total: 3, pending: 1, running: 0, done: 1, partial: 0, failed: 0, unknown: 1, skipped: 0 }
+  backend.getCaptureStatus = () => ({ counts, tasks: [] })
+  backend.retryCapture = (id, options) => ({ ok: true, id, confirmUnknown: options.confirmUnknown })
+  assert.deepEqual(backend.stats({}).capture, counts)
+  assert.deepEqual(backend.captureStatus().counts, counts)
+  const id = 'cap_' + 'a'.repeat(24)
+  assert.equal(backend.captureRetry({ taskId: id, confirmUnknown: true }).ok, true)
+  assert.throws(() => backend.captureRetry({ taskId: '' }), PanelInputError)
+})
+
+test('query pagination counts and returns matches beyond the 200-row page limit', (t) => {
+  const { store, index, backend } = setup(t)
+  for (let indexNumber = 0; indexNumber < 250; indexNumber += 1) {
+    const built = store.write({
+      scope: 'global', kind: 'fact', content: `批量分页验收事实编号 ${indexNumber}`,
+      confidence: 0.9, importance: 0.6,
+    })
+    assert.equal(built.ok, true)
+  }
+  backend.index = new MemoryIndex().rebuild(store.listAll())
+  const first = listMemories(backend, { scope: 'global', query: '批量分页验收', limit: 200, offset: 0 })
+  const second = listMemories(backend, { scope: 'global', query: '批量分页验收', limit: 200, offset: 200 })
+  assert.equal(first.total, 250)
+  assert.equal(first.items.length, 200)
+  assert.equal(second.items.length, 50)
+  assert.equal(new Set([...first.items, ...second.items].map((record) => record.id)).size, 250)
+})
+
+test('graph query bypasses the startup preview cap and pages the full store',t=>{
+ const {backend}=setup(t)
+ const rows=Array.from({length:1250},(_,i)=>({id:'mem_full'+i,kind:'fact',status:'active',scope:'global',projectKey:null,topic:'小主题'+i,content:'完整图谱 '+i,tags:[],updatedAt:i}))
+ backend.store={listAll:()=>rows}
+ backend.getGraphRecords=()=>({total:1250,records:rows.slice(0,1000)})
+ const page=backend.knowledgeGraph({scope:'all',query:'完整图谱 1249',limit:10})
+ assert.ok(page.nodes.some(n=>n.id==='mem_full1249'))
+ assert.equal(page.total,1)
 })

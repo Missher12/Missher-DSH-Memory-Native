@@ -18,6 +18,21 @@ export function isCjk(ch) {
   return typeof ch === 'string' && ch.length > 0 && CJK_PATTERN.test(ch)
 }
 
+// Code-point fast path avoids two regular-expression calls per input character
+// on the extraction/index hot path. Ranges mirror CJK_PATTERN/WORD_CHAR.
+function isCjkCode(code) {
+  return (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0x3040 && code <= 0x30ff) ||
+    (code >= 0xac00 && code <= 0xd7af)
+}
+
+function isWordCode(code) {
+  return (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) || code === 0x5f
+}
+
 /**
  * Tokenize one text into the term list the in-memory index stores.
  * @param {unknown} text
@@ -42,11 +57,14 @@ export function tokenize(text) {
     cjkRun = []
   }
 
-  for (const ch of input) {
-    if (isCjk(ch)) {
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.codePointAt(index)
+    const ch = String.fromCodePoint(code)
+    if (code > 0xffff) index += 1
+    if (isCjkCode(code)) {
       flushWord()
       cjkRun.push(ch)
-    } else if (WORD_CHAR.test(ch)) {
+    } else if (isWordCode(code)) {
       flushCjk()
       word += ch
     } else {

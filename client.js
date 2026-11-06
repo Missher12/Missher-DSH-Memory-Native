@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const NAMESPACE = 'dshMemory'
     const SERVICE_KEY = 'remote.' + NAMESPACE
     const NS = 'dsh-memory'
-    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync']
+    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry']
     const RESULT_TYPES = {
       list: 'MemoryList',
       stats: 'MemoryStats',
@@ -46,12 +46,16 @@ window.__ModuleLoader__.load({
       obsidianExport: 'MemoryObsidianExport',
       obsidianImport: 'MemoryObsidianImport',
       obsidianStatus: 'MemoryObsidianStatus',
+      obsidianSync: 'MemoryObsidianSync',
+      obsidianResolve: 'MemoryObsidianResolve',
       knowledgeGraph: 'MemoryKnowledgeGraph',
       knowledgePromote: 'MemoryKnowledgePromote',
       knowledgeList: 'MemoryKnowledgeList',
       knowledgeNote: 'MemoryKnowledgeNote',
       knowledgeSave: 'MemoryKnowledgeSave',
       knowledgeSync: 'MemoryKnowledgeSync',
+      captureStatus: 'MemoryCaptureStatus',
+      captureRetry: 'MemoryCaptureRetry',
     }
     const KINDS = ['preference', 'fact', 'decision', 'episode']
     const STATUSES = ['active', 'candidate', 'archived', 'superseded', 'deleted']
@@ -159,8 +163,15 @@ window.__ModuleLoader__.load({
         'library.exportResult': 'Exported {written} notes · skipped {skipped}.',
         'library.importResult': 'Imported {imported} · skipped {skipped} · conflicts {conflicts}.',
         'library.syncFailed': 'Sync failed: {reason}',
+        'settings.captureQueue': 'Capture tasks: {pending} pending · {partial} partial · {unknown} unknown · {failed} failed · {done} done',
+        'settings.captureStorage': 'Capture storage: {sources} sources · {size} · {tasks} tasks',
+        'settings.captureRetry': 'Recover next task',
+        'settings.captureUnknownConfirm': 'The previous request has no confirmed result. Retrying may charge again. Send a new request?',
+        'settings.captureNothing': 'No recoverable leaf remains. Check any in-flight or unresolved child task.',
+        'settings.captureRetried': 'Capture task queued for retry.',
+        'settings.captureRetryFailed': 'Retry failed: {reason}',
         'knowledge.title': 'Knowledge map',
-        'knowledge.hint': 'Topics are hubs; lines are shared tags. Drag to pan, scroll to zoom, click a node for details.',
+        'knowledge.hint': 'Topics stay distinct. Search or page through every node; select one to follow its outgoing links and backlinks.',
         'knowledge.search': 'Search memories or topics',
         'knowledge.zoomIn': 'Zoom in',
         'knowledge.zoomOut': 'Zoom out',
@@ -198,6 +209,29 @@ window.__ModuleLoader__.load({
         'settings.group.retention': 'Retention & maintenance',
         'settings.group.data': 'Data',
         'settings.group.obsidian': 'Obsidian',
+        "obsidian.auto": "Automatic two-way sync",
+        "obsidian.autoHint": "Syncs while DSH is running, about every 5 seconds after the previous pass. Save settings first. Conflicts keep both copies in _conflicts; replaced files are retained in _history.",
+        "obsidian.now": "Sync now",
+        "obsidian.syncStatus": "Last sync: {time} · sent {sent} · received {received} · conflicts {conflicts}",
+        "obsidian.notYet": "Not synced yet",
+        "obsidian.keepMemory": "Use Memory version (keep copies)",
+        "obsidian.keepVault": "Use Obsidian version (keep copies)",
+        "obsidian.deleted": "Deleted on this side",
+        "knowledge.pageInfo": "Showing {start}–{end} of {total}; search covers every page",
+        "knowledge.previous": "Previous page",
+        "knowledge.next": "Next page",
+        "knowledge.links": "Links and backlinks",
+        "knowledge.noLinks": "No links for this node",
+        "knowledge.outgoing": "Outgoing",
+        "knowledge.incoming": "Backlink",
+        "kind.unresolved": "Unresolved link",
+        "status.unresolved": "Target not found",
+        "knowledge.allTopics": "All topics",
+        "knowledge.edge.topic": "Topic",
+        "knowledge.edge.wiki": "Link",
+        "knowledge.edge.knowledge": "Knowledge",
+        "knowledge.edge.tag": "Shared tag",
+        "knowledge.edge.profile": "Profile evidence",
         'obsidian.vault': 'Vault path',
         'obsidian.folder': 'Folder',
         'obsidian.actions': 'Sync',
@@ -227,7 +261,7 @@ window.__ModuleLoader__.load({
         'settings.maintenance.none': 'Self-maintenance has not run yet',
         'settings.maintenance.summary': 'Last maintenance: archived {archived} · pruned {pruned} backups',
         'settings.inject.usage': 'Last injection {tokens}/{budget} tokens',
-        'settings.extract.usage': 'extraction {tokens} tokens',
+        'settings.extract.usage': 'extraction ~{tokens} tokens (estimated)',
         'usage.title': 'Token usage · last 7 days',
         'usage.total': '{tokens} tokens',
         'usage.inject': 'Injection',
@@ -236,6 +270,8 @@ window.__ModuleLoader__.load({
         'usage.day': '{date} · injection {inject} · extraction {extract}',
         'usage.avg': 'Avg {tokens}/turn',
         'usage.overBudget': '{count} over budget',
+        'usage.provider': 'Provider usage: {calls} calls · input {input} · output {output} · total {total}',
+        'usage.providerMissing': 'Provider did not return usage; the chart shows estimated prompt tokens only.',
         'view.profile': 'User profile',
         'profile.hint': 'Durable preferences grouped with evidence. Expand a row to see the source memories.',
         'profile.empty': 'No stable preferences yet.',
@@ -416,8 +452,14 @@ window.__ModuleLoader__.load({
         'library.exportResult': '已导出 {written} 条 · 跳过 {skipped} 条。',
         'library.importResult': '已导入 {imported} 条 · 跳过 {skipped} 条 · 冲突 {conflicts} 条。',
         'library.syncFailed': '同步失败：{reason}',
+        'settings.captureQueue': '提炼任务：待处理 {pending} · 待补全 {partial} · 未知 {unknown} · 失败 {failed} · 完成 {done}',
+        'settings.captureRetry': '恢复下一项',
+        'settings.captureUnknownConfirm': '上一次请求结果未知，重新发送可能再次计费。确认发送新请求？',
+        'settings.captureNothing': '没有可恢复的末级任务，请检查正在运行或结果未知的子任务。',
+        'settings.captureRetried': '已加入重试队列。',
+        'settings.captureRetryFailed': '重试失败：{reason}',
         'knowledge.title': '\u77e5\u8bc6\u56fe\u8c31',
-        'knowledge.hint': '\u4e3b\u9898\u662f\u4e2d\u5fc3\u8282\u70b9\uff0c\u8fde\u7ebf\u662f\u5171\u4eab\u6807\u7b7e\u3002\u62d6\u52a8\u5e73\u79fb\u3001\u6eda\u8f6e\u7f29\u653e\uff0c\u70b9\u51fb\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
+        'knowledge.hint': '每个主题独立保留。搜索或翻页可查看全部节点；点击节点可沿出链、反链继续查看。',
         'knowledge.search': '\u641c\u7d22\u8bb0\u5fc6\u6216\u4e3b\u9898',
         'knowledge.zoomIn': '\u653e\u5927',
         'knowledge.zoomOut': '\u7f29\u5c0f',
@@ -455,6 +497,29 @@ window.__ModuleLoader__.load({
         'settings.group.retention': '\u4fdd\u7559\u4e0e\u7ef4\u62a4',
         'settings.group.data': '\u6570\u636e',
         'settings.group.obsidian': 'Obsidian',
+        "obsidian.auto": "自动双向同步",
+        "obsidian.autoHint": "DSH 运行期间，上一轮结束后约每 5 秒同步一次。请先保存设置。冲突双方保留在 _conflicts，替换过的文件保留在 _history。",
+        "obsidian.now": "立即同步",
+        "obsidian.syncStatus": "最近同步：{time} · 导出 {sent} · 导入 {received} · 冲突 {conflicts}",
+        "obsidian.notYet": "尚未同步",
+        "obsidian.keepMemory": "使用 Memory 版本（保留副本）",
+        "obsidian.keepVault": "使用 Obsidian 版本（保留副本）",
+        "obsidian.deleted": "这一侧已删除",
+        "knowledge.pageInfo": "显示 {start}–{end} / 共 {total} 项；搜索覆盖全部分页",
+        "knowledge.previous": "上一页",
+        "knowledge.next": "下一页",
+        "knowledge.links": "出链与反链",
+        "knowledge.noLinks": "当前节点没有关联链接",
+        "knowledge.outgoing": "出链",
+        "knowledge.incoming": "反链",
+        "kind.unresolved": "未解析链接",
+        "status.unresolved": "目标尚不存在",
+        "knowledge.allTopics": "全部主题",
+        "knowledge.edge.topic": "主题",
+        "knowledge.edge.wiki": "双链",
+        "knowledge.edge.knowledge": "知识关联",
+        "knowledge.edge.tag": "共同标签",
+        "knowledge.edge.profile": "画像依据",
         'obsidian.vault': 'Vault \u8def\u5f84',
         'obsidian.folder': '\u6587\u4ef6\u5939',
         'obsidian.actions': '\u540c\u6b65',
@@ -484,7 +549,7 @@ window.__ModuleLoader__.load({
         'settings.maintenance.none': '\u5c1a\u672a\u6267\u884c\u81ea\u7ef4\u62a4',
         'settings.maintenance.summary': '\u4e0a\u6b21\u81ea\u7ef4\u62a4\uff1a\u5f52\u6863 {archived} \u6761 \u00b7 \u6e05\u7406\u5907\u4efd {pruned} \u4efd',
         'settings.inject.usage': '\u4e0a\u6b21\u6ce8\u5165 {tokens}/{budget} token',
-        'settings.extract.usage': '\u62bd\u53d6 {tokens} token',
+        'settings.extract.usage': '\u62bd\u53d6\u7ea6 {tokens} token\uff08\u4f30\u7b97\uff09',
         'usage.title': 'Token 用量 · 近 7 天',
         'usage.total': '共 {tokens} token',
         'usage.inject': '注入',
@@ -493,6 +558,8 @@ window.__ModuleLoader__.load({
         'usage.day': '{date} · 注入 {inject} · 抽取 {extract}',
         'usage.avg': '平均 {tokens}/回合',
         'usage.overBudget': '{count} 次超预算',
+        'usage.provider': 'Provider \u7528\u91cf\uff1a{calls} \u6b21 \u00b7 \u8f93\u5165 {input} \u00b7 \u8f93\u51fa {output} \u00b7 \u603b {total}',
+        'usage.providerMissing': 'Provider \u672a\u8fd4\u56de\u7528\u91cf\uff1b\u56fe\u8868\u4ec5\u5c55\u793a\u4f30\u7b97\u7684 prompt token\u3002',
         'view.profile': '\u7528\u6237\u753b\u50cf',
         'profile.hint': '\u7531\u6301\u4e45\u504f\u597d\u5f52\u7eb3\uff0c\u6bcf\u6761\u90fd\u5e26\u8bc1\u636e\u3002',
         'profile.empty': '\u8fd8\u6ca1\u6709\u7a33\u5b9a\u504f\u597d\u3002',
@@ -579,8 +646,9 @@ window.__ModuleLoader__.load({
       'html:has(.dsh-memory-root),body:has(.dsh-memory-root){scrollbar-gutter:stable}',
       '*:has(.dsh-memory-root){scrollbar-gutter:stable}',
       '.dsh-memory-root{max-width:760px;display:flex;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;container-type:inline-size}',
-      '.dsh-memory-heading{margin:0;font-size:18px;font-weight:600;line-height:26px}',
-      '.dsh-memory-intro{margin:0;color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));font-size:13px}',
+      '.dsh-memory-header{display:flex;flex-direction:column;gap:6px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;margin-bottom:16px}',
+      '.dsh-memory-heading{margin:0;font-size:20px;font-weight:600;line-height:28px}',
+      '.dsh-memory-intro{margin:0;color:var(--dsw-alias-label-secondary);font-size:13px}',
       '.dsh-memory-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}',
       '.dsh-memory-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-1,#fff));border-radius:12px;overflow:hidden}',
       '.dsh-memory-metric{min-width:0;padding:11px 8px 10px}',
@@ -602,7 +670,7 @@ window.__ModuleLoader__.load({
       '.dsh-memory-palette-swatch i{width:4px;height:11px;border-radius:2px;background:var(--dsh-memory-swatch,#2f6df6)}',
       '.dsh-memory-palette-swatch i:first-child{opacity:.35}',
       '.dsh-memory-palette-swatch i:nth-child(2){opacity:.65}',
-      '.dsh-memory-palette-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:20;min-width:176px;display:flex;flex-direction:column;gap:2px;padding:6px;border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));border-radius:10px;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-2,#fff));box-shadow:0 8px 24px rgba(0,0,0,.14)}',
+      '.dsh-memory-palette-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:20;min-width:176px;display:flex;flex-direction:column;gap:2px;padding:6px;border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));border-radius:20px;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-2,#fff));box-shadow:var(--dsw-elevation-soft)}',
       '.dsh-memory-palette-option{display:flex;align-items:center;gap:8px;border:0;background:0 0;border-radius:6px;padding:5px 7px;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary,#1f2328);cursor:pointer;text-align:left}',
       '.dsh-memory-palette-option:hover,.dsh-memory-palette-option[aria-selected="true"]{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}',
       '.dsh-memory-palette-dot{display:inline-block;width:12px;height:12px;border-radius:3px}',
@@ -635,20 +703,20 @@ window.__ModuleLoader__.load({
       '.dsh-memory-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border:.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l1));border-radius:var(--dsw-radius-xs, 4px);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
       '.dsh-memory-chip[data-on="true"]{color:var(--dsw-alias-state-success-primary)}',
       '.dsh-memory-chip[data-on="false"]{color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))}',
-      '.dsh-memory-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}',
-      '.dsh-memory-toolbar .dsh-memory-field{flex:0 0 auto;min-width:0}',
+      '.dsh-memory-toolbar{display:flex;flex-wrap:wrap;gap:0;align-items:stretch;flex-direction:column;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;margin-top:28px}',
+      '.dsh-memory-toolbar .dsh-memory-field{flex:0 0 auto;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,42%);align-items:center;gap:12px;padding:10px 0;border-bottom:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-toolbar .dsh-memory-select{max-width:118px;min-width:0;font-size:12px}',
-      '.dsh-memory-toolbar-actions{display:flex;gap:6px;margin-left:auto;padding-bottom:1px;flex:0 0 auto}',
+      '.dsh-memory-toolbar-actions{display:flex;gap:6px;margin-left:0;padding-bottom:1px;flex:0 0 auto;justify-content:flex-end;width:100%;padding:12px 0}',
       '.dsh-memory-field{display:flex;flex-direction:column;gap:3px;min-width:0}',
       '.dsh-memory-field-label{color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));font-size:11px;line-height:16px}',
       '.dsh-memory-field-grow{flex:1 1 0;min-width:110px}',
-      '.dsh-memory-input,.dsh-memory-select{box-sizing:border-box;height:28px;padding:3px 8px;border:.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l1));border-radius:var(--dsw-radius-sm, 6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:20px}',
+      '.dsh-memory-input,.dsh-memory-select{box-sizing:border-box;height:32px;padding:0 24px;border:.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l1));border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:center;text-align-last:center}',
       '.dsh-memory-textarea{box-sizing:border-box;min-height:28px;padding:4px 8px;border:.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l1));border-radius:var(--dsw-radius-sm, 6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:20px}',
       '.dsh-memory-input::placeholder,.dsh-memory-textarea::placeholder{color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))}',
       '.dsh-memory-input:focus-visible,.dsh-memory-select:focus-visible,.dsh-memory-textarea:focus-visible,.dsh-memory-button:focus-visible{outline:var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary)));outline-offset:1px}',
       '.dsh-memory-textarea{resize:vertical;min-height:96px;line-height:1.5}',
       '.dsh-memory-spacer{flex:1 1 auto}',
-      '.dsh-memory-button{box-sizing:border-box;min-height:28px;padding:3px 10px;border:.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l1));border-radius:var(--dsw-radius-sm, 6px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:20px;cursor:pointer}',
+      '.dsh-memory-button{box-sizing:border-box;min-height:32px;padding:3px 10px;border:.5px solid var(--dsw-alias-border-l3, var(--dsw-alias-border-l1));border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:20px;cursor:pointer}',
       '.dsh-memory-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2))}',
       '.dsh-memory-button:disabled{opacity:.55;cursor:default}',
       '.dsh-memory-button[data-primary="true"]{border-color:transparent;background:var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-inverted, #ffffff)}',
@@ -700,31 +768,38 @@ window.__ModuleLoader__.load({
       '.dsh-memory-chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l1,rgba(127,127,127,.2));border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px}',
       '.dsh-memory-chip[data-on="true"]{color:var(--dsw-alias-state-success-primary,#1a9e63);background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a9e63) 10%,transparent);border-color:transparent}',
       '.dsh-memory-activity.dsh-memory-card{margin-top:14px;padding:14px;border:.5px solid var(--dsh-memory-card-border);border-radius:var(--dsh-memory-radius);background:var(--dsh-memory-card-bg)}',
-      '.dsh-memory-toolbar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(110px,1.6fr) auto;gap:8px;align-items:end;margin-top:14px;padding:14px;border:.5px solid var(--dsh-memory-card-border);border-radius:var(--dsh-memory-radius);background:var(--dsh-memory-card-bg)}',
-      '.dsh-memory-toolbar .dsh-memory-field{min-width:0}',
+      '.dsh-memory-toolbar{display:flex;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(110px,1.6fr) auto;gap:0;align-items:stretch;margin-top:28px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;flex-direction:column}',
+      '.dsh-memory-toolbar .dsh-memory-field{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,42%);align-items:center;gap:12px;padding:10px 0;border-bottom:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-toolbar .dsh-memory-select{width:100%;max-width:none}',
       '.dsh-memory-toolbar[data-narrow="true"]{grid-template-columns:repeat(12,minmax(0,1fr))}',
       '.dsh-memory-toolbar[data-narrow="true"] .dsh-memory-field{grid-column:span 4}',
       '.dsh-memory-toolbar[data-narrow="true"] .dsh-memory-field-grow{grid-column:span 6}',
-      '.dsh-memory-toolbar[data-narrow="true"] .dsh-memory-toolbar-actions{grid-column:span 6;justify-content:stretch;gap:8px;margin-left:0}',
-      '.dsh-memory-toolbar[data-narrow="true"] .dsh-memory-toolbar-actions .dsh-memory-button{flex:1;min-width:0;padding:0 6px}',
-      '.dsh-memory-list{display:flex;flex-direction:column;gap:10px;margin:10px 0 0;padding:0;list-style:none}',
-      '.dsh-memory-row{padding:12px 14px;border:.5px solid var(--dsh-memory-card-border);border-left:2px solid var(--dsh-memory-kind-color,var(--dsw-alias-border-l2,#d3d8e0));border-radius:var(--dsh-memory-radius);background:var(--dsh-memory-card-bg)}',
-      '.dsh-memory-row[data-kind="decision"]{--dsh-memory-kind-color:#6d4aff}',
-      '.dsh-memory-row[data-kind="fact"]{--dsh-memory-kind-color:#0d7f8c}',
-      '.dsh-memory-row[data-kind="preference"]{--dsh-memory-kind-color:#2f6df6}',
-      '.dsh-memory-row[data-kind="episode"]{--dsh-memory-kind-color:#b7791f}',
-      '.dsh-memory-row-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
-      '.dsh-memory-kind{display:inline-flex;align-items:center;height:20px;padding:0 6px;border:0;border-radius:5px;font-size:11px;line-height:20px;color:var(--dsh-memory-kind-color,var(--dsw-alias-label-secondary));background:color-mix(in srgb,var(--dsh-memory-kind-color,#6b7280) 12%,transparent)}',
-      '.dsh-memory-status-pill{display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:5px;font-size:11px;line-height:20px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary))}',
-      '.dsh-memory-status-pill[data-status="active"]{color:var(--dsw-alias-state-success-primary,#1a9e63);background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a9e63) 12%,transparent)}',
-      '.dsh-memory-status-pill[data-status="candidate"]{color:var(--dsw-alias-state-warn-primary,#b7791f);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#b7791f) 12%,transparent)}',
-      '.dsh-memory-row-meta{display:flex;gap:10px;margin-left:auto;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11.5px}',
-      '.dsh-memory-content{margin:6px 0 0;font-size:13px;line-height:1.55}',
-      '.dsh-memory-row-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:9px}',
-      '.dsh-memory-tags{display:flex;gap:6px;margin:0;padding:0;list-style:none;flex-wrap:wrap}',
-      '.dsh-memory-tag{height:20px;padding:0 6px;border-radius:5px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:20px}',
-      '.dsh-memory-row-actions{display:flex;gap:4px;align-items:center;margin-left:auto}',
+      '.dsh-memory-toolbar[data-narrow="true"] .dsh-memory-toolbar-actions{grid-column:span 6;justify-content:flex-end;gap:8px;margin-left:0;width:100%;padding:12px 0}',
+      '.dsh-memory-toolbar[data-narrow="true"] .dsh-memory-toolbar-actions .dsh-memory-button{flex:1;min-width:0;padding:0 6px;border-radius:8px;min-height:32px}',
+      '.dsh-memory-list{display:flex;flex-direction:column;gap:0;margin:10px 0 0;padding:0 16px;list-style:none;background:var(--dsh-memory-card-bg);border:1px solid var(--dsh-memory-card-border);border-radius:12px}',
+      '.dsh-memory-row{min-width:0;display:flex;flex-direction:column;gap:9px;padding:15px 0 12px;border:0;border-radius:0;background:transparent}',
+      '.dsh-memory-row+.dsh-memory-row{border-top:1px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-row-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}',
+      '.dsh-memory-row .dsh-memory-kind{display:inline-flex;align-items:center;gap:6px;height:auto;padding:0;border:0;border-radius:0;background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600;line-height:18px}',
+      '.dsh-memory-row .dsh-memory-status-pill{padding:0 6px;border:0;border-radius:5px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:18px}',
+      '.dsh-memory-row .dsh-memory-status-pill[data-status="active"]{color:var(--dsw-alias-label-secondary);background:transparent;padding:0}',
+      '.dsh-memory-row .dsh-memory-status-pill[data-status="active"]::before{content:"";display:inline-block;width:5px;height:5px;margin-right:5px;border-radius:50%;background:var(--dsw-alias-state-success-primary,currentColor)}',
+      '.dsh-memory-row-select{display:inline-flex;align-items:center;position:relative;cursor:pointer}.dsh-memory-row-select::before{content:"";position:absolute;inset:-6px}',
+      '.dsh-memory-row[data-selected="true"]{background:color-mix(in srgb,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)) 5%,transparent)}',
+      '.dsh-memory-row .dsh-memory-status-pill[data-status="candidate"]{color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-secondary))}',
+      '.dsh-memory-row-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}',
+      '.dsh-memory-row-meta>span+span::before{content:"·";margin-right:8px}',
+      '.dsh-memory-content{margin:0 0 0 23px;min-width:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:1.6;overflow-wrap:anywhere}',
+      '.dsh-memory-row-foot{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;margin:0 0 0 23px;min-width:0}',
+      '.dsh-memory-tags{display:flex;flex-wrap:wrap;align-items:center;gap:5px;min-width:0;max-width:100%;margin:0;padding:0;list-style:none}',
+      '.dsh-memory-row .dsh-memory-tag{flex:0 1 auto;max-width:100%;box-sizing:border-box;height:auto;padding:1px 7px;border:0;border-radius:5px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:normal;overflow-wrap:anywhere}',
+      '.dsh-memory-row-actions{display:flex;flex:0 1 auto;flex-wrap:wrap;gap:2px;align-items:center;max-width:100%;margin-left:auto}',
+      '.dsh-memory-row-actions .dsh-memory-button{width:auto;min-height:28px;height:auto;padding:2px 7px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:20px}',
+      '.dsh-memory-row-actions .dsh-memory-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-primary)}',
+      '.dsh-memory-row-actions .dsh-memory-button-primary{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-label-primary));background:var(--dsw-alias-bg-layer-2)}',
+      '.dsh-memory-row-actions .dsh-memory-button[data-danger="true"][data-confirming="true"],.dsh-memory-row-actions .dsh-memory-button[data-danger="true"]:hover:not(:disabled){color:var(--dsw-alias-state-error-primary,var(--dsw-alias-label-error));background:color-mix(in srgb,currentColor 9%,transparent)}',
+      '.dsh-memory-row-actions .dsh-memory-button[data-danger="true"]{margin-left:4px}',
+      '@container (max-width:480px){.dsh-memory-list{padding-inline:12px}.dsh-memory-row .dsh-memory-row-meta{flex-basis:100%;margin-left:23px}.dsh-memory-row-foot{row-gap:6px}.dsh-memory-row-actions{margin-left:0}.dsh-memory-row-foot>.dsh-memory-tags{flex-basis:100%}}',
       '.dsh-memory-button-primary{background:var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,#2f6df6));border-color:transparent;color:#fff}',
       '.dsh-memory-button-primary:hover{filter:brightness(1.05)}',
       '.dsh-memory-muted{margin:14px 0 0}',
@@ -763,7 +838,7 @@ window.__ModuleLoader__.load({
       '.dsh-memory-hero-insights{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;width:100%;min-width:0}',
       '.dsh-memory-settings{display:flex;flex-direction:column}',
       '.dsh-memory-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}',
-      '.dsh-memory-settings-title{margin:0;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-primary,#1f2328)}',
+      '.dsh-memory-settings-title{margin:0;font-size:16px;font-weight:600;line-height:24px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-sub{margin:3px 0 0;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
       '.dsh-memory-settings-badge{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;height:22px;padding:0 9px;border-radius:999px;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsh-memory-card-border);color:var(--dsw-alias-label-secondary,#6b7280);font-size:11px;white-space:nowrap}',
       '.dsh-memory-settings-badge i{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary,#34a26b)}',
@@ -777,14 +852,14 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-group-title{margin:0 0 2px;font-size:11px;font-weight:500;line-height:16px;letter-spacing:.02em;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
       '.dsh-memory-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;box-sizing:border-box;min-height:48px;font-size:13.5px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-row+.dsh-memory-settings-row{border-top:.5px solid var(--dsh-memory-card-border)}',
-      '.dsh-memory-settings-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-      '.dsh-memory-view-tabs{display:flex;flex-wrap:wrap;justify-content:center;width:100%;box-sizing:border-box;gap:2px;padding:3px;margin:10px 0 2px;border:.5px solid var(--dsh-memory-card-border);border-radius:9px;background:var(--dsw-alias-bg-layer-2,#f5f6f8)}',
-      '.dsh-memory-view-tab{border:0;background:transparent;padding:5px 9px;border-radius:7px;font:inherit;font-size:12px;font-weight:600;line-height:18px;white-space:nowrap;flex:0 0 auto;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
-      '.dsh-memory-view-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);box-shadow:0 1px 2px rgba(0,0,0,.08)}',
+      '.dsh-memory-settings-label{min-width:0;overflow:visible;text-overflow:clip;white-space:normal;flex:1 1 auto}',
+      '.dsh-memory-view-tabs{display:flex;flex-wrap:wrap;justify-content:flex-start;width:100%;box-sizing:border-box;gap:4px;padding:0;margin:0 0 24px;border:0;border-radius:0;background:transparent}',
+      '.dsh-memory-view-tab{border:0;background:transparent;min-height:28px;padding:5px 9px;border-radius:6px;font:inherit;font-size:12px;font-weight:500;line-height:18px;white-space:nowrap;flex:0 0 auto;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
+      '.dsh-memory-view-tab[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary,#1f2328);box-shadow:none}',
       '.dsh-memory-knowledge{display:flex;flex-direction:column;gap:8px}',
       '.dsh-memory-knowledge-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}',
       '.dsh-memory-graph-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-      '.dsh-memory-graph-search{box-sizing:border-box;height:28px;min-width:0;flex:1 1 180px;max-width:280px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px}',
+      '.dsh-memory-graph-search{box-sizing:border-box;height:28px;min-width:0;flex:1 1 180px;max-width:280px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 24px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;text-align:center}',
       '.dsh-memory-graph-btn{box-sizing:border-box;height:28px;min-width:28px;padding:0 8px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;cursor:pointer}',
       '.dsh-memory-graph-chip{box-sizing:border-box;height:28px;padding:0 10px;border:.5px solid var(--dsw-alias-state-business-primary,#2f6df6);border-radius:14px;background:transparent;color:var(--dsw-alias-state-business-primary,#2f6df6);font:inherit;font-size:12px;cursor:pointer}',
       '.dsh-memory-graph-wrap{overflow:hidden;border:.5px solid var(--dsh-memory-card-border);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);cursor:grab;touch-action:none}',
@@ -817,20 +892,20 @@ window.__ModuleLoader__.load({
       '.dsh-memory-profile-line{display:flex;align-items:baseline;gap:8px;min-width:0}',
       '.dsh-memory-profile-line .dsh-memory-profile-statement{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-memory-profile-evidence{list-style:none;margin:4px 0 0 0;padding:0 0 0 28px;display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}',
-      '.dsh-memory-settings-input{box-sizing:border-box;flex:0 1 240px;min-width:0;height:28px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px}',
+      '.dsh-memory-settings-input{box-sizing:border-box;flex:0 1 42%;min-width:112px;height:28px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 24px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;text-align:center;line-height:30px}',
       '.dsh-memory-settings-control{display:flex;align-items:center;gap:8px;flex:0 0 auto}',
       '.dsh-memory-switch{position:relative;flex:0 0 auto;width:40px;height:22px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.35));cursor:pointer;transition:background .18s ease}',
-      '.dsh-memory-switch[aria-checked="true"]{background:var(--dsw-alias-state-business-primary,#2f6df6)}',
-      '.dsh-memory-switch-knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.24);transition:transform .18s cubic-bezier(.3,.7,.3,1)}',
+      '.dsh-memory-switch[aria-checked="true"]{background:var(--dsw-alias-label-primary,#111113)}',
+      '.dsh-memory-switch-knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 1px 2px rgba(16,24,40,.24);transition:transform .18s cubic-bezier(.3,.7,.3,1)}',
       '.dsh-memory-switch[aria-checked="true"] .dsh-memory-switch-knob{transform:translateX(18px)}',
       '.dsh-memory-switch:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#2f6df6);outline-offset:2px}',
-      '.dsh-memory-number{display:inline-flex;align-items:center;flex:0 0 auto;box-sizing:border-box;height:32px;padding:0 9px 0 2px;border:.5px solid var(--dsh-memory-card-border);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff)}',
+      '.dsh-memory-number{display:block;align-items:center;flex:0 0 auto;box-sizing:border-box;height:32px;padding:0;border:.5px solid var(--dsh-memory-card-border);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);position:relative;width:176px;max-width:48%;min-width:124px}',
       '.dsh-memory-number:focus-within{border-color:var(--dsw-alias-state-business-primary,#2f6df6)}',
-      '.dsh-memory-number input{width:66px;height:30px;border:0;background:transparent;color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:13px;text-align:right;outline:none;font-variant-numeric:tabular-nums}',
-      '.dsh-memory-number em{color:var(--dsw-alias-label-tertiary,#6b7280);font-style:normal;font-size:11px;margin-left:5px}',
+      '.dsh-memory-number input{box-sizing:border-box;width:100%;height:100%;border:0;background:transparent;color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:13px;text-align:center;outline:none;font-variant-numeric:tabular-nums;padding:0 36px;line-height:30px;appearance:textfield}',
+      '.dsh-memory-number em{color:var(--dsw-alias-label-tertiary,#6b7280);font-style:normal;font-size:11px;margin-left:0;position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none}',
       '.dsh-memory-settings-buttons{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}',
-      '.dsh-memory-settings .dsh-memory-button{height:32px;padding:0 12px;font-size:12px}',
-      '.dsh-memory-settings-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:0;padding-top:20px;border-top:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-settings .dsh-memory-button{height:32px;padding:0 12px;font-size:12px;border-radius:8px;min-height:32px}',
+      '.dsh-memory-settings-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px;padding:16px 0 0;border:0;border-radius:0;background:transparent;box-shadow:none;border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-state{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px}',
       '.dsh-memory-settings-state i{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary,#34a26b)}',
       '.dsh-memory-settings-state[data-dirty="true"] i{background:var(--dsw-alias-state-warning-primary,#d97706)}',
@@ -848,6 +923,7 @@ window.__ModuleLoader__.load({
       '.dsh-memory-trend-date{font-size:10px;line-height:14px;color:var(--dsw-alias-label-tertiary,#9ca0a6);font-variant-numeric:tabular-nums;white-space:nowrap}',
       '.dsh-memory-trend-empty{margin:12px 0 0;font-size:11.5px;line-height:17px;color:var(--dsw-alias-label-tertiary,#9ca0a6)}',
       '.dsh-memory-trend-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#6b7280);font-variant-numeric:tabular-nums}',
+      '.dsh-memory-trend-note{margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
       '.dsh-memory-trend-legend span{display:inline-flex;align-items:center;gap:5px}',
       '.dsh-memory-trend-legend i{width:8px;height:8px;border-radius:2px;background:var(--dsw-alias-state-business-primary,#2f6df6)}',
       '.dsh-memory-trend-legend i[data-kind="extract"]{opacity:.34}',
@@ -872,9 +948,22 @@ window.__ModuleLoader__.load({
       '.dsh-memory-diff-del{color:var(--dsw-alias-state-danger-primary,#c0392b)}',
       '.dsh-memory-diff-add{color:var(--dsw-alias-state-success-primary,#1a9e63)}',
       '.dsh-memory-file-input{display:none}',
+      '.dsh-memory-input,.dsh-memory-select,.dsh-memory-textarea,.dsh-memory-settings-input,.dsh-memory-graph-search{border-radius:10px;text-align:center;padding:0 24px}',
+      '.dsh-memory-view-tab:focus-visible,.dsh-memory-palette-trigger:focus-visible,.dsh-memory-palette-option:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
       '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}.dsh-memory-settings-head{gap:10px}.dsh-memory-settings-row{gap:12px}}',
-      '@container (max-width:430px){.dsh-memory-settings-row{min-height:46px}.dsh-memory-settings .dsh-memory-button{height:30px;padding:0 10px}}',
+      '@container (max-width:430px){.dsh-memory-settings-row{min-height:46px}.dsh-memory-settings .dsh-memory-button{height:30px;padding:0 10px;border-radius:8px;min-height:32px}}',
       '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}}',
+      '.dsh-memory-root>.dsh-memory-card,.dsh-memory-root>.dsh-memory-profile{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}',
+      '.dsh-memory-settings{padding:0;border:0;border-radius:0;background:transparent}',
+      '.dsh-memory-settings-head{margin-bottom:16px}',
+      '.dsh-memory-toolbar .dsh-memory-input,.dsh-memory-toolbar .dsh-memory-select{width:100%;max-width:none;min-width:0}',
+      '.dsh-memory-field-label{font-size:13px;color:var(--dsw-alias-label-primary)}',
+      '.dsh-memory-textarea{align-content:center;text-align:center}',
+      '.dsh-memory-number input::-webkit-inner-spin-button,.dsh-memory-number input::-webkit-outer-spin-button{appearance:none;margin:0}',
+      '.dsh-memory-bulk-actions{display:flex;flex-wrap:wrap;gap:8px;width:100%}',
+      '.dsh-memory-danger-actions{display:flex;justify-content:flex-end;flex-basis:100%;margin-top:8px;padding-top:8px;border-top:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-button[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}',
+      '.dsh-memory-button[data-danger="true"]:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}',
     ].join('\n')
 
     function messageOf(error) {
@@ -1477,7 +1566,44 @@ window.__ModuleLoader__.load({
             h('span', null, t('usage.avg', {
               tokens: String(number(totals.injectCalls) === 0 ? 0 : Math.round(injectTokens / number(totals.injectCalls))),
             })),
-            overBudget > 0 ? h('em', null, t('usage.overBudget', { count: String(overBudget) })) : null))
+            overBudget > 0 ? h('em', null, t('usage.overBudget', { count: String(overBudget) })) : null),
+        usage === null || usage === undefined
+          ? null
+          : h('p', { className: 'dsh-memory-trend-note' }, number(totals.extractProviderCalls) > 0
+            ? t('usage.provider', {
+              calls: String(totals.extractProviderCalls),
+              input: String(totals.extractProviderInputTokens ?? '—'),
+              output: String(totals.extractProviderOutputTokens ?? '—'),
+              total: String(totals.extractProviderTotalTokens ?? '—'),
+            })
+            : t('usage.providerMissing')))
+    }
+
+    function ObsidianSyncStatus({call,t,disabled}) {
+      const [status,setStatus]=React.useState(null), [error,setError]=React.useState(''), [busy,setBusy]=React.useState(false)
+      React.useEffect(()=>{
+        if(!call)return undefined
+        let stopped=false
+        const read=()=>call('obsidianStatus',{}).then(v=>{if(!stopped){setStatus(v.automatic);setError('')}}).catch(e=>{if(!stopped)setError(messageOf(e))})
+        void read();const timer=setInterval(read,5000)
+        return()=>{stopped=true;clearInterval(timer)}
+      },[call])
+      const action=async(method,input={})=>{
+        setBusy(true)
+        try{await call(method,input);const current=await call('obsidianStatus',{});setStatus(current.automatic);setError('')}
+        catch(e){setError(messageOf(e))}finally{setBusy(false)}
+      }
+      return h('div',null,
+        h('p',{className:'dsh-memory-muted',role:'status'},status?.at?t('obsidian.syncStatus',{time:new Date(status.at).toLocaleTimeString(),sent:status.exported,received:status.imported,conflicts:status.conflicts.length}):t('obsidian.notYet')),
+        h('button',{type:'button',className:'dsh-memory-button',disabled:disabled||busy||!call,onClick:()=>action('obsidianSync')},t('obsidian.now')),
+        error?h('p',{className:'dsh-memory-error-text',role:'alert'},error):null,
+        (status?.errors??[]).map((e,i)=>h('p',{key:i,className:'dsh-memory-error-text'},e.file+': '+e.message)),
+        (status?.conflicts??[]).map(c=>h('details',{key:c.key,className:'dsh-memory-card'},
+          h('summary',null,c.file+' · '+c.reason),
+          h('p',{className:'dsh-memory-muted',style:{overflowWrap:'anywhere'}},c.copies.join('\n')),
+          h('strong',null,'Memory'),h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},c.memoryText??t('obsidian.deleted')),
+          h('strong',null,'Obsidian'),h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},c.vaultText??t('obsidian.deleted')),
+          h('div',{className:'dsh-memory-settings-buttons'},['memory','vault'].map(side=>h('button',{key:side,type:'button',className:'dsh-memory-button',disabled:disabled||busy,onClick:()=>action('obsidianResolve',{key:c.key,token:c.token,side})},t(side==='memory'?'obsidian.keepMemory':'obsidian.keepVault')))))))
     }
 
     function SettingsCard(props) {
@@ -1488,10 +1614,12 @@ window.__ModuleLoader__.load({
       const [retention, setRetention] = React.useState('90')
       const [maintenance, setMaintenance] = React.useState(true)
       const [obsidianVault, setObsidianVault] = React.useState('')
+      const [obsidianAuto, setObsidianAuto] = React.useState(false)
       const [obsidianFolder, setObsidianFolder] = React.useState('DSH Memory')
       const [baseline, setBaseline] = React.useState(null)
       const [savedAt, setSavedAt] = React.useState('')
       const [busy, setBusy] = React.useState(false)
+      const [retrying, setRetrying] = React.useState(false)
       const [notice, setNotice] = React.useState('')
       const fileRef = React.useRef(null)
 
@@ -1503,6 +1631,7 @@ window.__ModuleLoader__.load({
           budget: String(stats.injectMaxTokens ?? 360),
           retention: String(stats.retentionEpisodeDays ?? 90),
           maintenance: stats.maintenanceEnabled !== false,
+          obsidianAuto: stats.obsidianAutoSync === true,
           obsidianVault: typeof stats.obsidianVaultPath === 'string' ? stats.obsidianVaultPath : '',
           obsidianFolder: typeof stats.obsidianFolder === 'string' ? stats.obsidianFolder : 'DSH Memory',
         }
@@ -1511,6 +1640,7 @@ window.__ModuleLoader__.load({
         setBudget(next.budget)
         setRetention(next.retention)
         setMaintenance(next.maintenance)
+        setObsidianAuto(next.obsidianAuto)
         setObsidianVault(next.obsidianVault)
         setObsidianFolder(next.obsidianFolder)
         setBaseline(next)
@@ -1522,12 +1652,15 @@ window.__ModuleLoader__.load({
         budget !== baseline.budget ||
         retention !== baseline.retention ||
         maintenance !== baseline.maintenance ||
+        obsidianAuto !== baseline.obsidianAuto ||
         obsidianVault !== baseline.obsidianVault ||
         obsidianFolder !== baseline.obsidianFolder
       )
       const last = stats === null ? null : stats.maintenance
       const injection = stats === null || stats.lastInjection === null || stats.lastInjection === undefined ? null : stats.lastInjection
       const extraction = stats === null || stats.lastExtraction === null || stats.lastExtraction === undefined ? null : stats.lastExtraction
+      const captureQueue = stats === null || stats.capture === null || stats.capture === undefined ? null : stats.capture
+      const captureStorage = stats === null || stats.captureStorage === null || stats.captureStorage === undefined ? null : stats.captureStorage
       const usage = (injection === null
         ? ''
         : ' · ' + t('settings.inject.usage', { tokens: String(injection.tokens ?? 0), budget: String(injection.budget ?? 360) })) +
@@ -1541,7 +1674,7 @@ window.__ModuleLoader__.load({
         ? t('settings.state.dirty')
         : (savedAt === '' ? t('settings.state.saved') : t('settings.state.savedAt', { time: savedAt }))
 
-      const snapshot = () => ({ capture, inject, budget, retention, maintenance, obsidianVault, obsidianFolder })
+      const snapshot = () => ({ capture, inject, budget, retention, maintenance, obsidianAuto, obsidianVault, obsidianFolder })
       const save = async () => {
         if (call === null || busy || !dirty) return
         setBusy(true)
@@ -1553,6 +1686,7 @@ window.__ModuleLoader__.load({
             injectMaxTokens: Math.max(100, Number(budget) || 360),
             retentionEpisodeDays: Math.max(0, Number(retention) || 0),
             maintenanceEnabled: maintenance,
+            obsidianAutoSync: obsidianAuto,
             obsidianVaultPath: obsidianVault.trim(),
             obsidianFolder: obsidianFolder.trim(),
           })
@@ -1566,6 +1700,29 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }
+      const retryCapture = async () => {
+        if (call === null || retrying) return
+        setRetrying(true)
+        setNotice('')
+        try {
+          const status = await call('captureStatus', {})
+          const tasks = (Array.isArray(status?.tasks) ? status.tasks : []).filter(entry => !entry.continuationTaskIds?.length)
+          const task = ['partial', 'failed', 'pending', 'unknown'].map(state => tasks.find(entry => entry.status === state)).find(Boolean)
+          if (task === undefined) {
+            setNotice(t('settings.captureNothing'))
+            return
+          }
+          if (task.status === 'unknown' && !window.confirm(t('settings.captureUnknownConfirm'))) return
+          await call('captureRetry', { taskId: task.id, confirmUnknown: task.status === 'unknown' })
+          setNotice(t('settings.captureRetried'))
+          onSaved()
+        } catch (failure) {
+          setNotice(t('settings.captureRetryFailed', { reason: messageOf(failure) }))
+        } finally {
+          setRetrying(false)
+        }
+      }
+
       const exportAll = async () => {
         if (call === null || busy) return
         setBusy(true)
@@ -1651,51 +1808,10 @@ window.__ModuleLoader__.load({
         disabled: busy,
       }, label)
 
-      const obsidianExport = async () => {
-        if (call === null || busy) return
-        setBusy(true)
-        setNotice('')
-        try {
-          const result = await call('obsidianExport', {
-            vaultPath: obsidianVault.trim(),
-            folder: obsidianFolder.trim(),
-          })
-          setNotice(t('obsidian.exported', { written: String(result.written ?? 0), skipped: String(result.skipped ?? 0) }))
-          onSaved()
-        } catch (failure) {
-          setNotice(t('obsidian.failed', { reason: messageOf(failure) }))
-        } finally {
-          setBusy(false)
-        }
-      }
-      const obsidianImport = async () => {
-        if (call === null || busy) return
-        setBusy(true)
-        setNotice('')
-        try {
-          const result = await call('obsidianImport', {
-            vaultPath: obsidianVault.trim(),
-            folder: obsidianFolder.trim(),
-            dryRun: false,
-          })
-          setNotice(t('obsidian.imported', {
-            imported: String(result.imported ?? 0),
-            updated: String(result.updated ?? 0),
-            skipped: String(result.skipped ?? 0),
-          }))
-          onSaved()
-        } catch (failure) {
-          setNotice(t('obsidian.failed', { reason: messageOf(failure) }))
-        } finally {
-          setBusy(false)
-        }
-      }
-
       return h('section', { className: 'dsh-memory-card dsh-memory-settings' },
         h('div', { className: 'dsh-memory-settings-head' },
           h('div', null,
-            h('h3', { className: 'dsh-memory-settings-title' }, t('settings.title')),
-            h('p', { className: 'dsh-memory-settings-sub' }, summary)),
+            h('h3', { className: 'dsh-memory-settings-title' }, t('view.' + group))),
           h('span', { className: 'dsh-memory-settings-badge', 'data-off': maintenance ? 'false' : 'true' },
             h('i', null),
             maintenance ? t('settings.badge.on') : t('settings.badge.off'))),
@@ -1704,6 +1820,27 @@ window.__ModuleLoader__.load({
             switchRow(t('settings.capture'), capture, setCapture),
             switchRow(t('settings.inject'), inject, setInject),
             numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value)),
+            captureQueue === null
+              ? null
+              : h('div', { className: 'dsh-memory-settings-row' },
+                h('span', { className: 'dsh-memory-settings-label' }, t('settings.captureQueue', {
+                  pending: String(captureQueue.pending ?? 0),
+                  partial: String(captureQueue.partial ?? 0),
+                  unknown: String(captureQueue.unknown ?? 0),
+                  failed: String(captureQueue.failed ?? 0),
+                  done: String(captureQueue.done ?? 0),
+                })),
+                (captureQueue.unknown ?? 0) + (captureQueue.failed ?? 0) + (captureQueue.pending ?? 0) + (captureQueue.partial ?? 0) > 0
+                  ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: retryCapture, disabled: retrying }, t('settings.captureRetry'))
+                  : null),
+            captureStorage === null
+              ? null
+              : h('div', { className: 'dsh-memory-settings-row' },
+                h('span', { className: 'dsh-memory-settings-label' }, t('settings.captureStorage', {
+                  sources: String(captureStorage.sources?.count ?? 0),
+                  size: String(((captureStorage.bytes ?? 0) / 1024 / 1024).toFixed(1)) + ' MB',
+                  tasks: String(captureStorage.tasks ?? 0),
+                }))),
             h(TokenTrend, { usage: stats === null ? null : stats.usage, t }))
           : group === 'retention'
             ? h('div', { className: 'dsh-memory-settings-group' },
@@ -1725,13 +1862,11 @@ window.__ModuleLoader__.load({
                       onChange: importAll,
                     }))))
               : h('div', { className: 'dsh-memory-settings-group' },
+                switchRow(t('obsidian.auto'), obsidianAuto, setObsidianAuto),
+                h('p', { className:'dsh-memory-muted' }, t('obsidian.autoHint')),
                 textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
                 textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
-                h('div', { className: 'dsh-memory-settings-row' },
-                  h('span', { className: 'dsh-memory-settings-label' }, t('obsidian.actions')),
-                  h('div', { className: 'dsh-memory-settings-buttons' },
-                    button(t('obsidian.export'), obsidianExport),
-                    button(t('obsidian.import'), obsidianImport)))),
+                h(ObsidianSyncStatus, {call,t,disabled:busy||dirty})),
         notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
         h('div', { className: 'dsh-memory-settings-foot' },
           h('span', { className: 'dsh-memory-settings-state', 'data-dirty': dirty ? 'true' : 'false' },
@@ -1746,16 +1881,21 @@ window.__ModuleLoader__.load({
     }
 
     function KnowledgeView(props) {
-      const { graph, loading, error, t, onPromote, promoting } = props
+      const { graph, loading, error, t, onPromote, promoting, request, onRequest } = props
       const [selected, setSelected] = React.useState(null)
       const [scale, setScale] = React.useState(1)
       const [offset, setOffset] = React.useState({ x: 0, y: 0 })
-      const [query, setQuery] = React.useState('')
-      const [topicFilter, setTopicFilter] = React.useState(null)
+      const query=request.query??'', topicFilter=request.topic??null
+      const setQuery=value=>onRequest({query:value,topic:null,offset:0,focus:null})
+      const setTopicFilter=value=>onRequest({...request,topic:typeof value==='function'?value(topicFilter):value,offset:0,focus:null})
       const dragRef = React.useRef(null)
-      if (loading) return h('p', { className: 'dsh-memory-muted', role: 'status' }, t('knowledge.loading'))
+      React.useEffect(()=>{
+        if(graph?.focus)setSelected(graph.nodes.find(n=>n.id===graph.focus)??null)
+        else setSelected(null)
+      },[graph])
+      if (loading && graph===null) return h('p', { className: 'dsh-memory-muted', role: 'status' }, t('knowledge.loading'))
       if (error !== '') return h('p', { className: 'dsh-memory-error-text', role: 'alert' }, t('knowledge.failed', { reason: error }))
-      if (graph === null || !Array.isArray(graph.nodes) || graph.nodes.length === 0) {
+      if (graph === null || !Array.isArray(graph.nodes)) {
         return h('div', { className: 'dsh-memory-empty' }, h('p', { className: 'dsh-memory-empty-title' }, t('knowledge.empty')))
       }
       const width = 800
@@ -1785,20 +1925,13 @@ window.__ModuleLoader__.load({
           })
         })
       })
-      const lowered = query.trim().toLowerCase()
-      const matches = (node) => {
-        if (topicFilter !== null && node.topic !== topicFilter) return false
-        if (lowered === '') return true
-        return (String(node.label) + ' ' + String(node.topic) + ' ' + String(node.kind)).toLowerCase().includes(lowered)
-      }
-      const visibleNodes = graph.nodes.filter(matches)
-      const visibleIds = new Set(visibleNodes.map((node) => node.id))
-      const visibleHubs = topicFilter === null ? hubs : hubs.filter((hub) => hub.label === topicFilter)
+      const visibleNodes=graph.nodes
+      const visibleIds=new Set(visibleNodes.map(n=>n.id))
+      const visibleHubs=hubs
       const resetView = () => {
         setScale(1)
         setOffset({ x: 0, y: 0 })
-        setQuery('')
-        setTopicFilter(null)
+        onRequest({query:'',topic:null,offset:0,focus:null})
       }
       const zoomBy = (factor) => {
         setScale((value) => Math.min(3, Math.max(0.4, Math.round(value * factor * 100) / 100)))
@@ -1876,7 +2009,9 @@ window.__ModuleLoader__.load({
           }),
           h('title', null, node.label))
       })
-      const resultRows = (query.trim() === '' && topicFilter === null) ? [] : visibleNodes.slice(0, 20)
+      const resultRows = visibleNodes
+      const follow=id=>id.startsWith('topic:')?onRequest({query:'',topic:id.slice(6),offset:0,focus:null}):onRequest({query:'',topic:null,offset:0,focus:id})
+      const related=selected===null?[]:graph.edges.filter(e=>e.source===selected.id||e.target===selected.id)
       return h('section', { className: 'dsh-memory-card dsh-memory-knowledge' },
         h('div', { className: 'dsh-memory-knowledge-head' },
           h('h3', { className: 'dsh-memory-settings-title' }, t('knowledge.title')),
@@ -1921,11 +2056,14 @@ window.__ModuleLoader__.load({
           },
             h('g', { transform: 'translate(' + offset.x + ' ' + offset.y + ') scale(' + scale + ')' },
               edgeNodes, hubNodes, memoryNodes))),
+        h('div',{className:'dsh-memory-load-row'},
+          h('span',{className:'dsh-memory-muted',role:'status'},loading?t('knowledge.loading'):t('knowledge.pageInfo',{start:graph.total?graph.offset+1:0,end:graph.offset+graph.nodes.length,total:graph.total})),
+          h('button',{type:'button',className:'dsh-memory-button',disabled:loading||graph.offset===0,onClick:()=>onRequest({...request,offset:Math.max(0,graph.offset-graph.limit),focus:null})},t('knowledge.previous')),
+          h('button',{type:'button',className:'dsh-memory-button',disabled:loading||graph.nextOffset===null,onClick:()=>onRequest({...request,offset:graph.nextOffset,focus:null})},t('knowledge.next'))),
         resultRows.length === 0 ? null : h('ul', { className: 'dsh-memory-graph-results' }, resultRows.map((node) => h('li', { key: node.id },
           h('button', { type: 'button', className: 'dsh-memory-graph-result', onClick: () => setSelected(node) },
             h('span', null, String(node.label).slice(0, 56)),
             h('span', { className: 'dsh-memory-muted' }, node.topic))))),
-        graph.truncated === true ? h('p', { className: 'dsh-memory-muted' }, t('knowledge.truncated')) : null,
         h('div', { className: 'dsh-memory-knowledge-detail' },
           h('h4', { className: 'dsh-memory-settings-group-title' }, t('knowledge.detail')),
           selected === null
@@ -1937,6 +2075,11 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'dsh-memory-muted' }, t('knowledge.status') + ': ' + t('status.' + selected.status)),
                 h('span', { className: 'dsh-memory-muted' }, t('knowledge.topic') + ': ' + selected.topic),
                 h('span', { className: 'dsh-memory-muted' }, t('knowledge.confidence') + ': ' + Number(selected.confidence).toFixed(2))),
+              h('h4',null,t('knowledge.links')),
+              related.length===0?h('p',{className:'dsh-memory-muted'},t('knowledge.noLinks')):h('ul',null,related.map((e,i)=>{
+                const outgoing=e.source===selected.id, target=outgoing?e.target:e.source
+                return h('li',{key:i},h('button',{type:'button',className:'dsh-memory-graph-result',onClick:()=>follow(target)},t(outgoing?'knowledge.outgoing':'knowledge.incoming')+' · '+t('knowledge.edge.'+e.type)+' · '+(outgoing?e.targetLabel:e.sourceLabel)))
+              })),
               selected.type === 'memory'
                 ? h('button', {
                   type: 'button',
@@ -2280,6 +2423,7 @@ window.__ModuleLoader__.load({
       const [graph, setGraph] = React.useState(null)
       const [graphLoading, setGraphLoading] = React.useState(false)
       const [graphError, setGraphError] = React.useState('')
+      const [graphRequest,setGraphRequest]=React.useState({query:'',topic:null,offset:0,focus:null})
       const [graphRefresh, setGraphRefresh] = React.useState(0)
       const [promotingNode, setPromotingNode] = React.useState(false)
       const [library, setLibrary] = React.useState(null)
@@ -2384,14 +2528,15 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (view !== 'knowledge' || call === null) return undefined
         let cancelled = false
-        setGraphLoading(true)
-        setGraphError('')
-        call('knowledgeGraph', { scope })
-          .then((next) => { if (!cancelled) setGraph(next) })
-          .catch((failure) => { if (!cancelled) setGraphError(messageOf(failure)) })
-          .finally(() => { if (!cancelled) setGraphLoading(false) })
-        return () => { cancelled = true }
-      }, [view, call, scope, graphRefresh])
+        const timer=setTimeout(()=>{
+          setGraphLoading(true);setGraphError('')
+          call('knowledgeGraph', { scope, limit:100, ...graphRequest })
+            .then((next) => { if (!cancelled) setGraph(next) })
+            .catch((failure) => { if (!cancelled) setGraphError(messageOf(failure)) })
+            .finally(() => { if (!cancelled) setGraphLoading(false) })
+        },200)
+        return () => { cancelled = true;clearTimeout(timer) }
+      }, [view, call, scope, graphRefresh, graphRequest])
 
       React.useEffect(() => {
         const listed = data === null ? null : data.list
@@ -2564,20 +2709,18 @@ window.__ModuleLoader__.load({
       }
 
       const heading = h('h2', { className: 'dsh-memory-heading' }, t('panel.title'))
-      const intro = h('p', { className: 'dsh-memory-intro' }, t('panel.intro'))
+      const header = h('header', { className: 'dsh-memory-header' }, heading)
 
       if (transport.status === 'loading') {
 
       return h('div', { className: 'dsh-memory-root' },
-          heading,
-          intro,
+          header,
           h('p', { className: 'dsh-memory-muted', role: 'status' }, t('list.loading')))
       }
 
       if (transport.status === 'unavailable') {
         return h('div', { className: 'dsh-memory-root' },
-          heading,
-          intro,
+          header,
           h('div', { className: 'dsh-memory-error-card', role: 'alert' },
             h('h3', { className: 'dsh-memory-error-title' }, t('list.unavailable.title')),
             h('p', { className: 'dsh-memory-error-text' }, t('list.unavailable.body')),
@@ -2652,18 +2795,16 @@ window.__ModuleLoader__.load({
 
       if (view === 'knowledge') {
         return h('div', { className: 'dsh-memory-root' },
-          heading,
-          intro,
+          header,
           viewTabs,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
-          h(KnowledgeView, { graph, loading: graphLoading, error: graphError, t, onPromote: promoteNode, promoting: promotingNode }))
+          h(KnowledgeView, { graph, loading: graphLoading, error: graphError, t, onPromote: promoteNode, promoting: promotingNode, request:graphRequest,onRequest:setGraphRequest }))
       }
 
       if (view === 'profile') {
         return h('div', { className: 'dsh-memory-root' },
-          heading,
-          intro,
+          header,
           viewTabs,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
@@ -2672,8 +2813,7 @@ window.__ModuleLoader__.load({
 
       if (view === 'library') {
         return h('div', { className: 'dsh-memory-root' },
-          heading,
-          intro,
+          header,
           viewTabs,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
@@ -2694,8 +2834,7 @@ window.__ModuleLoader__.load({
 
       if (view === 'capture' || view === 'retention' || view === 'data' || view === 'obsidian') {
         return h('div', { className: 'dsh-memory-root' },
-          heading,
-          intro,
+          header,
           viewTabs,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
@@ -2769,8 +2908,7 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setTopicSuggestOpen(false) }, t('actions.close')))) : null
 
       return h('div', { className: 'dsh-memory-root' },
-        heading,
-        intro,
+        header,
         viewTabs,
         h('section', { className: 'dsh-memory-hero-cards' },
           h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
@@ -2913,24 +3051,24 @@ window.__ModuleLoader__.load({
                   : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('archive') }, t('bulk.archive')),
                 status === 'deleted'
                   ? null
-                  : h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete')),
+                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
+                h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setSelected([]) }, t('bulk.clear')),
                 status === 'deleted'
                   ? null
-                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
-                h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setSelected([]) }, t('bulk.clear')))),
+                  : h('div', { className: 'dsh-memory-danger-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete'))))),
             h('ul', { key: 'list', className: 'dsh-memory-list' },
             items.map((record) => {
               const isConfirming = confirmingId === record.id
               const actionBusy = busy !== ''
-              return h('li', { key: record.id, className: 'dsh-memory-row', 'data-kind': record.kind },
+              return h('li', { key: record.id, className: 'dsh-memory-row', 'data-kind': record.kind, 'data-selected': selected.includes(record.id) },
                 h('div', { className: 'dsh-memory-row-head' },
-                  h('input', {
+                  h('label', { className: 'dsh-memory-row-select' }, h('input', {
                     type: 'checkbox',
                     className: 'dsh-memory-select-box',
                     checked: selected.includes(record.id),
                     onChange: () => toggleSelected(record.id),
-                    'aria-label': t('bulk.selectRow'),
-                  }),
+                    'aria-label': t('bulk.selectRow') + ' · ' + record.content.slice(0, 44),
+                  })),
                   h('span', { className: 'dsh-memory-kind', 'data-kind': record.kind }, t('kind.' + record.kind)),
                   h('span', { className: 'dsh-memory-status-pill', 'data-status': record.status }, t('status.' + record.status)),
                   record.pinned === true ? h('span', { className: 'dsh-memory-pin' }, t('row.pinned')) : null,
@@ -2964,6 +3102,7 @@ window.__ModuleLoader__.load({
                         type: 'button',
                         className: 'dsh-memory-button',
                         'data-danger': 'true',
+                        'data-confirming': purgingId === record.id,
                         onClick: () => purge(record),
                         disabled: actionBusy,
                       }, purgingId === record.id ? t('actions.purgeConfirm') : t('actions.purge')),
@@ -3009,6 +3148,7 @@ window.__ModuleLoader__.load({
                         type: 'button',
                         className: 'dsh-memory-button',
                         'data-danger': 'true',
+                        'data-confirming': isConfirming,
                         onClick: () => {
                           if (!isConfirming) {
                             setConfirmingId(record.id)

@@ -16,7 +16,7 @@ test('resolveConfig returns the defaults for missing or invalid input', () => {
     assert.equal(config.inject.maxItems, 6)
     assert.equal(config.inject.minScore, 0.2)
     assert.equal(config.extraction.maxInputTokens, 12000)
-    assert.equal(config.extraction.maxOutputTokens, 400)
+    assert.equal(config.extraction.maxOutputTokens, 4096)
     assert.equal(config.retention.episodeDays, 90)
     assert.equal(config.consolidation.auto, false)
     assert.equal(config.dataDir, null)
@@ -98,7 +98,7 @@ test('resolveConfig trims provider/model strings and turns blanks into null', ()
     model: 'deepseek-flash',
     reasoningEffort: null,
     maxInputTokens: 12000,
-    maxOutputTokens: 400,
+    maxOutputTokens: 4096,
   })
   assert.equal(resolveConfig({ extraction: { provider: '   ', model: '' } }).extraction.provider, null)
   assert.equal(resolveConfig({ extraction: { provider: '   ', model: '' } }).extraction.model, null)

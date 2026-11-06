@@ -98,3 +98,29 @@ test('computeUsageSummary returns null without a root', () => {
   assert.equal(computeUsageSummary(null), null)
   assert.equal(computeUsageSummary(''), null)
 })
+
+test('provider usage is kept separate and missing values stay null', (t) => {
+  const root = setup(t)
+  appendUsage(root, {
+    at: NOW,
+    kind: 'extract',
+    tokens: 812,
+    items: 2,
+    applied: 2,
+    calls: 1,
+    outcome: 'done',
+    usage: { inputTokens: 600, outputTokens: 90, totalTokens: 690 },
+  })
+  const usage = readUsage(root, { now: NOW })
+  assert.equal(usage.totals.extractTokens, 812)
+  assert.equal(usage.totals.extractProviderCalls, 1)
+  assert.equal(usage.totals.extractProviderInputTokens, 600)
+  assert.equal(usage.totals.extractProviderTotalTokens, 690)
+
+  const empty = setup(t)
+  appendUsage(empty, { at: NOW, kind: 'extract', tokens: 100, items: 1, calls: 1 })
+  const missing = readUsage(empty, { now: NOW })
+  assert.equal(missing.totals.extractProviderCalls, 0)
+  assert.equal(missing.totals.extractProviderInputTokens, null)
+  assert.equal(missing.totals.extractProviderTotalTokens, null)
+})

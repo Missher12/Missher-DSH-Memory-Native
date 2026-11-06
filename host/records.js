@@ -19,6 +19,7 @@ export const CONTENT_LIMITS = Object.freeze({ min: 5, max: 500 })
 export const TAG_LIMITS = Object.freeze({ maxCount: 8, maxLength: 40 })
 export const TOPIC_LIMIT = 48
 export const SOURCE_REF_LIMIT = 12
+export const EVIDENCE_ROLES = Object.freeze(['user', 'assistant', 'unknown'])
 
 const SENSITIVE_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/u,
@@ -73,7 +74,7 @@ function normalizeTags(tags) {
   return out
 }
 
-function normalizeSourceRefs(refs) {
+export function normalizeSourceRefs(refs) {
   if (!Array.isArray(refs)) return []
   const out = []
   for (const ref of refs.slice(0, SOURCE_REF_LIMIT)) {
@@ -81,8 +82,45 @@ function normalizeSourceRefs(refs) {
     const sessionId = typeof ref.sessionId === 'string' ? ref.sessionId : undefined
     const messageId = typeof ref.messageId === 'string' ? ref.messageId : undefined
     const toolCallId = typeof ref.toolCallId === 'string' ? ref.toolCallId : undefined
-    if (sessionId === undefined && messageId === undefined && toolCallId === undefined) continue
-    out.push({ ...(sessionId === undefined ? {} : { sessionId }), ...(messageId === undefined ? {} : { messageId }), ...(toolCallId === undefined ? {} : { toolCallId }) })
+    const sourceId = typeof ref.sourceId === 'string' ? ref.sourceId : undefined
+    if (sessionId === undefined && messageId === undefined && toolCallId === undefined && sourceId === undefined) continue
+    const role = EVIDENCE_ROLES.includes(ref.role) ? ref.role : undefined
+    const sourceKind = typeof ref.sourceKind === 'string' && ref.sourceKind !== '' ? ref.sourceKind : 'unknown'
+    const sourceForm = typeof ref.sourceForm === 'string' && ref.sourceForm !== '' ? ref.sourceForm : undefined
+    const at = typeof ref.at === 'number' && Number.isFinite(ref.at) ? Math.floor(ref.at) : undefined
+    const excerpt = typeof ref.excerpt === 'string' && ref.excerpt !== ''
+      ? normalizeContent(ref.excerpt).slice(0, 240)
+      : undefined
+    const precise = sourceId && Number.isSafeInteger(ref.from) && ref.from >= 0 &&
+      Number.isSafeInteger(ref.to) && ref.to > ref.from && ref.to - ref.from <= 240 &&
+      typeof ref.excerpt === 'string' && ref.excerpt.length === ref.to - ref.from
+    out.push({
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(messageId === undefined ? {} : { messageId }),
+      ...(toolCallId === undefined ? {} : { toolCallId }),
+      ...(sourceId === undefined ? {} : { sourceId }),
+      ...(role === undefined ? {} : { role }),
+      sourceKind,
+      ...(sourceForm === undefined ? {} : { sourceForm }),
+      ...(at === undefined ? {} : { at }),
+      ...(precise ? { from: ref.from, to: ref.to, excerpt: ref.excerpt } : excerpt === undefined ? {} : { excerpt }),
+    })
+  }
+  return out
+}
+
+/** Merge evidence refs without losing the earlier history (newest first). */
+export function mergeSourceRefs(...groups) {
+  const seen = new Set()
+  const out = []
+  for (const group of groups) {
+    for (const ref of normalizeSourceRefs(group)) {
+      const key = [ref.sourceId ?? '', ref.sessionId ?? '', ref.messageId ?? '', ref.role ?? '', ref.sourceKind ?? '', ref.from ?? '', ref.to ?? '', ref.excerpt ?? ''].join('\u0000')
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(ref)
+      if (out.length >= SOURCE_REF_LIMIT) return out
+    }
   }
   return out
 }
@@ -114,6 +152,9 @@ export function buildRecord(input, options = {}) {
   if (scope === 'project' && projectKey === '') return { ok: false, reason: 'project scope requires a projectKey' }
 
   const now = typeof options.now === 'number' ? options.now : Date.now()
+  const observedAt = typeof options.observedAt === 'number' && Number.isFinite(options.observedAt)
+    ? Math.floor(options.observedAt)
+    : now
   const confidence = clamp01(source.confidence, 0.5)
   const importance = clamp01(source.importance, 0.5)
   const threshold = typeof options.autoApproveConfidence === 'number' ? options.autoApproveConfidence : 0.75
@@ -140,7 +181,7 @@ export function buildRecord(input, options = {}) {
     topic: normalizeTopic(source.topic),
     tags: Object.freeze(normalizeTags(source.tags)),
     sourceRefs: Object.freeze(normalizeSourceRefs(source.sourceRefs)),
-    observedAt: now,
+    observedAt,
     validFrom,
     validTo,
     confidence,
@@ -148,6 +189,10 @@ export function buildRecord(input, options = {}) {
     status,
     revision: 1,
     supersedesId: typeof source.supersedesId === 'string' ? source.supersedesId : null,
+    evidenceRole: EVIDENCE_ROLES.includes(source.evidenceRole) ? source.evidenceRole : 'unknown',
+    captureKey: typeof source.captureKey === 'string' && source.captureKey !== '' ? source.captureKey : null,
+    captureTaskId: typeof source.captureTaskId === 'string' && source.captureTaskId !== '' ? source.captureTaskId : null,
+    quoted: source.quoted === true,
     contentHash: contentHashOf(content),
     recallCount: 0,
     lastRecalledAt: null,
@@ -178,6 +223,7 @@ export function nextRevision(record, patch = {}, now = Date.now()) {
     topic: normalizeTopic(merged.topic),
     tags: Object.freeze(normalizeTags(merged.tags)),
     sourceRefs: Object.freeze(normalizeSourceRefs(merged.sourceRefs)),
+    evidenceRole: EVIDENCE_ROLES.includes(merged.evidenceRole) ? merged.evidenceRole : record.evidenceRole ?? 'unknown',
     confidence: clamp01(merged.confidence, record.confidence),
     importance: clamp01(merged.importance, record.importance),
     pinned: merged.pinned === true,

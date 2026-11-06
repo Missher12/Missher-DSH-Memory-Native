@@ -57,6 +57,16 @@ function serialize(entry, at) {
     const calls = optionalInteger(entry.calls)
     if (applied !== undefined) line.applied = applied
     if (calls !== undefined) line.calls = calls
+    if (typeof entry.outcome === 'string' && entry.outcome !== '') line.outcome = entry.outcome
+    if (entry.usage !== null && typeof entry.usage === 'object') {
+      for (const [key, value] of Object.entries({
+        providerInputTokens: entry.usage.inputTokens,
+        providerOutputTokens: entry.usage.outputTokens,
+        providerTotalTokens: entry.usage.totalTokens,
+      })) {
+        if (Number.isInteger(value) && value >= 0) line[key] = value
+      }
+    }
   }
   return `${JSON.stringify(line)}\n`
 }
@@ -102,7 +112,19 @@ function emptyBucket(date) {
   return {
     date,
     inject: { calls: 0, tokens: 0, items: 0, overBudget: 0 },
-    extract: { calls: 0, tokens: 0, items: 0, applied: 0 },
+    extract: {
+      calls: 0,
+      tokens: 0,
+      items: 0,
+      applied: 0,
+      providerCalls: 0,
+      providerInputCalls: 0,
+      providerOutputCalls: 0,
+      providerTotalCalls: 0,
+      providerInputTokens: 0,
+      providerOutputTokens: 0,
+      providerTotalTokens: 0,
+    },
   }
 }
 
@@ -156,6 +178,22 @@ export function readUsage(root, options = {}) {
       bucket.extract.tokens += tokens
       bucket.extract.items += items
       bucket.extract.applied += integer(entry.applied)
+      const providerFields = ['providerInputTokens', 'providerOutputTokens', 'providerTotalTokens']
+      if (providerFields.some((field) => Number.isInteger(entry[field]))) {
+        bucket.extract.providerCalls += 1
+        if (Number.isInteger(entry.providerInputTokens)) {
+          bucket.extract.providerInputCalls += 1
+          bucket.extract.providerInputTokens += entry.providerInputTokens
+        }
+        if (Number.isInteger(entry.providerOutputTokens)) {
+          bucket.extract.providerOutputCalls += 1
+          bucket.extract.providerOutputTokens += entry.providerOutputTokens
+        }
+        if (Number.isInteger(entry.providerTotalTokens)) {
+          bucket.extract.providerTotalCalls += 1
+          bucket.extract.providerTotalTokens += entry.providerTotalTokens
+        }
+      }
     }
   }
 
@@ -169,6 +207,13 @@ export function readUsage(root, options = {}) {
     extractTokens: 0,
     extractItems: 0,
     extractApplied: 0,
+    extractProviderCalls: 0,
+    extractProviderInputCalls: 0,
+    extractProviderOutputCalls: 0,
+    extractProviderTotalCalls: 0,
+    extractProviderInputTokens: 0,
+    extractProviderOutputTokens: 0,
+    extractProviderTotalTokens: 0,
   }
   for (const day of days) {
     totals.injectCalls += day.inject.calls
@@ -179,11 +224,25 @@ export function readUsage(root, options = {}) {
     totals.extractTokens += day.extract.tokens
     totals.extractItems += day.extract.items
     totals.extractApplied += day.extract.applied
+    totals.extractProviderCalls += day.extract.providerCalls
+    totals.extractProviderInputCalls += day.extract.providerInputCalls
+    totals.extractProviderOutputCalls += day.extract.providerOutputCalls
+    totals.extractProviderTotalCalls += day.extract.providerTotalCalls
+    totals.extractProviderInputTokens += day.extract.providerInputTokens
+    totals.extractProviderOutputTokens += day.extract.providerOutputTokens
+    totals.extractProviderTotalTokens += day.extract.providerTotalTokens
   }
   return {
     windowDays,
     days,
-    totals,
+    totals: {
+      ...totals,
+      // Each field is null when no provider call supplied that field; a missing
+      // value is never reported as zero.
+      extractProviderInputTokens: totals.extractProviderInputCalls > 0 ? totals.extractProviderInputTokens : null,
+      extractProviderOutputTokens: totals.extractProviderOutputCalls > 0 ? totals.extractProviderOutputTokens : null,
+      extractProviderTotalTokens: totals.extractProviderTotalCalls > 0 ? totals.extractProviderTotalTokens : null,
+    },
     avgInjectTokens: totals.injectCalls === 0 ? 0 : Math.round(totals.injectTokens / totals.injectCalls),
     peakInjectTokens: days.reduce((max, day) => Math.max(max, day.inject.tokens), 0),
   }

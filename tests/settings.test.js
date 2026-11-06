@@ -61,3 +61,9 @@ test('settings persist the Obsidian vault path and folder', (t) => {
   const config = settingsToConfig(saved)
   assert.deepEqual(config.obsidian, { vaultPath: '/Users/me/Vault', folder: 'DSH Notes' })
 })
+
+test('automatic Obsidian sync is opt-in and persists with its target',()=>{
+ const config=settingsToConfig({obsidianAutoSync:true,obsidianVaultPath:'/a/vault',obsidianFolder:'Memory'})
+ assert.deepEqual(config.obsidian,{autoSync:true,vaultPath:'/a/vault',folder:'Memory'})
+ assert.equal(sanitizeSettings({obsidianAutoSync:false}).obsidianAutoSync,false)
+})

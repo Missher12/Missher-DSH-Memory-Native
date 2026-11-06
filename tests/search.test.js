@@ -95,3 +95,59 @@ test('empty query returns no hits', () => {
   const index = new MemoryIndex().rebuild([record()])
   assert.deepEqual(index.search('   ', { now: NOW, projectKey: KEY }), [])
 })
+
+test('repeated upserts compact derived slots and keep query scratch bounded', () => {
+  const record = (id, content) => ({ id, content, tags: [], status: 'active', scope: 'project', projectKey: 'qa', kind: 'fact', updatedAt: 1000 })
+  const index = new MemoryIndex().rebuild([record('one', 'term0')])
+  for (let i = 1; i <= 5000; i += 1) index.upsert(record('one', `term${i}`))
+  const Original = globalThis.Float64Array
+  const allocations = []
+  try {
+    globalThis.Float64Array = class extends Original {
+      constructor(length) { super(length); allocations.push(length) }
+    }
+    assert.equal(index.search('term5000', { projectKey: 'qa' }).length, 1)
+  } finally {
+    globalThis.Float64Array = Original
+  }
+  assert.equal(index.size, 1)
+  assert.equal(index.search('term0', { projectKey: 'qa' }).length, 0)
+  assert.ok(allocations.every((length) => length <= 4096))
+})
+
+test('equal-score pages use a deterministic full order', () => {
+  const records = Array.from({ length: 350 }, (_, i) => ({
+    id: `id-${i}`, content: i % 3 === 0 ? 'alpha alpha' : 'alpha beta', tags: [],
+    status: 'active', scope: 'project', projectKey: 'qa', kind: 'fact', updatedAt: 1000,
+  }))
+  const index = new MemoryIndex().rebuild(records)
+  const ids = []
+  for (let offset = 0; offset < records.length; offset += 37) {
+    const page = index.searchPage('alpha', { projectKey: 'qa', limit: 37, offset })
+    assert.equal(page.total, records.length)
+    ids.push(...page.hits.map((hit) => hit.record.id))
+  }
+  assert.equal(ids.length, records.length)
+  assert.equal(new Set(ids).size, records.length)
+})
+
+
+test('forgetting most records compacts scratch without a later write', () => {
+  const records = Array.from({ length: 5000 }, (_, i) => ({
+    id: `id-${i}`, content: `term${i}`, tags: [], status: 'active', scope: 'project', projectKey: 'qa', kind: 'fact', updatedAt: 1000,
+  }))
+  const index = new MemoryIndex().rebuild(records)
+  for (let i = 0; i < 4999; i += 1) index.remove(`id-${i}`)
+  const Original = globalThis.Float64Array
+  const allocations = []
+  try {
+    globalThis.Float64Array = class extends Original {
+      constructor(length) { super(length); allocations.push(length) }
+    }
+    assert.equal(index.search('term4999', { projectKey: 'qa' }).length, 1)
+  } finally {
+    globalThis.Float64Array = Original
+  }
+  assert.equal(index.size, 1)
+  assert.ok(allocations.every((length) => length <= 4096))
+})

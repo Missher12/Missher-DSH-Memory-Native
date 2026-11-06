@@ -26,13 +26,26 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
+import { blockSourceRecall } from './capture-journal.js'
 
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { buildRecord, nextRevision } from './records.js'
+import { CACHE_FILE, hotRecord, rememberAuthority } from './cache-records.js'
 
 export const SCHEMA_VERSION = 2
 export const MAX_RECORDS_PER_FILE = 2000
 export const MAX_BYTES_PER_FILE = 4 * 1024 * 1024
+
+/** Detect appends, same-size rewrites, replacements and deletions. */
+export function fileStamp(file) {
+  try {
+    const stat = statSync(file, { bigint: true })
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
 
 /** Whether a parsed JSONL line is a usable record revision. */
 function isRecordRevision(value) {
@@ -56,7 +69,7 @@ export function readJsonl(file) {
     lines += 1
     try {
       const value = JSON.parse(line)
-      if (isRecordRevision(value)) records.push(value)
+      if (isRecordRevision(value)) { rememberAuthority(value, line); records.push(value) }
       else corrupt += 1
     } catch {
       corrupt += 1
@@ -81,6 +94,8 @@ export class MemoryStore {
   #clock
   #scopes = new Map()
   #meta
+  #beforeWrite = null
+  #onChange = null
 
   /**
    * @param {{ root: string, clock?: () => number }} options
@@ -96,6 +111,31 @@ export class MemoryStore {
 
   get root() {
     return this.#root
+  }
+
+  setLifecycle({ beforeWrite = null, onChange = null } = {}) {
+    this.#beforeWrite = beforeWrite
+    this.#onChange = onChange
+  }
+
+  snapshot() { return this.#scopes }
+
+  restore(scopes) {
+    if (!(scopes instanceof Map)) throw new Error('invalid derived store')
+    for (const [key, state] of scopes) {
+      if (!state || !(state.records instanceof Map) ||
+        key !== (state.scope === 'global' ? 'global' : `project:${state.projectKey}`)) throw new Error('invalid derived scope')
+      const paths = scopePaths(this.#root, state.scope, state.projectKey)
+      state.dir = paths.dir
+      state.file = paths.file
+    }
+    this.#scopes = scopes
+    return this
+  }
+
+  reset(keep = null) {
+    this.#scopes.clear()
+    if (keep !== null) this.#scopes.set(keep.key, keep)
   }
 
   /** Create the root directory and load `meta.json`. */
@@ -141,6 +181,7 @@ export class MemoryStore {
       lines: parsed.lines,
       bytes: parsed.bytes,
       corrupt: parsed.corrupt,
+      stamp: fileStamp(paths.file),
     }
     if (parsed.corrupt > 0) this.#quarantine(paths.file, parsed.corruptLines)
     this.#scopes.set(key, state)
@@ -152,8 +193,8 @@ export class MemoryStore {
     const state = this.#state(scope, projectKey)
     const includeDeleted = options.includeDeleted === true
     return [...state.records.values()]
-      .filter((record) => includeDeleted || record.status !== 'deleted')
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .filter((record) => includeDeleted || hotRecord(record).status !== 'deleted')
+      .sort((a, b) => (hotRecord(b).updatedAt ?? 0) - (hotRecord(a).updatedAt ?? 0))
   }
 
   /** Project keys that already have an authority file on disk. */
@@ -169,9 +210,9 @@ export class MemoryStore {
   }
 
   /** Every current record across the global scope and every project. */
-  listAll() {
-    const records = [...this.list('global', null)]
-    for (const projectKey of this.listProjects()) records.push(...this.list('project', projectKey))
+  listAll(options = {}) {
+    const records = [...this.list('global', null, options)]
+    for (const projectKey of this.listProjects()) records.push(...this.list('project', projectKey, options))
     return records
   }
 
@@ -187,6 +228,7 @@ export class MemoryStore {
   /** Append a record revision under a cross-process lock; fsync before returning. */
   append(record) {
     if (record === null || typeof record !== 'object') throw new Error('append requires a record')
+    this.#beforeWrite?.()
     const state = this.#state(record.scope, record.projectKey)
     const outcome = this.#withLock(() => {
       this.#refreshState(state)
@@ -195,12 +237,14 @@ export class MemoryStore {
       if (current !== undefined) {
         if (record.revision <= current.revision) {
           if (record.content === current.content && record.status === current.status) {
-            return { record: current, compact: false }
+            return { record: current, compact: false, changed: false }
           }
           next = { ...record, revision: current.revision + 1 }
         }
       }
       mkdirSync(state.dir, { recursive: true, mode: 0o700 })
+      if (current && (current.content !== next.content || (current.status === 'active' && next.status !== 'active'))) blockSourceRecall(this.#root, current)
+      if (next.status === 'deleted') blockSourceRecall(this.#root, next)
       const line = `${JSON.stringify(next)}\n`
       const fd = openSync(state.file, 'a', 0o600)
       try {
@@ -210,11 +254,14 @@ export class MemoryStore {
         closeSync(fd)
       }
       state.records.set(next.id, next)
+      rememberAuthority(next, line.slice(0, -1))
       state.lines += 1
       state.bytes += Buffer.byteLength(line)
+      state.stamp = fileStamp(state.file)
       this.#touch()
-      return { record: next, compact: state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE }
+      return { record: next, previous: current, changed: true, compact: state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE }
     })
+    if (outcome.changed) this.#onChange?.({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
     if (outcome.compact) this.compact(record.scope, record.projectKey)
     return outcome.record
   }
@@ -233,14 +280,75 @@ export class MemoryStore {
 
   /** Append the next revision for an existing record. */
   update(id, patch, scopes) {
+    this.#beforeWrite?.()
     const record = this.find(id, scopes)
     if (record === undefined) return undefined
     const next = nextRevision(record, patch, this.#clock())
     return this.append(next)
   }
 
+  /** Publish a replacement and the old record's retirement as one file commit. */
+  replace(oldId, replacement) {
+    if (!isRecordRevision(replacement) || replacement.id === oldId) throw new Error('invalid replacement record')
+    this.#beforeWrite?.()
+    const state = this.#state(replacement.scope, replacement.projectKey)
+    const result = this.#withLock(() => {
+      this.#refreshState(state)
+      const old = state.records.get(oldId)
+      if (old === undefined || (old.status !== 'active' && old.status !== 'candidate')) {
+        throw new Error('replacement target is no longer active in this scope')
+      }
+      if (state.records.has(replacement.id)) throw new Error('replacement id already exists')
+      blockSourceRecall(this.#root, old)
+      const previous = nextRevision(old, { status: 'superseded', validTo: this.#clock() }, this.#clock())
+      const record = { ...replacement, supersedesId: oldId }
+      const original = readFileSync(state.file, 'utf8')
+      const separator = original.endsWith('\n') ? '' : '\n'
+      const previousJson = JSON.stringify(previous), recordJson = JSON.stringify(record)
+      const text = `${original}${separator}${previousJson}\n${recordJson}\n`
+      const bytes = Buffer.from(text)
+      const temp = `${state.file}.replace.tmp`
+      try {
+        const fd = openSync(temp, 'w', 0o600)
+        try {
+          let offset = 0
+          while (offset < bytes.length) {
+            const written = writeSync(fd, bytes, offset, bytes.length - offset)
+            if (written <= 0) throw new Error('replacement write made no progress')
+            offset += written
+          }
+          fsyncSync(fd)
+        } finally {
+          closeSync(fd)
+        }
+        renameSync(temp, state.file)
+      } finally {
+        try { unlinkSync(temp) } catch {}
+      }
+      // No consumer sees either half until the authority file was committed.
+      state.records.set(previous.id, previous)
+      state.records.set(record.id, record)
+      rememberAuthority(previous, previousJson)
+      rememberAuthority(record, recordJson)
+      state.lines += 2
+      state.bytes = bytes.length
+      state.stamp = fileStamp(state.file)
+      try {
+        const fd = openSync(state.dir, 'r')
+        try { fsyncSync(fd) } finally { closeSync(fd) }
+      } catch {
+        // As with compact(), some platforms do not support directory fsync.
+      }
+      this.#touch()
+      return { previous, record }
+    })
+    this.#onChange?.({ type: 'upsert', records: [result.previous, result.record], previous: [result.previous], state })
+    return result
+  }
+
   /** Soft-delete one record (writes a tombstone revision). */
   remove(id, scopes) {
+    this.#beforeWrite?.()
     const record = this.find(id, scopes)
     if (record === undefined) return undefined
     return this.append(nextRevision(record, { status: 'deleted' }, this.#clock()))
@@ -248,13 +356,15 @@ export class MemoryStore {
 
   /** Rewrite one authority file with only the latest revision per id (locked, re-reads first). */
   compact(scope, projectKey) {
+    this.#beforeWrite?.()
     const state = this.#state(scope, projectKey)
-    return this.#withLock(() => {
+    const outcome = this.#withLock(() => {
       this.#refreshState(state)
       const latest = latestRevisions([...state.records.values()])
       mkdirSync(state.dir, { recursive: true, mode: 0o700 })
       const temp = `${state.file}.tmp`
-      const text = latest.map((record) => `${JSON.stringify(record)}\n`).join('')
+      const lines = latest.map((record) => JSON.stringify(record))
+      const text = lines.map((line) => `${line}\n`).join('')
       const fd = openSync(temp, 'w', 0o600)
       try {
         writeSync(fd, text)
@@ -270,11 +380,18 @@ export class MemoryStore {
         // Directory fsync is best effort on platforms that refuse it.
       }
       state.records = new Map(latest.map((record) => [record.id, record]))
+      let changed = false
+      for (let i = 0; i < latest.length; i += 1) {
+        if (rememberAuthority(latest[i], lines[i])) changed = true
+      }
       state.lines = latest.length
       state.bytes = Buffer.byteLength(text)
+      state.stamp = fileStamp(state.file)
       this.#touch()
-      return latest.length
+      return { count: latest.length, changed }
     })
+    this.#onChange?.({ type: 'rewrite', state, changed: outcome.changed })
+    return outcome.count
   }
 
   /** All persisted revisions of one record, newest revision first. */
@@ -294,12 +411,20 @@ export class MemoryStore {
 
   /** Physically remove every revision of one record (used by the recycle bin). */
   purge(id, scopes) {
+    this.#beforeWrite?.()
     for (const { scope, projectKey } of scopes) {
       const state = this.#state(scope, projectKey)
       if (!state.records.has(id)) continue
-      return this.#withLock(() => {
+      let previous
+      const purged = this.#withLock(() => {
         this.#refreshState(state)
         if (!state.records.has(id)) return false
+        previous = state.records.get(id)
+        blockSourceRecall(this.#root, previous)
+        // A physical purge must also discard the derived copy of this record.
+        try { unlinkSync(join(this.#root, CACHE_FILE)) } catch (error) {
+          if (error?.code !== 'ENOENT') throw error
+        }
         const kept = readJsonl(state.file).records.filter((record) => record.id !== id)
         mkdirSync(state.dir, { recursive: true, mode: 0o700 })
         const text = kept.map((record) => `${JSON.stringify(record)}\n`).join('')
@@ -321,9 +446,12 @@ export class MemoryStore {
         state.records.delete(id)
         state.lines = kept.length
         state.bytes = Buffer.byteLength(text)
+        state.stamp = fileStamp(state.file)
         this.#touch()
         return true
       })
+      if (purged) this.#onChange?.({ type: 'remove', records: [previous], id, state })
+      return purged
     }
     return false
   }
@@ -356,6 +484,7 @@ export class MemoryStore {
    * @param {{ dryRun?: boolean }} [options]
    */
   importData(payload, options = {}) {
+    if (options.dryRun !== true) this.#beforeWrite?.()
     const source = payload !== null && typeof payload === 'object' ? payload : {}
     const dryRun = options.dryRun === true
     let imported = 0
@@ -384,16 +513,16 @@ export class MemoryStore {
 
   /** Re-read one authority file when another process changed it. */
   #refreshState(state) {
+    const stamp = fileStamp(state.file)
     const parsed = readJsonl(state.file)
-    if (parsed.bytes === state.bytes) return
-    for (const record of latestRevisions(parsed.records)) {
-      const current = state.records.get(record.id)
-      if (current === undefined || record.revision > current.revision) state.records.set(record.id, record)
-    }
+    if (stamp === state.stamp) return
+    state.records = new Map(latestRevisions(parsed.records).map((record) => [record.id, record]))
     state.lines = parsed.lines
     state.bytes = parsed.bytes
     state.corrupt = parsed.corrupt
+    state.stamp = stamp
     if (parsed.corrupt > 0) this.#quarantine(state.file, parsed.corruptLines)
+    this.#onChange?.({ type: 'refresh', state })
   }
 
   /** Keep the first copy of each corrupt line so compaction cannot erase it silently. */

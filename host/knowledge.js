@@ -9,6 +9,8 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { hotRecord } from './cache-records.js'
+import { parseFrontmatter } from './frontmatter.js'
 
 const MAX_NODES = 400
 export const KNOWLEDGE_DIR = 'knowledge'
@@ -19,126 +21,83 @@ export const KNOWLEDGE_DIR = 'knowledge'
  * @param {{ now?: number, maxNodes?: number }} [options]
  */
 export function buildKnowledgeGraph(records, options = {}) {
-  const maxNodes = Number.isInteger(options.maxNodes) ? Math.max(10, options.maxNodes) : MAX_NODES
+  const limit = Number.isInteger(options.maxNodes) ? Math.max(10, options.maxNodes) : MAX_NODES
   const list = (Array.isArray(records) ? records : [])
-    .filter((record) => record !== null && typeof record === 'object' && typeof record.id === 'string')
-    .filter((record) => record.status !== 'deleted')
-    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
-    .slice(0, maxNodes)
-
-  const topics = new Map()
+    .filter(record => record && typeof record.id === 'string' && hotRecord(record).status !== 'deleted')
+    .sort((a, b) => (hotRecord(b).updatedAt ?? 0) - (hotRecord(a).updatedAt ?? 0) || a.id.localeCompare(b.id))
+  const nodes = new Map(), hubs = new Map(), edges = []
+  const topicOf = value => typeof value === 'string' && value.trim() !== '' ? value.trim() : '未分类'
+  const hub = topic => {
+    const id = `topic:${topic}`
+    if (!hubs.has(id)) hubs.set(id, { id, type: 'topic', label: topic, count: 0 })
+    return hubs.get(id)
+  }
+  const aliases = new Map()
+  const alias = (name, id) => {
+    const key = name.replace(/\.md$/iu, '').toLocaleLowerCase()
+    if (!aliases.has(key)) aliases.set(key, new Set())
+    aliases.get(key).add(id)
+  }
   for (const record of list) {
-    const topic = typeof record.topic === 'string' && record.topic.trim() !== '' ? record.topic.trim() : '未分类'
-    if (!topics.has(topic)) topics.set(topic, [])
-    topics.get(topic).push(record)
+    const r = hotRecord(record), topic = topicOf(r.topic)
+    hub(topic).count++
+    nodes.set(r.id, { id:r.id, type:'memory', topic, kind:r.kind, status:r.status, confidence:r.confidence ?? .5, record, links:extractWikiLinks(record.content??'') })
+    alias(r.id,r.id)
+    edges.push({source:`topic:${topic}`,target:r.id,type:'topic'})
   }
-
-  let topicEntries = [...topics.entries()]
-  if (topicEntries.length > 24) {
-    topicEntries.sort((left, right) => right[1].length - left[1].length)
-    const kept = topicEntries.slice(0, 23)
-    const rest = topicEntries.slice(23)
-    const other = []
-    for (const [, members] of rest) other.push(...members)
-    kept.push(['其他', other])
-    topicEntries = kept
-  }
-
-  const nodes = []
-  const edges = []
-  const tagIndex = new Map()
-  const hubs = []
-  for (const [topic, members] of topicEntries) {
-    hubs.push({ id: `topic:${topic}`, type: 'topic', label: topic, count: members.length })
-    for (const record of members) {
-      nodes.push({
-        id: record.id,
-        type: 'memory',
-        topic,
-        kind: record.kind,
-        status: record.status,
-        label: String(record.content ?? '').slice(0, 60),
-        confidence: typeof record.confidence === 'number' ? record.confidence : 0.5,
-      })
-      edges.push({ source: `topic:${topic}`, target: record.id, type: 'topic' })
-      for (const tag of Array.isArray(record.tags) ? record.tags : []) {
-        const key = String(tag)
-        if (!tagIndex.has(key)) tagIndex.set(key, [])
-        tagIndex.get(key).push(record.id)
-      }
-    }
-  }
-  const noteNodes = []
-  for (const note of (Array.isArray(options.notes) ? options.notes : [])) {
-    const memoryId = typeof note.memoryId === 'string' ? note.memoryId : null
-    const topic = typeof note.topic === 'string' && note.topic.trim() !== '' ? note.topic.trim() : '未分类'
+  for (const note of options.notes ?? []) {
     const source = note.source === 'vault' ? 'vault' : 'knowledge'
-    const noteId = `${source === 'vault' ? 'vault' : 'note'}:${note.file}`
-    const links = Array.isArray(note.links) ? note.links.map((link) => String(link)) : extractWikiLinks(note.body ?? '')
-    const node = {
-      id: noteId,
-      type: 'note',
-      source,
-      topic,
-      kind: source === 'vault' ? 'vault' : 'knowledge',
-      status: 'active',
-      label: String(note.title ?? note.file).slice(0, 60),
-      confidence: 1,
-      links,
-    }
-    nodes.push(node)
-    noteNodes.push(node)
-    const target = memoryId === null ? null : nodes.find((entry) => entry.type === 'memory' && entry.id === memoryId)
-    if (target !== undefined) edges.push({ source: noteId, target: memoryId, type: 'knowledge' })
-    else if (hubs.some((hub) => hub.label === topic)) edges.push({ source: noteId, target: `topic:${topic}`, type: 'knowledge' })
+    const id = `${source === 'vault' ? 'vault' : 'note'}:${note.file}`, topic = topicOf(note.topic)
+    const links = Array.isArray(note.links) ? note.links : extractWikiLinks(note.body ?? '')
+    hub(topic)
+    nodes.set(id, {id,type:'note',source,topic,kind:source==='vault'?'vault':'knowledge',status:'active',label:String(note.title??note.file),confidence:1,links})
+    alias(note.file,id);alias(String(note.title??'').replace(/^#+\s*/u,''),id)
+    const memory = nodes.get(note.memoryId)
+    edges.push({source:id,target:memory?.type==='memory'?memory.id:`topic:${topic}`,type:'knowledge'})
   }
-
-  const traits = Array.isArray(options.traits) ? options.traits : []
-  if (traits.length > 0) {
-    const profileHub = { id: 'topic:用户画像', type: 'topic', label: '用户画像', count: traits.length }
-    hubs.push(profileHub)
-    for (const trait of traits) {
-      const traitId = `trait:${trait.id}`
-      nodes.push({
-        id: traitId,
-        type: 'trait',
-        topic: '用户画像',
-        kind: 'trait',
-        status: 'active',
-        label: String(trait.statement ?? '').slice(0, 60),
-        confidence: typeof trait.confidence === 'number' ? trait.confidence : 0.5,
-      })
-      edges.push({ source: 'topic:用户画像', target: traitId, type: 'topic' })
-      for (const evidence of Array.isArray(trait.evidence) ? trait.evidence : []) {
-        if (nodes.some((node) => node.type === 'memory' && node.id === evidence.id)) {
-          edges.push({ source: traitId, target: evidence.id, type: 'profile' })
-        }
+  for (const trait of options.traits ?? []) {
+    const id = `trait:${trait.id}`, topic = '用户画像';hub(topic)
+    nodes.set(id,{id,type:'trait',topic,kind:'trait',status:'active',label:trait.statement??'',confidence:trait.confidence??.5})
+    edges.push({source:`topic:${topic}`,target:id,type:'topic'})
+    for(const evidence of trait.evidence??[])if(nodes.has(evidence.id))edges.push({source:id,target:evidence.id,type:'profile'})
+  }
+  for (const node of [...nodes.values()]) {
+    for (const link of node.links ?? []) {
+      const key=String(link).replace(/\.md$/iu,'').toLocaleLowerCase()
+      let targets = aliases.get(key) ?? aliases.get(key.split('/').at(-1))
+      if (!targets && hubs.has(`topic:${link}`)) targets = new Set([`topic:${link}`])
+      if (!targets) {
+        const id = `unresolved:${link}`
+        if(!nodes.has(id))nodes.set(id,{id,type:'unresolved',kind:'unresolved',topic:'未解析链接',status:'unresolved',label:String(link),confidence:0})
+        hub('未解析链接'); targets = new Set([id])
       }
+      for(const target of targets)edges.push({source:node.id,target,type:'wiki',label:String(link)})
     }
   }
-
-  for (const node of noteNodes) {
-    for (const link of node.links) {
-      const hub = hubs.find((entry) => entry.label === link)
-      if (hub !== undefined) edges.push({ source: node.id, target: hub.id, type: 'wiki', label: link })
-    }
+  const label = node => node.record ? String(node.record.content??'') : node.label
+  const query = String(options.query??'').trim().toLocaleLowerCase()
+  const matched = [...nodes.values()].filter(n => (!options.topic || n.topic===options.topic) && (!query || `${label(n)} ${n.topic} ${n.id}`.toLocaleLowerCase().includes(query)))
+  let offset = Math.max(0, Number.isInteger(options.offset) ? options.offset : 0)
+  if (options.focus) {
+    const i=matched.findIndex(n=>n.id===options.focus)
+    if(i>=0)offset=Math.floor(i/limit)*limit
   }
-
-  for (const [tag, ids] of tagIndex) {
-    if (ids.length < 2) continue
-    for (let i = 0; i < ids.length - 1; i += 1) {
-      edges.push({ source: ids[i], target: ids[i + 1], type: 'tag', label: tag })
-    }
-  }
+  if (offset >= matched.length) offset = Math.floor(Math.max(0,matched.length-1)/limit)*limit
+  const page = matched.slice(offset,offset+limit), ids = new Set(page.map(n=>n.id))
+  const tagIndex = new Map()
+  for(const n of page)for(const tag of n.record?.tags??[]){if(!tagIndex.has(tag))tagIndex.set(tag,[]);tagIndex.get(tag).push(n.id)}
+  for(const [tag, members]of tagIndex)for(let i=1;i<members.length;i++)edges.push({source:members[i-1],target:members[i],type:'tag',label:tag})
+  const visibleEdges=edges.filter(e=>ids.has(e.source)||ids.has(e.target))
+  const hubIds=new Set(page.map(n=>`topic:${n.topic}`))
+  for(const e of visibleEdges)for(const id of [e.source,e.target])if(hubs.has(id))hubIds.add(id)
+  const title=id=>hubs.get(id)?.label??(nodes.has(id)?label(nodes.get(id)):id)
   return {
-    nodes,
-    hubs,
-    edges,
-    topicCount: topics.size,
-    memoryCount: nodes.filter((node) => node.type === 'memory').length,
-    noteCount: nodes.filter((node) => node.type === 'note').length,
-    tagCount: tagIndex.size,
-    truncated: (Array.isArray(records) ? records : []).length > list.length,
+    nodes:page.map(({record,...node})=>({...node,label:record?String(record.content??''):node.label})),
+    hubs:[...hubIds].map(id=>hubs.get(id)).filter(Boolean),
+    edges:visibleEdges.map(e=>({...e,sourceLabel:title(e.source),targetLabel:title(e.target)})),
+    topicCount:hubs.size,memoryCount:list.length,noteCount:[...nodes.values()].filter(n=>n.type==='note').length,
+    tagCount:tagIndex.size,total:matched.length,offset,limit,nextOffset:offset+page.length<matched.length?offset+page.length:null,
+    truncated:offset+page.length<matched.length,focus:options.focus??null,
   }
 }
 
@@ -173,35 +132,14 @@ export function promoteMemoryToKnowledge(root, record) {
 
 /** A note name that can only ever resolve inside `<root>/knowledge`. */
 export function isKnowledgeFile(name) {
-  return typeof name === 'string' && /^[\p{L}\p{N}._-]{1,120}\.md$/u.test(name)
-}
-
-function parseValue(raw) {
-  let value = raw
-  if (raw === 'true') value = true
-  else if (raw === 'false') value = false
-  else if (raw === 'null') value = null
-  else if (/^-?\d+(?:\.\d+)?$/u.test(raw)) value = Number(raw)
-  else if (raw.startsWith('"') || raw.startsWith('[')) {
-    try { value = JSON.parse(raw) } catch { value = raw }
-  }
-  return value
+  return typeof name === 'string' && /^[\p{L}\p{N} ._-]{1,120}\.md$/u.test(name)
 }
 
 /** Split note text into its frontmatter map and post-frontmatter body. */
 function parseNote(text) {
-  const match = String(text).match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/u)
-  const data = {}
-  if (match !== null) {
-    for (const line of match[1].split(/\r?\n/u)) {
-      const separator = line.indexOf(':')
-      if (separator <= 0) continue
-      const key = line.slice(0, separator).trim()
-      if (key === '') continue
-      data[key] = parseValue(line.slice(separator + 1).trim())
-    }
-  }
-  const body = match === null ? String(text) : String(text).slice(match[0].length)
+  const parsed = parseFrontmatter(text)
+  const data = parsed?.data ?? {}
+  const body = parsed?.body ?? String(text)
   return { data, body: body.trimEnd() }
 }
 
@@ -212,14 +150,17 @@ export function parseKnowledgeNote(text) {
 
 /** Unique `[[wiki links]]` targets in a note body. */
 export function extractWikiLinks(text) {
-  const links = []
-  const seen = new Set()
-  for (const match of String(text ?? '').matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/gu)) {
-    const value = match[1].trim()
-    if (value === '' || seen.has(value)) continue
-    seen.add(value)
-    links.push(value)
+  const links = [], seen = new Set()
+  const source = String(text??'').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`]*`/gu,'')
+  const add = raw => {
+    let value=raw.trim()
+    try { value=decodeURIComponent(value) } catch { /* Keep literal malformed escapes visible. */ }
+    value=value.split('#')[0].trim()
+    if(!value||/^[a-z][a-z\d+.-]*:/iu.test(value)||value.startsWith('//')||seen.has(value))return
+    seen.add(value);links.push(value)
   }
+  for(const match of source.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/gu))add(match[1])
+  for(const match of source.matchAll(/(?<!!)\[[^\[\]]+\]\((?:<([^>]+)>|([^\s)]+))(?:\s+"[^"]*")?\)/gu))add(match[1]??match[2])
   return links
 }
 
