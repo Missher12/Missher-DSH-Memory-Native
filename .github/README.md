@@ -7,7 +7,7 @@
 <p>把值得记住的内容留在本地，在需要时带回对话。</p>
 
 <p>
-  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0"><img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-1.0.0-4D6BFE?style=flat-square" alt="版本: 1.0.0"></a>
+  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0"><img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-1.3.8--native.20261107.0-4D6BFE?style=flat-square" alt="版本: 1.3.8-native.20261107.0"></a>
   <a href="https://github.com/Missher12/Missher-DSH-Memory-Native"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-%E4%B8%AD%E6%96%87-4D6BFE?style=flat-square" alt="文档: 中文"></a>
 </p>
 
