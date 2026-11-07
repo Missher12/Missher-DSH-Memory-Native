@@ -7,7 +7,7 @@
 <p>把值得记住的内容留在本地，在需要时带回对话。</p>
 
 <p>
-  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.0.0"><img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-1.0.0-4D6BFE?style=flat-square" alt="版本: 1.0.0"></a>
+  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0"><img src="https://img.shields.io/badge/%E9%A2%84%E5%8F%91%E8%A1%8C-1.3.8--native.20261107.0-4D6BFE?style=flat-square" alt="原生预发行版: 1.3.8-native.20261107.0"></a>
   <a href="https://github.com/Missher12/Missher-DSH-Memory-Native"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-%E4%B8%AD%E6%96%87-4D6BFE?style=flat-square" alt="文档: 中文"></a>
 </p>
 
@@ -18,7 +18,7 @@
 ---
 
 <!-- current-source -->
-当前开发源码：**1.3.8-native.20261107.0** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。安装包以实际 Release 为准。
+当前开发源码：**1.3.8-native.20261107.0** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。[同版预发行安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0)。
 <!-- /current-source -->
 
 ## 功能一览
@@ -32,7 +32,7 @@
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.0.0) 下载对应版本的 `.tgz` 安装包。
+1. 从 [Releases](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0) 下载对应版本的 `.tgz` 安装包。
 2. 在 DSH **插件 → 添加插件** 中选择下载的文件，安装并启用；按宿主提示重新加载或正常重启。
 3. 打开 **设置 → 记忆**，检查自动捕获与注入设置，再浏览已有记忆。
 
@@ -43,6 +43,6 @@
 
 ## 详细文档
 
-[项目原说明](../README.md) · [设计说明](../docs/design.md) · [验证记录](../docs/verification.md) · [相关方案调研](../docs/memory-landscape.md)
+[当前开发版说明](https://github.com/Missher12/Missher-DSH-Memory-Native/blob/codex/memory-evidence-navigation/README.md) · [设计说明](../docs/design.md) · [验证记录](../docs/verification.md) · [相关方案调研](../docs/memory-landscape.md)
 
 原有功能细节、配置、截图与验证记录保留在上述文档中，历史结论按其注明的版本理解。

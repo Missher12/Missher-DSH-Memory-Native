@@ -1,6 +1,8 @@
 # DSH Memory
 
-当前版本 **1.0.0** · [同版安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.0.0)
+最新原生开发版 **1.3.8-native.20261107.0** · [源码分支](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation) · [预发行安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0)
+
+本 `main` 分支保留 1.0.0 源码与下方历史说明；下载最新源码请使用上方开发分支。
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
 [仓库](https://github.com/Missher12/Missher-DSH-Memory-Native) · [Releases 下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases) · [设计文档](docs/design.md) · [验证记录](docs/verification.md)
