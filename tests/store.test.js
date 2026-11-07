@@ -185,7 +185,7 @@ test('corrupt lines are quarantined to a diagnostic file', (t) => {
   assert.match(readFileSync(quarantine, 'utf8'), /this is not json/u)
 })
 
-test('export, backup and import round-trip', (t) => {
+test('export, backup and import round-trip', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-store-'))
   const target = mkdtempSync(join(tmpdir(), 'dsh-memory-store-'))
   t.after(() => {
@@ -199,9 +199,9 @@ test('export, backup and import round-trip', (t) => {
   assert.equal(exported.global.length, 1)
   assert.equal(exported.projects[KEY].length, 1)
 
-  const backupPath = store.backup()
+  const backupPath = await store.backup()
   assert.ok(existsSync(backupPath))
-  assert.ok(JSON.parse(readFileSync(backupPath, 'utf8')).projects[KEY].length === 1)
+  assert.match(readFileSync(join(backupPath, 'files', 'projects', KEY, 'memories.jsonl'), 'utf8'), /项目事实用于导出测试/u)
 
   const targetStore = new MemoryStore({ root: target }).open()
   const dry = targetStore.importData(exported, { dryRun: true })

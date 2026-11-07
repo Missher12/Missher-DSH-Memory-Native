@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FILES = ["package.json", "index.js", "client.js", "cordis.patch.yml", "icon.svg", "README.md"]
 HOST_SUFFIX = ".js"
 LOCALE = {"en.json", "zh.json"}
+EMBEDDING = {"ort.wasm.min.mjs", "ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm",
+             "transformers.min.mjs", "onnxruntime-LICENSE.txt", "transformers-LICENSE.txt", "README.md"}
 BAD_MAGIC = b"\x00\x05\x16\x07\x00\x02\x00\x00"
 
 
@@ -32,6 +34,8 @@ def collect() -> list[str]:
     for name in sorted(LOCALE):
         if (ROOT / "locale" / name).is_file():
             names.append(f"locale/{name}")
+    for name in sorted(EMBEDDING):
+        names.append(f"vendor/embedding/{name}")
     return names
 
 

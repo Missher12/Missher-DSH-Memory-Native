@@ -115,6 +115,7 @@ test('stats counts statuses, kinds, projects and capture flag', (t) => {
   assert.equal(stats.captureEnabled, true)
   assert.equal(stats.injectEnabled, true)
   assert.equal(stats.currentProjectKey, KEY)
+  assert.deepEqual(stats.projectKeys, [KEY])
   assert.equal(stats.avgConfidence, 0.9)
   assert.equal(typeof stats.lastCapturedAt, 'number')
 })
@@ -248,6 +249,38 @@ test('the latest-touched project becomes the implicit current project', (t) => {
   assert.equal(listed.projectKey, OTHER_KEY)
   assert.equal(listed.items.length, 1)
   assert.match(listed.items[0].content, /第二个项目/u)
+})
+
+test('projectBrief is project-scoped, sectioned and paginates the global item order', (t) => {
+  const { store, backend } = setup(t)
+  store.write({ id: 'brief-current', kind: 'fact', scope: 'project', projectKey: KEY,
+    content: '当前约束：Node 22', status: 'active', confidence: 0.9,
+    sourceRefs: [{ sourceId: 'src_012345678901234567890123', from: 0, to: 11, excerpt: 'Node 22 is set' }] }, { now: NOW })
+  store.write({ id: 'brief-decision', kind: 'decision', scope: 'project', projectKey: KEY,
+    content: '决定保留 JSONL，因为可以重建索引。', status: 'active', confidence: 0.9 }, { now: NOW })
+  store.write({ id: 'brief-history', kind: 'fact', scope: 'project', projectKey: KEY,
+    content: '旧期限为 17 天。', status: 'superseded', validFrom: NOW - 10_000, validTo: NOW - 1,
+    confidence: 0.9 }, { now: NOW })
+  store.write({ id: 'brief-candidate', kind: 'fact', scope: 'project', projectKey: KEY,
+    content: '待确认的端口是 7319。', status: 'candidate', confidence: 0.4 }, { now: NOW })
+  store.write({ id: 'brief-other-project', kind: 'fact', scope: 'project', projectKey: OTHER_KEY,
+    content: '另一个项目的秘密值', status: 'active', confidence: 0.9 }, { now: NOW })
+  store.write({ id: 'brief-global', kind: 'fact', scope: 'global', projectKey: null,
+    content: '全局偏好', status: 'active', confidence: 0.9 }, { now: NOW })
+
+  const first = backend.projectBrief({ projectKey: KEY, limit: 2 })
+  assert.equal(first.total, 4)
+  assert.equal(first.nextOffset, 2)
+  assert.deepEqual(first.sections.map(section => section.id), ['current', 'decisions'])
+  assert.equal(first.sections[0].items[0].sourceRefs[0].excerpt, 'Node 22 is set')
+  const second = backend.projectBrief({ projectKey: KEY, limit: 2, offset: 2 })
+  assert.deepEqual(second.sections.map(section => section.id), ['history', 'unresolved'])
+  const items = second.sections.flatMap(section => section.items)
+  assert.deepEqual(items.map(item => item.id), ['brief-history', 'brief-candidate'])
+  assert.ok(items.every(item => item.scope === 'project' && item.projectKey === KEY))
+  assert.ok(items.every(item => !item.content.includes('另一个项目') && !item.content.includes('全局')))
+  assert.equal(second.nextOffset, null)
+  assert.throws(() => backend.projectBrief({}), /projectKey/u)
 })
 
 test('dispatchPanel refuses unknown methods', async () => {
@@ -451,7 +484,7 @@ test('updateSettings validates fields and calls the activation callback', (t) =>
   assert.throws(() => backend.updateSettings({}), /at least one field/u)
 })
 
-test('export, import and backup round-trip through the panel operations', (t) => {
+test('export, import and backup round-trip through the panel operations', async (t) => {
   const source = setup(t)
   const target = setup(t)
   seed(source.store, source.index, { content: '导出用的项目记忆内容' })
@@ -470,7 +503,7 @@ test('export, import and backup round-trip through the panel operations', (t) =>
   assert.equal(target.store.listAll().length, 2)
   assert.equal(listMemories(target.backend, { scope: 'project', projectKey: KEY, query: '导出' }).items.length, 1)
 
-  const backup = source.backend.backup()
+  const backup = await source.backend.backup()
   assert.ok(typeof backup.path === 'string')
   assert.ok(existsSync(backup.path))
 })
@@ -481,6 +514,16 @@ test('stats exposes the last injection estimate', (t) => {
   const stats = backend.stats({ scope: 'project', projectKey: KEY })
   assert.equal(stats.lastInjection.tokens, 280)
   assert.equal(stats.lastInjection.budget, 360)
+})
+
+test('stats exposes the latest evidence recall report', (t) => {
+  const { backend } = setup(t)
+  const report = {
+    at: NOW, covered: [], missing: ['部署时间'], providerState: 'completed', completionState: 'completed',
+    provider: null, usage: { totalTokens: 19 }, estimatedPromptTokens: 122,
+  }
+  backend.getLastRecall = () => report
+  assert.deepEqual(backend.stats({}).lastRecall, report)
 })
 
 test('recycle bin lists tombstones, restores and purges them', (t) => {
@@ -671,6 +714,13 @@ test('knowledgeNote reads and knowledgeSave writes a promoted note', (t) => {
   const note = backend.knowledgeNote({ file })
   assert.equal(note.title, '知识笔记编辑测试')
   assert.equal(note.topic, '存储')
+  assert.equal(note.scope, 'project')
+  assert.equal(note.projectKey, KEY)
+  assert.deepEqual(backend.knowledgeList().notes[0] && [backend.knowledgeList().notes[0].scope, backend.knowledgeList().notes[0].projectKey], ['project', KEY])
+  assert.throws(() => backend.knowledgeSave({
+    file, title: note.title, body: note.body, topic: note.topic, tags: note.tags,
+    scope: 'global', projectKey: null, expectedMtimeMs: note.mtimeMs,
+  }), PanelInputError)
   const saved = backend.knowledgeSave({
     file,
     title: '编辑后的标题',

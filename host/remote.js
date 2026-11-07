@@ -40,6 +40,7 @@ import {
   computeActivity,
   computeProfile,
   computeStats,
+  projectBrief,
   bulkAction,
   createBackup,
   exportData,
@@ -107,7 +108,13 @@ function makePanelCallLogger(root) {
  * @param {{ store: object, index: object, config: object, root?: string }} options
  */
 export function createPanelBackend(options) {
+  if (options.unavailable) {
+    return Object.fromEntries(PANEL_METHODS.map(method => [method, method === 'stats'
+      ? () => ({ health: options.getHealth(), unavailable: options.unavailable })
+      : () => { throw new PanelInputError(options.unavailable.message) }]))
+  }
   const backend = {
+    isolation: options.isolation,
     store: options.store,
     index: options.index,
     synchronize: typeof options.synchronize === 'function' ? options.synchronize : null,
@@ -117,8 +124,12 @@ export function createPanelBackend(options) {
     syncService: options.obsidianSync ?? null,
     getLastInjection: typeof options.getLastInjection === 'function' ? options.getLastInjection : null,
     getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
+    getLastRecall: typeof options.getLastRecall === 'function' ? options.getLastRecall : null,
+    getSemanticStatus: typeof options.getSemanticStatus === 'function' ? options.getSemanticStatus : null,
+    getSettingsIssue: typeof options.getSettingsIssue === 'function' ? options.getSettingsIssue : null,
     getCaptureStatus: typeof options.getCaptureStatus === 'function' ? options.getCaptureStatus : null,
     retryCapture: typeof options.retryCapture === 'function' ? options.retryCapture : null,
+    refreshKnowledge: typeof options.refreshKnowledge === 'function' ? options.refreshKnowledge : null,
     get config() {
       return typeof options.getConfig === 'function' ? options.getConfig() : (options.config ?? {})
     },
@@ -126,10 +137,15 @@ export function createPanelBackend(options) {
   }
   backend.list = (input) => listMemories(backend, input)
   backend.stats = (input) => computeStats(backend, input)
+  backend.projectBrief = (input) => projectBrief(backend, input)
   backend.activity = (input) => computeActivity(backend, input)
   backend.profile = (input) => computeProfile(backend, input)
   backend.update = (input) => applyUpdate(backend, input)
-  backend.removeMemory = (input) => applyRemove(backend, input)
+  backend.removeMemory = (input) => {
+    const result = applyRemove(backend, input)
+    options.invalidateRecall?.()
+    return result
+  }
   backend.rebuildIndex = () => rebuildMemoryIndex(backend)
   backend.updateSettings = (input) => updateSettings(backend, input)
   backend.exportData = () => exportData(backend)
@@ -160,12 +176,21 @@ export function createPanelBackend(options) {
     const operation = backend[method]
     backend[method] = (input) => {
       const at = Date.now()
+      const refreshKnowledge = (resolved) => {
+        const shouldRefresh = method === 'knowledgePromote' || method === 'knowledgeSave' && resolved?.saved !== false ||
+          method === 'knowledgeSync' && backend.config?.obsidian?.autoSync !== true
+        if (shouldRefresh) {
+          try { backend.refreshKnowledge?.() } catch { /* Note edits stay successful if derived lookup refresh fails. */ }
+        }
+        return resolved
+      }
       try {
         backend.synchronize?.()
         const value = operation(input)
         if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
           return value.then(
             (resolved) => {
+              refreshKnowledge(resolved)
               logCall({ at, method, ok: true, size: sizeOf(resolved) })
               return resolved
             },
@@ -175,6 +200,7 @@ export function createPanelBackend(options) {
             },
           )
         }
+        refreshKnowledge(value)
         logCall({ at, method, ok: true, size: sizeOf(value) })
         return value
       } catch (error) {
@@ -211,6 +237,10 @@ export async function bindTypertRemote(ctx, backend) {
 
     async stats(input) {
       return this.delegate.stats(input)
+    }
+
+    async projectBrief(input) {
+      return this.delegate.projectBrief(input)
     }
 
     async activity(input) {

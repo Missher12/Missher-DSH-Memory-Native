@@ -9,22 +9,24 @@
  * @module dsh-memory/host/maintenance
  */
 
-import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, rmSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
+import { verifyBackup } from './backup.js'
+import { atomicWritePrivate } from './persistence.js'
 
 const DAY_MS = 86_400_000
-const BACKUP_PATTERN = /^memories-.*\.json$/u
+const BACKUP_PATTERN = /^memories-.*\.(?:json|backup)$/u
 
 /** Newest backup mtime under `<root>/backups`, or null when there is none. */
-export function newestBackupTime(root) {
+async function newestCompleteBackup(root) {
   const dir = join(root, 'backups')
-  let newest = null
+  const candidates = []
   try {
     for (const name of readdirSync(dir)) {
-      if (!BACKUP_PATTERN.test(name)) continue
+      if (!BACKUP_PATTERN.test(name) || !name.endsWith('.backup')) continue
       try {
-        const time = statSync(join(dir, name)).mtimeMs
-        if (newest === null || time > newest) newest = time
+        const stat = lstatSync(join(dir, name))
+        if (stat.isDirectory()) candidates.push({ path: join(dir, name), time: stat.mtimeMs })
       } catch {
         // A vanished backup is not an error.
       }
@@ -32,11 +34,17 @@ export function newestBackupTime(root) {
   } catch {
     // No backups directory yet.
   }
-  return newest
+  candidates.sort((a, b) => b.time - a.time)
+  for (const candidate of candidates) {
+    try { const manifest = await verifyBackup(candidate.path); return { ...candidate, time: manifest.createdAt } } catch { /* A broken snapshot is not recovery coverage. */ }
+  }
+  return null
 }
 
+export async function newestBackupTime(root) { return (await newestCompleteBackup(root))?.time ?? null }
+
 /** Keep the newest `keep` backups, delete the rest, return the deleted count. */
-export function pruneBackups(root, keep) {
+export function pruneBackups(root, keep, preserve = null) {
   const dir = join(root, 'backups')
   let files
   try {
@@ -47,16 +55,24 @@ export function pruneBackups(root, keep) {
   const entries = []
   for (const name of files) {
     try {
-      entries.push({ name, time: statSync(join(dir, name)).mtimeMs })
+      const stat = lstatSync(join(dir, name))
+      if (stat.isSymbolicLink()) continue
+      entries.push({ name, time: stat.mtimeMs, directory: stat.isDirectory() })
     } catch {
       // Ignore races with the filesystem.
     }
   }
   entries.sort((left, right) => right.time - left.time)
+  const retained = new Set(preserve ? [preserve] : [])
+  for (const entry of entries) {
+    if (retained.size >= keep) break
+    retained.add(join(dir, entry.name))
+  }
   let removed = 0
-  for (const entry of entries.slice(keep)) {
+  for (const entry of entries) {
+    if (retained.has(join(dir, entry.name))) continue
     try {
-      rmSync(join(dir, entry.name))
+      rmSync(join(dir, entry.name), { recursive: entry.directory })
       removed += 1
     } catch {
       // Best effort.
@@ -69,7 +85,7 @@ export function pruneBackups(root, keep) {
  * Run one maintenance pass.
  * @param {{ store: object, config: object, now?: number, logger?: object }} options
  */
-export function runMaintenance(options) {
+export async function runMaintenance(options) {
   const { store } = options
   const config = options.config ?? {}
   const now = typeof options.now === 'number' ? options.now : Date.now()
@@ -79,6 +95,7 @@ export function runMaintenance(options) {
     backedUp: null,
     pruned: 0,
     skipped: false,
+    backupError: null,
   }
   if (config?.maintenance?.enabled === false) {
     summary.skipped = true
@@ -103,15 +120,15 @@ export function runMaintenance(options) {
     }
   }
 
-  const newest = newestBackupTime(store.root)
-  if (newest === null || now - newest > DAY_MS) {
+  const newest = await newestCompleteBackup(store.root)
+  if (newest === null || now < newest.time || now - newest.time > DAY_MS) {
     try {
-      summary.backedUp = store.backup()
+      summary.backedUp = await store.backup()
     } catch {
-      summary.backedUp = null
+      summary.backupError = { code: 'backup-failed', message: '完整备份未完成，已有备份保留。请稍后重试或检查磁盘与文件权限。' }
     }
   }
-  summary.pruned = pruneBackups(store.root, config?.maintenance?.backupKeep ?? 7)
+  if (!summary.backupError) summary.pruned = pruneBackups(store.root, config?.maintenance?.backupKeep ?? 7, summary.backedUp ?? newest?.path)
   writeSummary(store.root, summary)
   options.logger?.info?.(`[dsh-memory] maintenance: archived=${summary.archived} backup=${summary.backedUp === null ? 'skip' : 'ok'} pruned=${summary.pruned}`)
   return summary
@@ -120,7 +137,7 @@ export function runMaintenance(options) {
 /** Persist the last maintenance summary for the panel/debug output. */
 function writeSummary(root, summary) {
   try {
-    writeFileSync(join(root, 'maintenance.json'), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 })
+    atomicWritePrivate(join(root, 'maintenance.json'), `${JSON.stringify(summary, null, 2)}\n`)
   } catch {
     // Maintenance is advisory; never fail activation over its report.
   }

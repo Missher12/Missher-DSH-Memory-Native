@@ -77,6 +77,29 @@ test('fresh cache restores full records, profile, scoring and project isolation'
   assert.deepEqual(reopened.store.find('a', scopeA), new MemoryStore({ root }).open().find('a', scopeA))
 })
 
+test('cached search honors validFrom for present and missing timestamps', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-memory-cache-valid-from-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const store = new MemoryStore({ root, clock: () => fixedNow }).open()
+  assert.ok(store.write({ id: 'future', scope: 'project', projectKey: 'project-a', kind: 'fact',
+    content: 'FUTURE-CACHE-VALUE', validFrom: fixedNow + 1000, confidence: 0.9 }, { id: 'future' }).ok)
+  const dir = join(root, 'projects', 'project-a')
+  mkdirSync(dir, { recursive: true })
+  const legacy = { id: 'missing-time', kind: 'fact', status: 'active', revision: 1, scope: 'project',
+    projectKey: 'project-a', content: 'MISSING-TIME-VALUE', updatedAt: fixedNow }
+  writeFileSync(join(dir, 'memories.jsonl'), `${JSON.stringify(legacy)}\n`, { flag: 'a' })
+  const first = openMemoryRuntime({ root, clock: () => fixedNow })
+  assert.equal(search(first, 'FUTURE-CACHE-VALUE').hits.some(hit => hit.record.id === 'future'), false)
+  assert.equal(search(first, 'MISSING-TIME-VALUE').hits[0].record.id, 'missing-time')
+  first.dispose()
+  await new Promise(resolve => setTimeout(resolve, 450))
+  const reopened = openMemoryRuntime({ root, clock: () => fixedNow })
+  t.after(() => reopened.dispose())
+  assert.equal(reopened.metrics.cacheHit, true)
+  assert.equal(search(reopened, 'FUTURE-CACHE-VALUE').hits.some(hit => hit.record.id === 'future'), false)
+  assert.equal(search(reopened, 'MISSING-TIME-VALUE').hits[0].record.id, 'missing-time')
+})
+
 test('writes, replacement, deletion, import and purge refresh the cache automatically', async (t) => {
   const root = createFixture(t)
   const runtime = openMemoryRuntime({ root, clock: () => fixedNow })

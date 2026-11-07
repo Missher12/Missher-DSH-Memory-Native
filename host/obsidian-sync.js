@@ -34,8 +34,8 @@ function memoryInput(text) {
 }
 
 export class ObsidianSync {
-  constructor({ root, store, index, getConfig, synchronize = () => {} }) {
-    Object.assign(this, { root, store, index, getConfig, synchronize })
+  constructor({ root, store, index, getConfig, synchronize = () => {}, onKnowledgeChange = () => {} }) {
+    Object.assign(this, { root, store, index, getConfig, synchronize, onKnowledgeChange })
     this.timer = null; this.busy = null; this.stopped = false
     this.state = null; this.target = null; this.files = new Map(); this.records = new WeakMap()
     this.last = { at: null, exported: 0, imported: 0, conflicts: [], errors: [] }
@@ -156,6 +156,7 @@ export class ObsidianSync {
       if (isKnowledgeFile(file)) pairs.set(`knowledge:${file}`, { key: `knowledge:${file}`, file: `knowledge/${file}`, kind: 'knowledge' })
     }
     let resolved = false
+    let knowledgeChanged = false
     for (const pair of pairs.values()) {
       if (blocked.has(pair.key)) continue
       try {
@@ -208,9 +209,10 @@ export class ObsidianSync {
           // Recheck the authority after asynchronous file reads before publishing.
           if (pair.kind === 'memory' && this.store.find(pair.id, [{scope:pair.record.scope,projectKey:pair.record.projectKey}]) !== pair.record) throw new Error('记忆已变化，请等待下一轮同步')
           await this.replace(vaultFile, right, left, dir); right = left; rv = lv; result.exported++
+          if (pair.kind === 'knowledge') knowledgeChanged = true
         } else {
           if (await textAt(vaultFile) !== right) throw new Error('笔记已变化，请等待下一轮同步')
-          if (pair.kind === 'knowledge') await this.replace(localFile, left, right, dir)
+          if (pair.kind === 'knowledge') { await this.replace(localFile, left, right, dir); knowledgeChanged = true }
           else {
             this.synchronize()
             const current = pair.record && this.store.find(pair.id, [{scope:pair.record.scope,projectKey:pair.record.projectKey}])
@@ -238,6 +240,9 @@ export class ObsidianSync {
       }
     }
     if (resolution && !resolved) throw new Error('冲突内容已变化或已经解决')
+    if (knowledgeChanged) {
+      try { this.onKnowledgeChange() } catch { /* Recall refresh is fail-soft; the next edit retries it. */ }
+    }
     const serialized = JSON.stringify(this.state)
     if (await textAt(stateFile) !== serialized) {
       const temp = `${stateFile}.tmp`; await writeFile(temp, serialized, {mode:0o600}); await rename(temp, stateFile)

@@ -4,6 +4,9 @@
     "description": "Local-first long-term memory: automatic capture, bounded context injection and a memory management panel."
   },
   "nav": "Memory",
+  "settings.captureAllowance": "Automatic calls today: {used}/{limit} · shared by extraction and deeper recall",
+  "settings.captureResume": "{count} waiting · resumes automatically at {time} (local time). Manual recovery uses additional calls.",
+  "settings.capturePaused": "{count} waiting · automatic capture is disabled or its daily allowance is zero.",
   "capture": "Capture",
   "inject": "Inject memories",
   "search": "Search memories",
@@ -84,7 +87,7 @@
   "pager.perPageLabel": "Per page",
   "pager.prev": "Previous",
   "pager.next": "Next",
-  "profile.title": "User profile",
+  "profile.title": "Preferences",
   "profile.summary": "{count} traits",
   "profile.evidence": "{count} evidence"
 }

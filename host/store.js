@@ -15,10 +15,13 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  fstatSync,
+  ftruncateSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -31,6 +34,9 @@ import { blockSourceRecall } from './capture-journal.js'
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { buildRecord, nextRevision } from './records.js'
 import { CACHE_FILE, hotRecord, rememberAuthority } from './cache-records.js'
+import { withFileLock, writeAll } from './persistence.js'
+import { createCompleteBackup } from './backup.js'
+import { validateImport } from './import-validation.js'
 
 export const SCHEMA_VERSION = 2
 export const MAX_RECORDS_PER_FILE = 2000
@@ -96,6 +102,7 @@ export class MemoryStore {
   #meta
   #beforeWrite = null
   #onChange = null
+  #backupInFlight = null
 
   /**
    * @param {{ root: string, clock?: () => number }} options
@@ -226,13 +233,16 @@ export class MemoryStore {
   }
 
   /** Append a record revision under a cross-process lock; fsync before returning. */
-  append(record) {
+  append(record, options = {}) {
     if (record === null || typeof record !== 'object') throw new Error('append requires a record')
     this.#beforeWrite?.()
     const state = this.#state(record.scope, record.projectKey)
     const outcome = this.#withLock(() => {
       this.#refreshState(state)
       const current = state.records.get(record.id)
+      if (options.importOnly && current && (current.revision >= record.revision || current.status === 'deleted' && record.status !== 'deleted')) {
+        return { record: current, changed: false, compact: false, protectedDeleted: current.status === 'deleted' && record.status !== 'deleted' }
+      }
       let next = record
       if (current !== undefined) {
         if (record.revision <= current.revision) {
@@ -246,24 +256,41 @@ export class MemoryStore {
       if (current && (current.content !== next.content || (current.status === 'active' && next.status !== 'active'))) blockSourceRecall(this.#root, current)
       if (next.status === 'deleted') blockSourceRecall(this.#root, next)
       const line = `${JSON.stringify(next)}\n`
-      const fd = openSync(state.file, 'a', 0o600)
+      const fd = openSync(state.file, 'a+', 0o600)
+      const originalSize = fstatSync(fd).size
+      let separatorBytes = 0
       try {
-        writeSync(fd, line)
+        if (originalSize > 0) {
+          const tail = Buffer.alloc(1)
+          if (readSync(fd, tail, 0, 1, originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
+          if (tail[0] !== 10) { writeAll(fd, '\n'); separatorBytes = 1 }
+        }
+        writeAll(fd, line)
         fsyncSync(fd)
+      } catch (error) {
+        // We hold the writer lock: roll back only this uncommitted append.
+        try { ftruncateSync(fd, originalSize); fsyncSync(fd) }
+        catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
+        throw error
       } finally {
         closeSync(fd)
       }
       state.records.set(next.id, next)
       rememberAuthority(next, line.slice(0, -1))
       state.lines += 1
-      state.bytes += Buffer.byteLength(line)
+      state.bytes += Buffer.byteLength(line) + separatorBytes
       state.stamp = fileStamp(state.file)
       this.#touch()
-      return { record: next, previous: current, changed: true, compact: state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE }
+      // A large live set stays above the old size threshold even immediately
+      // after compaction. Rewrite only when enough obsolete revisions exist.
+      const redundant = state.lines - state.records.size
+      const compact = (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
+        redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+      return { record: next, previous: current, changed: true, compact }
     })
     if (outcome.changed) this.#onChange?.({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
     if (outcome.compact) this.compact(record.scope, record.projectKey)
-    return outcome.record
+    return options.importOnly ? outcome : outcome.record
   }
 
   /**
@@ -367,7 +394,7 @@ export class MemoryStore {
       const text = lines.map((line) => `${line}\n`).join('')
       const fd = openSync(temp, 'w', 0o600)
       try {
-        writeSync(fd, text)
+        writeAll(fd, text)
         fsyncSync(fd)
       } finally {
         closeSync(fd)
@@ -431,7 +458,7 @@ export class MemoryStore {
         const temp = `${state.file}.tmp`
         const fd = openSync(temp, 'w', 0o600)
         try {
-          writeSync(fd, text)
+          writeAll(fd, text)
           fsyncSync(fd)
         } finally {
           closeSync(fd)
@@ -468,14 +495,11 @@ export class MemoryStore {
     }
   }
 
-  /** Write a timestamped backup under `<root>/backups/` and return its path. */
+  /** Snapshot all recoverable local data; unlike exportData, retain evidence/history. */
   backup() {
-    const dir = join(this.#root, 'backups')
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const stamp = new Date(this.#clock()).toISOString().replace(/[:.]/gu, '-')
-    const file = join(dir, `memories-${stamp}.json`)
-    writeFileSync(file, `${JSON.stringify(this.exportData(), null, 2)}\n`, { mode: 0o600 })
-    return file
+    // Snapshot validation detects concurrent mutations without freezing writers.
+    this.#backupInFlight ??= createCompleteBackup(this.#root, this.#clock()).finally(() => { this.#backupInFlight = null })
+    return this.#backupInFlight
   }
 
   /**
@@ -484,31 +508,29 @@ export class MemoryStore {
    * @param {{ dryRun?: boolean }} [options]
    */
   importData(payload, options = {}) {
+    const records = validateImport(payload, SCHEMA_VERSION, this.#clock())
     if (options.dryRun !== true) this.#beforeWrite?.()
-    const source = payload !== null && typeof payload === 'object' ? payload : {}
     const dryRun = options.dryRun === true
-    let imported = 0
-    let skipped = 0
-    const push = (record, scope, projectKey) => {
-      if (record === null || typeof record !== 'object' || typeof record.id !== 'string') {
-        skipped += 1
-        return
-      }
-      const state = this.#state(scope, projectKey)
+    const existing = new Map(this.listAll({ includeDeleted: true }).map(record => [record.id, record]))
+    for (const record of records) {
+      const previous = existing.get(record.id)
+      if (previous && (previous.scope !== record.scope || previous.projectKey !== record.projectKey)) throw new Error('导入记录与本地记录范围冲突，未应用。')
+    }
+    let imported = 0, skipped = 0, protectedDeleted = 0
+    for (const record of records) {
+      const state = this.#state(record.scope, record.projectKey)
       const current = state.records.get(record.id)
-      if (current !== undefined && (record.revision ?? 0) <= current.revision) {
-        skipped += 1
-        return
+      if (dryRun) {
+        if (current?.status === 'deleted' && record.status !== 'deleted') { skipped++; protectedDeleted++ }
+        else if (current && record.revision <= current.revision) skipped++
+        else imported++
+      } else {
+        const result = this.append(record, { importOnly: true })
+        if (result.changed) imported++
+        else { skipped++; if (result.protectedDeleted) protectedDeleted++ }
       }
-      imported += 1
-      if (!dryRun) this.append({ ...record, scope, projectKey })
     }
-    for (const record of Array.isArray(source.global) ? source.global : []) push(record, 'global', null)
-    for (const [key, list] of Object.entries(source.projects !== null && typeof source.projects === 'object' ? source.projects : {})) {
-      if (!isValidProjectKey(key) || !Array.isArray(list)) continue
-      for (const record of list) push(record, 'project', key)
-    }
-    return { imported, skipped, dryRun }
+    return { imported, skipped, protectedDeleted, dryRun }
   }
 
   /** Re-read one authority file when another process changed it. */
@@ -535,7 +557,7 @@ export class MemoryStore {
       const target = join(this.#root, 'corrupt-lines.jsonl')
       const fd = openSync(target, 'a', 0o600)
       try {
-        for (const text of lines) writeSync(fd, `${JSON.stringify({ file, at: this.#clock(), text })}\n`)
+        for (const text of lines) writeAll(fd, `${JSON.stringify({ file, at: this.#clock(), text })}\n`)
         fsyncSync(fd)
       } finally {
         closeSync(fd)
@@ -548,34 +570,7 @@ export class MemoryStore {
   /** Cross-process writer lock with stale-lock recovery. */
   #withLock(fn) {
     mkdirSync(this.#root, { recursive: true, mode: 0o700 })
-    const lockFile = join(this.#root, '.write.lock')
-    const deadline = Date.now() + 3000
-    let fd
-    for (;;) {
-      try {
-        fd = openSync(lockFile, 'wx', 0o600)
-        writeSync(fd, `${process.pid}\n`)
-        break
-      } catch (error) {
-        if (error === null || error === undefined || error.code !== 'EEXIST') throw error
-        try {
-          if (Date.now() - statSync(lockFile).mtimeMs > 30_000) {
-            try { unlinkSync(lockFile) } catch {}
-            continue
-          }
-        } catch {
-          continue
-        }
-        if (Date.now() > deadline) throw new Error('memory store is locked by another process')
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
-      }
-    }
-    try {
-      return fn()
-    } finally {
-      try { closeSync(fd) } catch {}
-      try { unlinkSync(lockFile) } catch {}
-    }
+    return withFileLock(join(this.#root, '.write.lock'), fn)
   }
 
   /** Per-scope counters for the panel/debug output. */

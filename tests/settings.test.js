@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import fs, { mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -22,6 +23,28 @@ test('settings round-trip and clamp numeric fields', (t) => {
   assert.deepEqual(readSettings(root), saved)
   const raw = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
   assert.equal(raw.injectMaxTokens, 8000)
+})
+
+test('corrupt persisted settings cannot silently reactivate default capture', t => {
+  const root = setup(t), file = join(root, 'settings.json')
+  for (const invalid of ['{"captureEnabled":false', '[]', 'null', '{"captureEnabled":"false"}']) {
+    writeFileSync(file, invalid)
+    assert.throws(() => readSettings(root), /设置/u)
+    assert.throws(() => writeSettings(root, { injectEnabled: false }), /设置/u)
+    assert.equal(readFileSync(file, 'utf8'), invalid)
+  }
+})
+
+test('failed settings commit preserves the prior policy and leaves no temporary file', t => {
+  const root = setup(t), file = join(root, 'settings.json')
+  writeSettings(root, { captureEnabled: false, injectEnabled: false })
+  const before = readFileSync(file), rename = fs.renameSync
+  fs.renameSync = (from, to) => { if (to === file) throw Object.assign(new Error('disk commit failure'), { code: 'EIO' }); return rename(from, to) }
+  syncBuiltinESMExports()
+  try { assert.throws(() => writeSettings(root, { captureEnabled: true }), /disk commit failure/u) }
+  finally { fs.renameSync = rename; syncBuiltinESMExports() }
+  assert.deepEqual(readFileSync(file), before)
+  assert.deepEqual(readdirSync(root), ['settings.json'])
 })
 
 test('unknown and mistyped settings are ignored', () => {

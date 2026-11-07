@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { deflateRawSync, inflateRawSync } from 'node:zlib'
 
 export const CACHE_FILE = 'derived-index-v1.bin'
-const META_FIELDS = ['id', 'kind', 'status', 'scope', 'projectKey', 'validTo', 'updatedAt', 'observedAt', 'confidence', 'importance', 'topic', 'revision']
+const META_FIELDS = ['id', 'kind', 'status', 'scope', 'projectKey', 'validFrom', 'validTo', 'updatedAt', 'observedAt', 'confidence', 'importance', 'topic', 'revision']
 const BLOCK_SIZE = 128 * 1024
 const lazy = new WeakMap()
 const authority = new WeakMap()
@@ -15,7 +15,7 @@ const digest = (text) => `\0${createHash('sha256').update(text).digest('base64')
 // dictionary object. Unusual or older shapes take the general path below.
 function recordTarget() {
   return { id: undefined, kind: undefined, scope: undefined, projectKey: undefined, content: DEFERRED,
-    topic: undefined, tags: DEFERRED, sourceRefs: DEFERRED, observedAt: undefined, validFrom: DEFERRED,
+    topic: undefined, tags: DEFERRED, sourceRefs: DEFERRED, observedAt: undefined, validFrom: undefined,
     validTo: undefined, confidence: undefined, importance: undefined, status: undefined, revision: undefined,
     supersedesId: DEFERRED, evidenceRole: DEFERRED, captureKey: DEFERRED, captureTaskId: DEFERRED,
     quoted: DEFERRED, contentHash: DEFERRED, recallCount: DEFERRED, lastRecalledAt: DEFERRED,

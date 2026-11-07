@@ -426,6 +426,7 @@ export class MemoryIndex {
       if (singleStatus !== undefined ? record.status !== singleStatus : !statuses.has(record.status)) continue
       if (!scopes.has(record.scope)) continue
       if (record.scope === 'project' && options.projectKey != null && record.projectKey !== options.projectKey) continue
+      if (record.validFrom != null && record.validFrom > now) continue
       if (options.includeExpired !== true && record.validTo != null && record.validTo <= now) continue
       if (Object.hasOwn(MEMORY_KINDS, record.kind)) kindCounts[record.kind] = (kindCounts[record.kind] ?? 0) + 1
       if (kinds !== null && !kinds.has(record.kind)) continue

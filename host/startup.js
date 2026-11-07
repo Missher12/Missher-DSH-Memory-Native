@@ -10,7 +10,7 @@ import { advanceProfileView, prepareProfileView, profileViewResult } from './pro
 import { MemoryIndex } from './search.js'
 import { fileStamp, MemoryStore } from './store.js'
 
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2
 
 function authorityStamp(store) {
   const root = store.root
@@ -39,7 +39,7 @@ export function openMemoryRuntime({ root, clock = () => Date.now() }) {
       const headerLength = bytes.readUInt32BE(0)
       if (headerLength < 2 || headerLength > 65536 || headerLength + 4 >= bytes.length) return false
       const header = JSON.parse(bytes.subarray(4, 4 + headerLength).toString('utf8'))
-      if (header.version !== CACHE_VERSION || header.format !== 9 || header.v8 !== process.versions.v8 || !same(header.stamp, stamp)) return false
+      if (header.version !== CACHE_VERSION || header.format !== 10 || header.v8 !== process.versions.v8 || !same(header.stamp, stamp)) return false
       const body = bytes.subarray(Math.ceil((4 + headerLength) / 8) * 8)
       if (crc32(body) !== header.checksum) return false
       const data = unpackCache(body)
@@ -86,7 +86,7 @@ export function openMemoryRuntime({ root, clock = () => Date.now() }) {
       const packed = packRecords(store.snapshot(), index.snapshot(), graph)
       const packedProfile = profile.bytes ? profile : { bytes: serialize(profile), nextFutureAt: profile.nextFutureAt }
       const body = packCache({ ...packed, profile: packedProfile })
-      const header = Buffer.from(JSON.stringify({ version: CACHE_VERSION, format: 9, v8: process.versions.v8, stamp,
+      const header = Buffer.from(JSON.stringify({ version: CACHE_VERSION, format: 10, v8: process.versions.v8, stamp,
         checksum: crc32(body) }))
       const size = Buffer.allocUnsafe(4)
       size.writeUInt32BE(header.length)

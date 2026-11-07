@@ -35,14 +35,14 @@ function writeEpisode(store, content, { now, confidence = 0.5, status = 'active'
   return built.record
 }
 
-test('maintenance archives only stale low-confidence episodes', (t) => {
+test('maintenance archives only stale low-confidence episodes', async (t) => {
   const { root, store, config } = setup(t)
   const stale = writeEpisode(store, '很久以前的低置信度经验记录', { now: NOW - 200 * DAY, confidence: 0.5 })
   const recent = writeEpisode(store, '最近的低置信度经验记录', { now: NOW - 5 * DAY, confidence: 0.5 })
   const strong = writeEpisode(store, '很久以前的高置信度经验记录', { now: NOW - 200 * DAY, confidence: 0.9 })
   const pinned = writeEpisode(store, '很久以前的固定经验记录', { now: NOW - 200 * DAY, confidence: 0.5, pinned: true })
 
-  const summary = runMaintenance({ store, config, now: NOW })
+  const summary = await runMaintenance({ store, config, now: NOW })
   assert.equal(summary.archived, 1)
   const records = store.list('project', KEY, { includeDeleted: true })
   const byId = new Map(records.map((record) => [record.id, record]))
@@ -55,14 +55,34 @@ test('maintenance archives only stale low-confidence episodes', (t) => {
   assert.equal(report.archived, 1)
 })
 
-test('maintenance can be disabled by config', (t) => {
+test('maintenance can be disabled by config', async (t) => {
   const { store } = setup(t)
   const config = resolveConfig({ maintenance: { enabled: false } })
   writeEpisode(store, '不会被归档的旧经验记录', { now: NOW - 200 * DAY, confidence: 0.5 })
-  const summary = runMaintenance({ store, config, now: NOW })
+  const summary = await runMaintenance({ store, config, now: NOW })
   assert.equal(summary.skipped, true)
   assert.equal(summary.archived, 0)
   assert.equal(store.list('project', KEY)[0].status, 'active')
+})
+
+test('backup scheduling uses the verified creation time, including clock rollback', async t => {
+  const { store, config } = setup(t)
+  const first = await runMaintenance({ store, config, now: NOW })
+  assert.ok(first.backedUp)
+  assert.equal((await runMaintenance({ store, config, now: NOW + 1000 })).backedUp, null)
+  assert.ok((await runMaintenance({ store, config, now: NOW - DAY })).backedUp)
+})
+
+test('failed backup reports the failure and does not prune previous recovery files', async t => {
+  const { root, store, config } = setup(t), dir = join(root, 'backups')
+  mkdirSync(dir)
+  for (let i = 0; i < 9; i++) writeFileSync(join(dir, `memories-old-${i}.json`), '{}')
+  store.backup = async () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) }
+  const summary = await runMaintenance({ store, config, now: NOW })
+  assert.equal(summary.backedUp, null)
+  assert.equal(summary.backupError.code, 'backup-failed')
+  assert.equal(summary.pruned, 0)
+  assert.equal(readdirSync(dir).length, 9)
 })
 
 test('pruneBackups keeps the newest files', (t) => {

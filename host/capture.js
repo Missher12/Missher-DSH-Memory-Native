@@ -29,6 +29,7 @@ import {
   reconcileReplacements,
   saveSource,
   readSource,
+  canReadSource,
   turnIdOf,
   updateCaptureTask,
   updateTurnIntake,
@@ -40,6 +41,9 @@ import { estimateTokens } from './recall.js'
 import { buildRecord, contentHashOf, mergeSourceRefs } from './records.js'
 import { tokenize } from './tokenize.js'
 import { analyzeUserMessageControls } from './user-controls.js'
+import { grantSourceRecall } from './source-passages.js'
+import { readRecallSelection, readRecallSelections, recallSelectionId, writeRecallSelection } from './recall-journal.js'
+import { buildRecallSelectionPrompt } from './recall-selection.js'
 
 const SIMILARITY_THRESHOLD = 0.9
 const PREFERENCE_SIMILARITY_THRESHOLD = 0.85
@@ -184,14 +188,42 @@ function conflictingValues(left, right) {
 }
 
 function dayKey(ms) {
-  return new Date(ms).toISOString().slice(0, 10)
+  const date = new Date(ms)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function nextDayStart(ms) {
+  const date = new Date(ms)
+  date.setHours(24, 0, 0, 0)
+  return date.getTime()
+}
+
+// Older receipts used UTC dates. Interpret their original call timestamp;
+// never reset an already-spent allowance merely because the plugin upgraded.
+function receiptDay(day, at, calendar) {
+  return calendar !== 'local' && Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === day
+    ? dayKey(at) : day
+}
+
+function combineSignals(...signals) {
+  const active = signals.filter(signal => signal !== null && typeof signal === 'object' &&
+    typeof signal.addEventListener === 'function' && typeof signal.aborted === 'boolean')
+  if (active.length <= 1) return active[0]
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(active)
+  const controller = new AbortController()
+  for (const signal of active) {
+    if (signal.aborted) controller.abort(signal.reason)
+    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+  }
+  return controller.signal
 }
 
 // Explicit/manual calls bypass the automatic allowance. Preserve automatic
 // calls separately so a later manual retry cannot erase their budget usage.
 function automaticBudget(task) {
   if (typeof task.automaticCallDay === 'string' && Number.isInteger(task.automaticCalls)) {
-    return { day: task.automaticCallDay, calls: Math.max(0, task.automaticCalls) }
+    return { day: receiptDay(task.automaticCallDay, task.automaticCallAt ?? task.lastCallAt, task.budgetReservation?.calendar),
+      calls: Math.max(0, task.automaticCalls) }
   }
   return typeof task.lastCallAt === 'number' && !task.explicit && !task.manual
     ? { day: dayKey(task.lastCallAt), calls: 1 }
@@ -326,14 +358,18 @@ export class CapturePipeline {
   #onWrite
   #logger
   #onExtraction
+  #onUsage
   #buffers = new Map()
   #queue = Promise.resolve()
   #draining = null
   #resuming = null
+  #selectionCalls = new Map()
   #callsToday = 0
   #day = ''
   #disposed = false
   #abort = new AbortController()
+  #budgetTimer = null
+  #budgetWakeAt = null
 
   constructor(options) {
     this.#store = options.store
@@ -344,6 +380,7 @@ export class CapturePipeline {
     this.#onWrite = typeof options.onWrite === 'function' ? options.onWrite : () => {}
     this.#logger = options.logger
     this.#onExtraction = typeof options.onExtraction === 'function' ? options.onExtraction : () => {}
+    this.#onUsage = typeof options.onUsage === 'function' ? options.onUsage : () => {}
     const root = this.#store?.root
     if (typeof root === 'string' && root !== '') {
       recoverCaptureTasks(root)
@@ -351,15 +388,159 @@ export class CapturePipeline {
       for (const record of reconciled) this.#index.upsert(record)
       const today = dayKey(this.#clock())
       this.#day = today
-      this.#callsToday = readCaptureTasks(root).reduce((total, task) => {
+      const extractionCalls = readCaptureTasks(root).reduce((total, task) => {
         const usage = automaticBudget(task)
         return total + (usage.day === today ? usage.calls : 0)
       }, 0)
+      const recallCalls = readRecallSelections(root, today).reduce((total, task) => {
+        const reservation = task.budgetReservation
+        const day = receiptDay(reservation?.day ?? task.automaticCallDay ?? null, reservation?.at ?? task.requestedAt, reservation?.calendar)
+        const calls = Number.isInteger(reservation?.calls) ? reservation.calls :
+          Number.isInteger(task.automaticCalls) ? task.automaticCalls : 0
+        if (reservation?.state === 'released' || task.callState === 'not-sent') return total
+        return total + (day === today ? Math.max(0, calls) : 0)
+      }, 0)
+      this.#callsToday = extractionCalls + recallCalls
     }
   }
 
   setConfig(config) {
-    if (config !== null && typeof config === 'object') this.#config = config
+    if (config !== null && typeof config === 'object') {
+      const changed = config.capture.enabled !== this.#config.capture.enabled ||
+        config.capture.maxCallsPerDay !== this.#config.capture.maxCallsPerDay
+      this.#config = config
+      if (changed) this.#scheduleDrain()
+    }
+  }
+
+  /** One bounded, journaled evidence-selection request for a real user turn. */
+  async selectRecall(input = {}) {
+    const root = this.#store?.root
+    const sessionId = typeof input.session?.id === 'string' ? input.session.id : ''
+    const id = recallSelectionId(sessionId, input.turnKey)
+    if (typeof root !== 'string' || id === null) return { state: 'not-sent', callState: 'not-sent', usage: null, resultText: '' }
+    const inflight = this.#selectionCalls.get(id)
+    if (inflight) return inflight
+    const request = this.#selectRecallOnce(root, id, input)
+    this.#selectionCalls.set(id, request)
+    try {
+      return await request
+    } finally {
+      if (this.#selectionCalls.get(id) === request) this.#selectionCalls.delete(id)
+    }
+  }
+
+  async #selectRecallOnce(root, id, input) {
+    const previous = readRecallSelection(root, id)
+    if (previous !== null) {
+      if (previous.callState === 'requested') {
+        const unknown = { ...previous, state: 'unknown', callState: 'unknown', updatedAt: this.#clock(),
+          reason: '上次选择请求已发送但没有可用回执；不会自动重试' }
+        writeRecallSelection(root, unknown)
+        return { ...unknown, reused: true }
+      }
+      return { ...previous, state: previous.state ?? previous.callState, reused: true }
+    }
+
+    if (input.signal?.aborted === true) {
+      return { state: 'not-sent', callState: 'not-sent', route: null, usage: null, resultText: '' }
+    }
+
+    let route
+    try { route = await this.#resolveRecallRoute(input.session, input.modelSelection) } catch { route = undefined }
+    const llm = this.#getLlm()
+    if (input.signal?.aborted === true || route === undefined || typeof llm?.stream !== 'function') {
+      return { state: 'not-sent', callState: 'not-sent', route: null, usage: null, resultText: '' }
+    }
+    const promptLimit = Math.min(4000, this.#config.extraction.maxInputTokens)
+    const built = buildRecallSelectionPrompt({
+      query: input.query,
+      slots: input.slots,
+      candidates: input.candidates,
+      maxInputTokens: promptLimit,
+    })
+    if (built.candidates.length === 0 || built.slots.length === 0 || built.promptTokens > promptLimit) {
+      return { state: 'not-sent', callState: 'not-sent', route, usage: null, resultText: '', promptTokens: built.promptTokens }
+    }
+    // Some current-host models count reasoning against the output cap too.
+    // Respect a smaller user limit, but do not hard-truncate them at 800.
+    const maxTokens = Math.min(4096, this.#config.extraction.maxOutputTokens)
+    if (input.signal?.aborted === true) {
+      return { state: 'not-sent', callState: 'not-sent', route, usage: null, resultText: '', promptTokens: built.promptTokens }
+    }
+    const reservation = this.#reserveCall(built.promptTokens, maxTokens)
+    if (reservation === null) {
+      return { state: 'not-sent', callState: 'not-sent', route, usage: null, resultText: '',
+        promptTokens: built.promptTokens, reason: '今日提取调用预算已用尽' }
+    }
+    const requested = {
+      id, state: 'requested', callState: 'requested', route, requestedAt: this.#clock(),
+      promptTokens: built.promptTokens, maxTokens,
+      budgetReservation: { ...reservation, state: 'reserved' },
+      slotKeys: built.slots,
+      candidateRefs: built.candidates.map(candidate => ({ id: candidate.id, revision: candidate.revision })),
+    }
+    try {
+      writeRecallSelection(root, requested)
+    } catch (error) {
+      this.#releaseCall(reservation)
+      return { state: 'not-sent', callState: 'not-sent', route, usage: null, resultText: '',
+        promptTokens: built.promptTokens, reason: `选择回执无法保存，未发送请求：${error instanceof Error ? error.message : String(error)}` }
+    }
+    if (input.signal?.aborted === true) {
+      this.#releaseCall(reservation)
+      const receipt = {
+        ...requested, state: 'not-sent', callState: 'not-sent', completedAt: this.#clock(), resultText: '', usage: null,
+        budgetReservation: { ...requested.budgetReservation, state: 'released', calls: 0 },
+        reason: '请求发送前，本轮已取消',
+      }
+      writeRecallSelection(root, receipt)
+      return receipt
+    }
+    let result = null
+    try {
+      result = await this.#collect(route, built.prompt, maxTokens, input.signal)
+      const state = result.finishKind === 'stop' && result.truncated !== true ? 'completed' : 'failed'
+      const completedAt = this.#clock()
+      const usage = normalizeUsage(result.usage)
+      const receipt = {
+        ...requested, state, callState: 'completed', resultText: String(result.text ?? '').slice(0, 16000),
+        finishKind: result.finishKind ?? null, usage,
+        budgetReservation: this.#settledReservation(reservation, usage),
+        completedAt, reason: state === 'completed' ? null : '模型选择输出未完整结束；不会自动重试',
+      }
+      writeRecallSelection(root, receipt)
+      this.#recordUsage({ at: completedAt, promptTokens: built.promptTokens, usage, outcome: state })
+      return receipt
+    } catch (error) {
+      if (error?.notSent === true) {
+        this.#releaseCall(reservation)
+        const receipt = {
+          ...requested, state: 'not-sent', callState: 'not-sent', completedAt: this.#clock(), resultText: '', usage: null,
+          budgetReservation: { ...requested.budgetReservation, state: 'released', calls: 0 },
+          reason: '请求发送前，本轮已取消',
+        }
+        writeRecallSelection(root, receipt)
+        return receipt
+      }
+      const completed = error?.completed === true || result !== null
+      const usage = normalizeUsage(error?.usage) ?? normalizeUsage(result?.usage)
+      const selectionCompleted = result?.finishKind === 'stop' && result?.truncated !== true
+      const state = selectionCompleted ? 'completed' : completed ? 'failed' : 'unknown'
+      const completedAt = completed ? this.#clock() : null
+      const receipt = {
+        ...requested, state, callState: completed ? 'completed' : 'unknown',
+        resultText: String(result?.text ?? '').slice(0, 16000),
+        finishKind: result?.finishKind ?? error?.finishKind ?? null, usage,
+        budgetReservation: completed ? this.#settledReservation(reservation, usage) : requested.budgetReservation,
+        completedAt,
+        reason: selectionCompleted ? null : completed ? `模型已结束但选择输出不可用：${error instanceof Error ? error.message : String(error)}`
+          : `模型选择回执未知：${error instanceof Error ? error.message : String(error)}；不会自动重试`,
+      }
+      writeRecallSelection(root, receipt)
+      this.#recordUsage({ at: completedAt ?? this.#clock(), promptTokens: built.promptTokens, usage, outcome: state })
+      return receipt
+    }
   }
 
   /** Feed one session event. Full text is journaled before it can be lost. */
@@ -393,6 +574,9 @@ export class CapturePipeline {
   /** Abort the in-flight request; journaled sources and tasks survive. */
   dispose() {
     this.#disposed = true
+    clearTimeout(this.#budgetTimer)
+    this.#budgetTimer = null
+    this.#budgetWakeAt = null
     this.#abort.abort()
     this.#buffers.clear()
   }
@@ -434,6 +618,8 @@ export class CapturePipeline {
       continuationTaskIds: task.continuationTaskIds ?? [],
       recoveryOf: task.recoveryOf ?? null,
       reason: task.reason ?? null,
+      waitReason: task.waitReason ?? null,
+      resumeAt: task.status === 'pending' ? task.resumeAt ?? null : null,
       updatedAt: task.updatedAt ?? null,
     }))
     const intakes = readTurnIntakes(root)
@@ -441,6 +627,7 @@ export class CapturePipeline {
     return {
       counts: countCaptureTasks(allTasks),
       tasks,
+      budget: this.#budgetStatus(allTasks),
       health,
       degraded: health.corruptTasks > 0 || intakes.corrupt > 0,
       storage: captureStorageStatus(root),
@@ -475,8 +662,9 @@ export class CapturePipeline {
       return { ok: false, reason: 'unknown result needs confirmUnknown=true before retrying' }
     }
     const previousBudget = automaticBudget(task)
-    if (task.automaticCallDay === undefined && previousBudget.calls > 0) {
-      updateCaptureTask(root, taskId, { automaticCallDay: previousBudget.day, automaticCalls: previousBudget.calls })
+    if ((task.automaticCallDay === undefined || task.automaticCallAt === undefined) && previousBudget.calls > 0) {
+      updateCaptureTask(root, taskId, { automaticCallDay: previousBudget.day, automaticCalls: previousBudget.calls,
+        automaticCallAt: task.automaticCallAt ?? task.lastCallAt })
     }
     const partial = task.status === 'partial' || task.partial === true
     if (partial && Array.isArray(task.continuationTaskIds) && task.continuationTaskIds.length > 0) {
@@ -543,6 +731,8 @@ export class CapturePipeline {
       reason: partial ? 'manual completion of a partial extraction' : 'manual retry requested',
       retryAt: this.#clock(),
       manual: true,
+      waitReason: null,
+      resumeAt: null,
       completion: partial,
       ...(clearStoredResult
         ? { resultText: undefined, resultTruncated: undefined, resultUsage: undefined, resultParseFailed: undefined, replay: false }
@@ -709,6 +899,14 @@ export class CapturePipeline {
       reason: skipped,
       createdAt: this.#clock(),
     })
+    // Source retrieval is independent of extraction quota, but uses the same
+    // completed-turn consent. Never retroactively authorize old journal files.
+    if (this.#config.capture.enabled && !noSave) {
+      for (const source of sourceRecords) {
+        try { if (!memoryOptOut(source)) grantSourceRecall(root, source, identity.key) }
+        catch (error) { this.#logger?.warn?.(`[dsh-memory] source indexing grant failed: ${error.message}`) }
+      }
+    }
     if (intake.status === 'pending') this.#enqueueIntake(intake)
   }
 
@@ -827,6 +1025,7 @@ export class CapturePipeline {
       await this.#draining
     } finally {
       this.#draining = null
+      this.#scheduleBudgetWake()
     }
   }
 
@@ -838,8 +1037,19 @@ export class CapturePipeline {
     const root = this.#store?.root
     if (typeof root !== 'string') return
     if (!this.#config.capture.enabled) return
+    if (['unknown', 'requested'].includes(task.callState)) {
+      updateCaptureTask(root, task.id, { status: 'unknown', callState: 'unknown',
+        reason: '已有请求但没有可核验的完成回执，不自动重发' })
+      return
+    }
     if (typeof task.resultText === 'string') {
       await this.#replayStoredResult(task)
+      return
+    }
+    // Polls and ordinary turns must not rebuild the same prompt or append the
+    // same wait revision while the allowance is still exhausted.
+    if (task.waitReason === 'daily-budget' && !task.explicit && !task.manual && this.#budgetExhausted()) {
+      this.#deferBudget(task)
       return
     }
     let route = task.route
@@ -871,7 +1081,7 @@ export class CapturePipeline {
     }
     const modelEntries = entries.filter(isModelEvidenceSource)
     const forgottenSources = this.#deletedSourceIds()
-    if (entries.some((entry) => forgottenSources.has(entry.source.id))) {
+    if (entries.some((entry) => forgottenSources.has(entry.source.id) || !canReadSource(root, entry.source.id))) {
       updateCaptureTask(root, task.id, {
         status: 'skipped',
         callState: 'not-sent',
@@ -964,25 +1174,38 @@ export class CapturePipeline {
       updateCaptureTask(root, task.id, { status: 'pending', callState: 'not-sent', reason: '同模型输出额度耗尽且无正文，暂停连续调用；请先恢复失败段或修正模型配置' })
       return
     }
-    if (!explicit && task.manual !== true && !this.#admitCall()) {
-      updateCaptureTask(root, task.id, { status: 'pending', callState: 'not-sent', reason: '今日提取预算已用尽，等待下一天或手动重试' })
+    const automaticReservation = !explicit && task.manual !== true
+      ? this.#reserveCall(promptTokens, maxTokens)
+      : null
+    if (!explicit && task.manual !== true && automaticReservation === null) {
+      this.#deferBudget(task)
       return
     }
     const budget = automaticBudget(task)
-    const callDay = dayKey(this.#clock())
-    updateCaptureTask(root, task.id, {
-      status: 'running',
-      callState: 'requested',
-      attempts: (task.attempts ?? 0) + 1,
-      lastCallAt: this.#clock(),
-      startedAt: this.#clock(),
-      requestMaxTokens: maxTokens,
-      reason: null,
-      ...(!explicit && task.manual !== true ? {
-        automaticCallDay: callDay,
-        automaticCalls: (budget.day === callDay ? budget.calls : 0) + 1,
-      } : {}),
-    })
+    const callDay = automaticReservation?.day ?? dayKey(this.#clock())
+    try {
+      updateCaptureTask(root, task.id, {
+        status: 'running',
+        callState: 'requested',
+        attempts: (task.attempts ?? 0) + 1,
+        lastCallAt: this.#clock(),
+        startedAt: this.#clock(),
+        requestMaxTokens: maxTokens,
+        promptTokens,
+        reason: null,
+        waitReason: null,
+        resumeAt: null,
+        ...(automaticReservation === null ? {} : {
+          automaticCallDay: callDay,
+          automaticCallAt: automaticReservation.at,
+          automaticCalls: (budget.day === callDay ? budget.calls : 0) + 1,
+          budgetReservation: { ...automaticReservation, state: 'reserved' },
+        }),
+      })
+    } catch (error) {
+      this.#releaseCall(automaticReservation)
+      throw error
+    }
     let result
     try {
       result = await this.#collect(route, prompt, maxTokens)
@@ -991,7 +1214,10 @@ export class CapturePipeline {
       // failure; a transport drop after the request was sent is unknown.
       if (error?.completed === true) {
         const receipt = { resultFinishKind: error.finishKind, resultUsage: error.usage ?? null,
-          reasoningChars: error.reasoningChars ?? 0, promptTokens, transcriptChars: transcript.length, completedAt: this.#clock() }
+          reasoningChars: error.reasoningChars ?? 0, promptTokens, transcriptChars: transcript.length, completedAt: this.#clock(),
+          ...(automaticReservation === null ? {} : {
+            budgetReservation: this.#settledReservation(automaticReservation, normalizeUsage(error.usage)),
+          }) }
         // No text means splitting input has demonstrated no progress. Stop this
         // route rather than spending the daily allowance on an empty tree.
         if (error.finishKind === 'max-tokens' || error.finishKind === 'length') {
@@ -1050,6 +1276,9 @@ export class CapturePipeline {
       reasoningChars: result.reasoningChars,
       promptTokens,
       transcriptChars: transcript.length,
+      ...(automaticReservation === null ? {} : {
+        budgetReservation: this.#settledReservation(automaticReservation, normalizeUsage(result.usage)),
+      }),
     })
     await this.#applyStoredResult(task, result.text, {
       truncated: result.truncated === true,
@@ -1089,6 +1318,12 @@ export class CapturePipeline {
   async #applyStoredResult(task, resultText, meta, entries, info) {
     const root = this.#store?.root
     if (typeof root !== 'string') return
+    if (entries.some(entry => !canReadSource(root, entry.source.id))) {
+      updateCaptureTask(root, task.id, { status: 'skipped', callState: 'completed',
+        reason: '原文已撤销检索授权，保留已付费结果但不再写入记忆',
+        result: { items: 0, applied: 0, rejected: 0, truncated: false } })
+      return
+    }
     let parsed
     try {
       parsed = parseExtraction(resultText)
@@ -1296,15 +1531,81 @@ export class CapturePipeline {
     return ids
   }
 
-  #admitCall() {
+  #budgetExhausted() {
     const day = dayKey(this.#clock())
     if (day !== this.#day) {
       this.#day = day
       this.#callsToday = 0
     }
-    if (this.#callsToday >= this.#config.capture.maxCallsPerDay) return false
+    return this.#callsToday >= this.#config.capture.maxCallsPerDay
+  }
+
+  #budgetStatus(tasks) {
+    const exhausted = this.#budgetExhausted()
+    const limit = this.#config.capture.maxCallsPerDay
+    const waiting = tasks.filter(task => task.status === 'pending' && task.waitReason === 'daily-budget' && !task.manual && !task.explicit).length
+    return { used: this.#callsToday, limit, remaining: Math.max(0, limit - this.#callsToday), waiting,
+      resetAt: nextDayStart(this.#clock()),
+      resumeAt: waiting > 0 && exhausted && limit > 0 && this.#config.capture.enabled ? nextDayStart(this.#clock()) : null }
+  }
+
+  #deferBudget(task) {
+    const limit = this.#config.capture.maxCallsPerDay
+    const patch = { status: 'pending', callState: 'not-sent', waitReason: 'daily-budget',
+      resumeAt: limit > 0 ? nextDayStart(this.#clock()) : null,
+      reason: limit > 0 ? '今日自动调用预算已用尽，本地时间零点自动继续' : '自动调用额度为 0；调整额度或显式恢复后继续' }
+    if (Object.entries(patch).some(([key, value]) => task[key] !== value)) updateCaptureTask(this.#store.root, task.id, patch)
+  }
+
+  #scheduleBudgetWake() {
+    const status = this.#budgetStatus(readCaptureTasks(this.#store.root))
+    const at = this.#disposed ? null : status.resumeAt
+    if (at === this.#budgetWakeAt) return
+    clearTimeout(this.#budgetTimer)
+    this.#budgetTimer = null
+    this.#budgetWakeAt = at
+    if (at === null) return
+    this.#budgetTimer = setTimeout(() => {
+      this.#budgetTimer = null
+      this.#budgetWakeAt = null
+      this.resume().catch(error => this.#logger?.warn?.(`[dsh-memory] budget resume failed: ${error.message}`))
+    }, Math.max(1, at - this.#clock()))
+    this.#budgetTimer.unref?.()
+  }
+
+  #reserveCall(promptTokens, outputTokens) {
+    if (this.#budgetExhausted()) return null
     this.#callsToday += 1
-    return true
+    return {
+      day: this.#day,
+      at: this.#clock(),
+      calendar: 'local',
+      calls: 1,
+      promptTokens,
+      outputTokens,
+      totalTokens: promptTokens + outputTokens,
+    }
+  }
+
+  #releaseCall(reservation) {
+    if (reservation?.day === this.#day && this.#callsToday > 0) this.#callsToday -= reservation.calls ?? 1
+  }
+
+  #settledReservation(reservation, usage) {
+    const actualTokens = usage?.totalTokens ?? (
+      Number.isInteger(usage?.inputTokens) && Number.isInteger(usage?.outputTokens)
+        ? usage.inputTokens + usage.outputTokens
+        : null
+    )
+    return { ...reservation, state: 'settled', usage: usage ?? null, actualTokens }
+  }
+
+  #recordUsage({ at, promptTokens, usage, outcome }) {
+    try {
+      this.#onUsage({ at, promptTokens, usage: usage ?? null, outcome, calls: 1, items: 0, applied: 0 })
+    } catch {
+      // Usage reporting is advisory and must never affect the host turn.
+    }
   }
 
   #getLlm() {
@@ -1357,6 +1658,20 @@ export class CapturePipeline {
     return undefined
   }
 
+  async #resolveRecallRoute(session, modelSelection) {
+    if (typeof modelSelection?.provider === 'string' && modelSelection.provider !== '' &&
+        typeof modelSelection.model === 'string' && modelSelection.model !== '') {
+      return {
+        provider: modelSelection.provider,
+        model: modelSelection.model,
+        ...(typeof modelSelection.reasoningEffort === 'string' && modelSelection.reasoningEffort !== ''
+          ? { reasoningEffort: modelSelection.reasoningEffort }
+          : {}),
+      }
+    }
+    return this.#resolveRoute(session)
+  }
+
   async #effortFor(provider, model, configured) {
     if (typeof configured === 'string' && configured !== '') return { reasoningEffort: configured }
     const llm = this.#getLlm()
@@ -1370,8 +1685,15 @@ export class CapturePipeline {
     }
   }
 
-  async #collect(route, prompt, maxTokens) {
+  async #collect(route, prompt, maxTokens, requestSignal = undefined) {
     const llm = this.#getLlm()
+    const signal = combineSignals(this.#abort.signal, requestSignal)
+    if (signal?.aborted === true) {
+      const error = new Error('request aborted before provider call')
+      error.name = 'AbortError'
+      error.notSent = true
+      throw error
+    }
     let text = ''
     let finish
     let usage = null
@@ -1382,7 +1704,7 @@ export class CapturePipeline {
       ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
       maxTokens: maxTokens ?? this.#config.extraction.maxOutputTokens,
-      signal: this.#abort.signal,
+      signal,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       else if (chunk.type === 'reasoning-delta') reasoningChars += String(chunk.text ?? '').length
@@ -1579,7 +1901,7 @@ export class CapturePipeline {
       const deletedHashes = deletedHashesByScope.get(scopeId) ?? new Map()
       // Forgetting is source-aware: a paraphrase from the same deleted source
       // must not be revived by a pending task. Other sources stay independent.
-      if (evidence.refs.some((ref) => deletedSources.has(ref.sourceId))) continue
+      if (evidence.refs.some((ref) => deletedSources.has(ref.sourceId) || !canReadSource(this.#store.root, ref.sourceId))) continue
       // Observation time comes from the selected user evidence, not from the
       // recovery/processing clock. A missing time is conservative.
       const userTimes = evidence.refs

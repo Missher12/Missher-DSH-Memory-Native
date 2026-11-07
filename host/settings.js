@@ -8,8 +8,10 @@
  * @module dsh-memory/host/settings
  */
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { atomicWritePrivate, withFileLock } from './persistence.js'
 
 export const SETTINGS_FILE = 'settings.json'
 
@@ -38,20 +40,54 @@ export function sanitizeSettings(raw) {
   return out
 }
 
-/** Read `settings.json`; a missing or corrupt file means "no overrides". */
+/** Only a missing file means no overrides; unreadable policy must fail closed. */
 export function readSettings(root) {
+  let text
   try {
-    return sanitizeSettings(JSON.parse(readFileSync(join(root, SETTINGS_FILE), 'utf8')))
-  } catch {
-    return {}
+    text = readFileSync(join(root, SETTINGS_FILE), 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {}
+    throw Object.assign(new Error('记忆设置无法读取，已停止自动处理。请检查文件权限后重试。'), { code: 'settings-unreadable', cause: error })
+  }
+  try {
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('settings must be an object')
+    const sanitized = sanitizeSettings(parsed)
+    const known = ['captureEnabled', 'injectEnabled', 'injectMaxTokens', 'retentionEpisodeDays', 'maintenanceEnabled', 'obsidianAutoSync', 'obsidianVaultPath', 'obsidianFolder']
+    for (const key of known) {
+      if (Object.hasOwn(parsed, key) && !Object.hasOwn(sanitized, key)) throw new Error('invalid setting type')
+    }
+    return sanitized
+  } catch (error) {
+    throw Object.assign(new Error('记忆设置已损坏，已停止自动处理。请在设置页重新保存；原文件会保留。'), { code: 'settings-invalid', cause: error })
   }
 }
 
 /** Merge a validated patch into the file and return the full settings object. */
 export function writeSettings(root, patch) {
-  const merged = sanitizeSettings({ ...readSettings(root), ...(patch !== null && typeof patch === 'object' ? patch : {}) })
-  writeFileSync(join(root, SETTINGS_FILE), `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 })
-  return merged
+  return withFileLock(join(root, '.settings.lock'), () => {
+    const merged = sanitizeSettings({ ...readSettings(root), ...(patch !== null && typeof patch === 'object' ? patch : {}) })
+    atomicWritePrivate(join(root, SETTINGS_FILE), `${JSON.stringify(merged, null, 2)}\n`)
+    return merged
+  })
+}
+
+/** An explicit full policy save repairs invalid JSON and preserves its bytes. */
+export function repairSettings(root, patch) {
+  for (const key of ['captureEnabled', 'injectEnabled', 'maintenanceEnabled', 'obsidianAutoSync']) {
+    if (typeof patch?.[key] !== 'boolean') throw new Error('请检查并保存全部自动处理开关，再恢复记忆设置。')
+  }
+  return withFileLock(join(root, '.settings.lock'), () => {
+    let current = {}
+    try { current = readSettings(root) }
+    catch (error) {
+      if (error?.code !== 'settings-invalid') throw error
+      atomicWritePrivate(join(root, `settings.invalid-${randomUUID()}.json`), readFileSync(join(root, SETTINGS_FILE)))
+    }
+    const merged = sanitizeSettings({ ...current, ...patch })
+    atomicWritePrivate(join(root, SETTINGS_FILE), `${JSON.stringify(merged, null, 2)}\n`)
+    return merged
+  })
 }
 
 /** Translate settings into a config patch that `resolveConfig` understands. */

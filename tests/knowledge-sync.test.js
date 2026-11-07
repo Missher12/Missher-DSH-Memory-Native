@@ -16,6 +16,7 @@ const RECORD = {
   id: 'mem_sync01',
   kind: 'fact',
   scope: 'project',
+  projectKey: 'project-alpha',
   topic: '存储',
   tags: ['jsonl'],
   content: '记忆采用 JSONL 作为权威存储。',
@@ -92,6 +93,8 @@ test('vault listing exposes title, topic, tags and wiki links', (t) => {
   assert.equal(notes[0].source, 'vault')
   assert.equal(notes[0].file, `${RECORD.id}.md`)
   assert.equal(notes[0].title, '记忆采用 JSONL 作为权威存储。')
+  assert.equal(notes[0].scope, 'project')
+  assert.equal(notes[0].projectKey, 'project-alpha')
   assert.equal(notes[0].topic, '存储')
   assert.deepEqual(notes[0].links, ['存储'])
 })

@@ -5,11 +5,12 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { CapturePipeline } from '../host/capture.js'
-import { readTurnIntakes } from '../host/capture-journal.js'
+import { readTurnIntakes, readCaptureTasks } from '../host/capture-journal.js'
 import { resolveConfig } from '../host/config.js'
 import { projectIdentity } from '../host/paths.js'
 import { MemoryIndex } from '../host/search.js'
 import { MemoryStore } from '../host/store.js'
+import { SourcePassageIndex, forgetSourcePassage } from '../host/source-passages.js'
 
 const NOW = 1_700_000_000_000
 
@@ -67,6 +68,36 @@ function feed(capture, session, userText, assistantText = '好的，我记下了
 const REPLY = JSON.stringify({ memories: [
   { op: 'ADD', kind: 'fact', scope: 'project', content: '该仓库使用 pnpm 并要求 Node 22 以上', tags: ['pnpm'], confidence: 0.9, importance: 0.7 },
 ] })
+
+test('original user passages stay available when extraction waits for budget, without granting opt-outs or assistant replies', async t => {
+  const {root,capture,session,llm}=setup(t,{reply:'{"memories":[]}',config:{capture:{maxCallsPerDay:0,minTurnChars:1000}}})
+  t.after(()=>capture.dispose())
+  feed(capture,session,'岚石交接地点定在东侧三楼。','助手猜测备用地点是西门。')
+  await capture.flush()
+  const key=projectIdentity(session.header.cwd).key,index=new SourcePassageIndex(root)
+  assert.ok(index.search('岚石交接',{projectKey:key}).some(hit=>hit.record.content.includes('东侧三楼')))
+  assert.equal(index.search('西门',{projectKey:key}).length,0)
+  feed(capture,{...session,id:'no-save'},'不要保存这次问答。岚石口令是枫叶。')
+  await capture.flush()
+  assert.equal(index.search('枫叶',{projectKey:key}).length,0)
+  assert.equal(llm.calls(),0)
+})
+
+test('forgetting an unextracted original also retires its queued work; explicit retry cannot recreate it', async t => {
+  const {root,capture,session,llm,store,index}=setup(t,{reply:REPLY,config:{capture:{maxCallsPerDay:0,minTurnChars:0}}})
+  t.after(()=>capture.dispose())
+  feed(capture,session,'该仓库使用 pnpm 并要求 Node 22 以上。')
+  await capture.flush()
+  const key=projectIdentity(session.header.cwd).key,hit=new SourcePassageIndex(root).search('pnpm',{projectKey:key})[0]
+  assert.ok(hit)
+  const task=readCaptureTasks(root).find(item=>item.status==='pending');assert.ok(task)
+  forgetSourcePassage(root,hit.record.id,key,store,index)
+  capture.retry(task.id)
+  await capture.flush()
+  assert.equal(llm.calls(),0)
+  assert.equal(store.listAll().length,0)
+  assert.equal(readCaptureTasks(root).find(item=>item.id===task.id).status,'skipped')
+})
 
 test('one completed turn produces one active memory', async (t) => {
   const { store, capture, session } = setup(t, { reply: REPLY })

@@ -49,7 +49,7 @@ function stripLeadingControlPrefix(clause) {
 
 function isControlClause(clause) {
   const normalized = stripLeadingControlPrefix(clause).replace(/^[“"「『(（\s]+/u, '')
-  return ANSWER_CONTROL_PATTERN.test(normalized) ||
+  return /^(?:请)?(?:(?:简短|简洁|简要|逐项|分别)\s*){1,2}(?:回答|作答)/u.test(normalized) || ANSWER_CONTROL_PATTERN.test(normalized) ||
     containsUnquotedDirective(normalized, CURRENT_NO_SAVE_PATTERN) ||
     containsUnquotedDirective(normalized, GENERAL_NO_SAVE_PATTERN)
 }

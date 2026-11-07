@@ -1,6 +1,7 @@
 # 主流 Agent Memory 系统调研笔记
 
 > 调研时间：2026-10-31。用于 DSH 记忆插件的设计决策，不是产品测评。
+> 本文保留当时的路线判断。Mem0 现行 OSS/Platform 区别及 OpenViking 当前检索实现，以 [2026-11-07 源码对照与升级建议](memory-upgrade-comparison-20261107.md) 为准；不要将下文早期 Mem0 更新流程视为现行所有版本的保证。
 > 主要来源：[主流 Agent Memory 系统全景（2026-08）](https://github.com/cdavid817/awesome-agent-tutorial)、Mem0 论文与文档、Zep/Graphiti、Letta、Cognee、LangMem、A-MEM、Claude memory tool 等（见文末）。
 
 ## 1. 先划清边界

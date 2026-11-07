@@ -49,7 +49,7 @@ export function projectIdentity(cwd) {
 
 /** Whether a string is a safe project key (no traversal, no separators). */
 export function isValidProjectKey(key) {
-  return typeof key === 'string' && PROJECT_KEY_PATTERN.test(key)
+  return typeof key === 'string' && PROJECT_KEY_PATTERN.test(key) && !['.', '..', '__proto__', 'constructor', 'prototype'].includes(key)
 }
 
 /**

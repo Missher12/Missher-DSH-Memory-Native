@@ -22,7 +22,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 
 import { parseFrontmatter } from './frontmatter.js'
-import { KNOWLEDGE_DIR, extractWikiLinks, isKnowledgeFile, parseKnowledgeNote, splitNoteBody } from './knowledge.js'
+import { KNOWLEDGE_DIR, extractWikiLinks, isKnowledgeFile, knowledgeScope, parseKnowledgeNote, splitNoteBody } from './knowledge.js'
 import { isValidProjectKey } from './paths.js'
 import { MEMORY_KINDS, MEMORY_STATUSES, nextRevision } from './records.js'
 
@@ -236,6 +236,7 @@ function readVaultKnowledgeNote(file) {
   return {
     file: name,
     memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
+    ...knowledgeScope(data),
     topic: typeof data.topic === 'string' ? data.topic : null,
     tags: Array.isArray(data.tags) ? data.tags : [],
     title: title === '' ? name : title,

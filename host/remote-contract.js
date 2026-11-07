@@ -20,7 +20,9 @@ import { statSync } from 'node:fs'
 import { hotRecord } from './cache-records.js'
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { deriveProfile } from './profile.js'
-import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
+import { memoryHealth } from './health.js'
+import { buildKnowledgeGraph, knowledgeScopeWithinMemory, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
+import { deriveProjectBrief } from './project-brief.js'
 import { readMaintenance } from './maintenance.js'
 import {
   exportKnowledgeToVault,
@@ -34,6 +36,7 @@ import {
 import { computeUsageSummary, localDayKey } from './usage-log.js'
 import { tokenize } from './tokenize.js'
 import { MEMORY_KINDS } from './records.js'
+import { forgetSourcePassage } from './source-passages.js'
 
 export { localDayKey }
 
@@ -43,7 +46,7 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'projectBrief', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */
@@ -328,26 +331,36 @@ export function computeStats(backend, raw) {
     if (typeof at === 'number' && at > lastCapturedAt) lastCapturedAt = at
   }
   const current = currentProjectKey(backend.store)
+  const projectKeys = backend.store.listProjects()
+  const maintenance = backend.root ? readMaintenance(backend.root) : null
+  const settingsIssue = backend.getSettingsIssue?.() ?? null
+  const captureState = backend.getCaptureStatus?.()
   return {
+    health: memoryHealth({ isolation: backend.isolation, settingsIssue, maintenance, capture: captureState?.counts, store: backend.store, total, deleted }),
     active: counts.active,
     candidate: counts.candidate,
     archived: counts.archived,
     superseded: counts.superseded,
     total,
     deleted,
-    projects: backend.store.listProjects().length,
+    projects: projectKeys.length,
+    projectKeys,
     kinds,
     currentProjectKey: current,
     scope,
     projectKey: scope === 'project' ? (projectKey ?? current) : null,
     avgConfidence: confidenceCount === 0 ? null : Math.round((confidenceSum / confidenceCount) * 100) / 100,
     lastCapturedAt: lastCapturedAt === 0 ? null : lastCapturedAt,
-    maintenance: backend.root ? readMaintenance(backend.root) : null,
+    maintenance,
+    settingsIssue,
     lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
     lastExtraction: typeof backend.getLastExtraction === 'function' ? backend.getLastExtraction() : null,
+    lastRecall: typeof backend.getLastRecall === 'function' ? backend.getLastRecall() : null,
+    semantic: backend.getSemanticStatus?.() ?? null,
     usage: computeUsageSummary(backend.root),
-    capture: typeof backend.getCaptureStatus === 'function' ? backend.getCaptureStatus()?.counts ?? null : null,
-    captureStorage: typeof backend.getCaptureStatus === 'function' ? backend.getCaptureStatus()?.storage ?? null : null,
+    capture: captureState?.counts ?? null,
+    captureBudget: captureState?.budget ?? null,
+    captureStorage: captureState?.storage ?? null,
     captureEnabled: backend.config?.capture?.enabled === true,
     injectEnabled: backend.config?.inject?.enabled === true,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
@@ -356,6 +369,21 @@ export function computeStats(backend, raw) {
     obsidianAutoSync: backend.config?.obsidian?.autoSync === true,
     obsidianVaultPath: backend.config?.obsidian?.vaultPath ?? null,
     obsidianFolder: backend.config?.obsidian?.folder ?? 'DSH Memory',
+  }
+}
+
+/** Build the live project brief without implicit project selection. */
+export function projectBrief(backend, raw) {
+  const input = asObject(raw)
+  if (!isValidProjectKey(input.projectKey)) throw new PanelInputError('projectKey is required and must be valid')
+  const limit = input.limit === undefined || input.limit === null ? 100 : input.limit
+  const offset = input.offset === undefined || input.offset === null ? 0 : input.offset
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new PanelInputError('limit must be an integer from 1 to 200')
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new PanelInputError('offset must be a nonnegative safe integer')
+  try {
+    return deriveProjectBrief(backend.store, { projectKey: input.projectKey, limit, offset, now: Date.now() })
+  } catch (error) {
+    throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }
 }
 
@@ -473,8 +501,8 @@ export function importData(backend, raw) {
 }
 
 /** Write a timestamped backup next to the authority and return its path. */
-export function createBackup(backend) {
-  return { path: backend.store.backup() }
+export async function createBackup(backend) {
+  return { path: await backend.store.backup() }
 }
 
 /** Restore a tombstoned record to active. */
@@ -839,9 +867,20 @@ export function knowledgeNote(backend, raw) {
 /** Save one knowledge note; a stale mtime returns `{ saved: false, reason: 'conflict' }`. */
 export function knowledgeSave(backend, raw) {
   if (backend.root === null) throw new PanelInputError('memory root is unavailable')
+  const input = asObject(raw)
   try {
-    return saveKnowledgeNote(backend.root, asObject(raw))
+    const current = readKnowledgeNote(backend.root, typeof input.file === 'string' ? input.file : '')
+    if (current.memoryId !== null && (input.scope !== undefined || input.projectKey !== undefined)) {
+      const linked = backend.store.listAll({ includeDeleted: true }).find(record => record.id === current.memoryId)
+      const targetScope = input.scope === undefined ? current.scope : input.scope
+      const targetProject = input.projectKey === undefined ? current.projectKey : input.projectKey
+      if (linked === undefined || !knowledgeScopeWithinMemory(targetScope, targetProject, linked.scope, linked.projectKey)) {
+        throw new PanelInputError('与记忆关联的笔记不能扩大或移动其召回范围')
+      }
+    }
+    return saveKnowledgeNote(backend.root, input)
   } catch (error) {
+    if (error instanceof PanelInputError) throw error
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }
 }
@@ -874,6 +913,8 @@ export function knowledgeList(backend) {
       topic: note.topic,
       tags: note.tags,
       title: note.title,
+      scope: note.scope,
+      projectKey: note.projectKey,
     })),
     total: notes.length,
     vaultPath: backend.config?.obsidian?.vaultPath ?? null,
@@ -974,6 +1015,13 @@ export function applyUpdate(backend, raw) {
  */
 export function applyRemove(backend, raw) {
   const target = normalizeTarget(asObject(raw))
+  if (target.id.startsWith('source:')) {
+    const scope = target.scopes[0]
+    const removed = scope.scope === 'project' && forgetSourcePassage(backend.root ?? backend.store.root,
+      target.id, scope.projectKey, backend.store, backend.index)
+    if (!removed) throw new PanelInputError('原文不存在、已遗忘或不属于此项目')
+    return removed
+  }
   const removed = backend.store.remove(target.id, target.scopes)
   if (removed === undefined) throw new PanelInputError('memory not found in the requested scope')
   backend.index.remove(target.id)

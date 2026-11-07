@@ -11,9 +11,42 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { join } from 'node:path'
 import { hotRecord } from './cache-records.js'
 import { parseFrontmatter } from './frontmatter.js'
+import { isValidProjectKey } from './paths.js'
 
 const MAX_NODES = 400
 export const KNOWLEDGE_DIR = 'knowledge'
+
+export function knowledgeScope(data) {
+  if (data?.scope === 'global' && (data.projectKey === null || data.projectKey === undefined)) {
+    return { scope: 'global', projectKey: null }
+  }
+  if (data?.scope === 'project' && isValidProjectKey(data.projectKey)) {
+    return { scope: 'project', projectKey: data.projectKey }
+  }
+  return { scope: 'unbound', projectKey: null }
+}
+
+/** A note may narrow its linked memory's scope, but can never broaden it. */
+export function knowledgeScopeWithinMemory(noteScope, noteProjectKey, memoryScope, memoryProjectKey) {
+  if (noteScope === 'unbound') return true
+  if (memoryScope === 'global') return noteScope === 'global' || noteScope === 'project' && isValidProjectKey(noteProjectKey)
+  return memoryScope === 'project' && noteScope === 'project' && noteProjectKey === memoryProjectKey
+}
+
+function requestedNoteScope(input, current) {
+  const hasScope = input.scope !== undefined
+  const hasProjectKey = input.projectKey !== undefined
+  if (!hasScope && !hasProjectKey) return current
+  if (!hasScope || !hasProjectKey) throw new Error('scope and projectKey must be provided together')
+  if (input.scope === 'unbound' || input.scope === 'global') {
+    if (input.projectKey !== null) throw new Error('projectKey must be null for unbound or global scope')
+    return { scope: input.scope, projectKey: null }
+  }
+  if (input.scope === 'project' && isValidProjectKey(input.projectKey)) {
+    return { scope: 'project', projectKey: input.projectKey }
+  }
+  throw new Error('project scope requires a valid projectKey')
+}
 
 /**
  * Build a topic-oriented graph from memory records.
@@ -112,6 +145,8 @@ export function promoteMemoryToKnowledge(root, record) {
     '---',
     'dsh_knowledge: true',
     `memoryId: ${record.id}`,
+    `scope: ${JSON.stringify(record.scope === 'global' ? 'global' : 'project')}`,
+    `projectKey: ${record.scope === 'global' ? 'null' : JSON.stringify(record.projectKey ?? null)}`,
     `topic: ${JSON.stringify(topic)}`,
     `tags: ${JSON.stringify(Array.isArray(record.tags) ? record.tags : [])}`,
     `createdAt: ${new Date().toISOString()}`,
@@ -205,6 +240,7 @@ export function readKnowledgeNote(root, file) {
   return {
     file,
     memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
+    ...knowledgeScope(data),
     topic: typeof data.topic === 'string' ? data.topic : '',
     tags: Array.isArray(data.tags) ? data.tags.map((tag) => String(tag)) : [],
     title,
@@ -273,7 +309,10 @@ export function saveKnowledgeNote(root, input) {
     }
   }
   const next = { ...parsed.data }
+  const scope = requestedNoteScope(input, knowledgeScope(parsed.data))
   next.dsh_knowledge = true
+  next.scope = scope.scope
+  next.projectKey = scope.projectKey
   next.topic = topic
   next.tags = tags
   const composed = title + (rest === '' ? '' : `\n\n${rest}`) + '\n'
@@ -300,6 +339,7 @@ export function listKnowledgeNotes(root, options = {}) {
       const note = {
         file,
         memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
+        ...knowledgeScope(data),
         topic: typeof data.topic === 'string' ? data.topic : null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         title: title === '' ? file : title.slice(0, 60),

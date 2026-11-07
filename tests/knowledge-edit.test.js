@@ -17,6 +17,7 @@ const RECORD = {
   id: 'mem_edit01',
   kind: 'fact',
   scope: 'project',
+  projectKey: 'project-alpha',
   topic: '存储',
   tags: ['jsonl', '索引'],
   content: '记忆采用 JSONL 作为权威存储。',
@@ -42,6 +43,8 @@ test('read returns editable title, rest, topic, tags and mtime', (t) => {
   assert.equal(note.topic, '存储')
   assert.deepEqual(note.tags, ['jsonl', '索引'])
   assert.equal(note.memoryId, RECORD.id)
+  assert.equal(note.scope, 'project')
+  assert.equal(note.projectKey, RECORD.projectKey)
   assert.ok(Number.isFinite(note.mtimeMs) && note.mtimeMs > 0)
 })
 
@@ -105,6 +108,34 @@ test('save preserves unknown frontmatter keys', (t) => {
   const saved = readFileSync(path, 'utf8')
   assert.match(saved, /custom: "keep-me"/u)
   assert.match(saved, /dsh_knowledge: true/u)
+})
+
+test('legacy notes stay unbound until an explicit scope is saved', (t) => {
+  const { root, path } = setup(t)
+  const legacy = readFileSync(path, 'utf8').split('\n').filter(line => !/^(?:scope|projectKey):/u.test(line)).join('\n')
+  writeFileSync(path, legacy)
+  const before = readKnowledgeNote(root, `${RECORD.id}.md`)
+  assert.equal(before.scope, 'unbound')
+  assert.equal(before.projectKey, null)
+  const saved = saveKnowledgeNote(root, {
+    file: before.file, title: before.title, body: before.body, topic: before.topic, tags: before.tags,
+    scope: 'project', projectKey: 'alpha-project', expectedMtimeMs: before.mtimeMs,
+  })
+  assert.equal(saved.scope, 'project')
+  assert.equal(saved.projectKey, 'alpha-project')
+  assert.match(readFileSync(path, 'utf8'), /scope: "project"/u)
+  assert.match(readFileSync(path, 'utf8'), /projectKey: "alpha-project"/u)
+  assert.deepEqual(listKnowledgeNotes(root).map(note => [note.scope, note.projectKey]), [['project', 'alpha-project']])
+})
+
+test('knowledge note scope fields must form one valid scope selection', (t) => {
+  const { root } = setup(t)
+  const before = readKnowledgeNote(root, `${RECORD.id}.md`)
+  const input = { file: before.file, title: before.title, body: before.body, topic: before.topic, tags: before.tags,
+    expectedMtimeMs: before.mtimeMs }
+  assert.throws(() => saveKnowledgeNote(root, { ...input, scope: 'project' }), /projectKey/u)
+  assert.throws(() => saveKnowledgeNote(root, { ...input, scope: 'global', projectKey: 'alpha-project' }), /projectKey/u)
+  assert.throws(() => saveKnowledgeNote(root, { ...input, scope: 'unbound', projectKey: 'alpha-project' }), /projectKey/u)
 })
 
 test('invalid names and empty titles are rejected', (t) => {

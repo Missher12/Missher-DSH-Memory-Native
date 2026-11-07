@@ -2,11 +2,22 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildRecord, nextRevision } from '../host/records.js'
-import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallQueries, recallQueryPlan } from '../host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, formatMemoryLine, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallQueries, recallQueryPlan, recallTimeIntent } from '../host/recall.js'
 import { analyzeUserMessageControls } from '../host/user-controls.js'
 
 const NOW = 1_700_000_000_000
 const KEY = 'DSH-Memory-abc'
+
+test('project-qualified bare objects match their name without accepting competing objects or projects', () => {
+  const entity = recallQueryPlan('青岩快照保留多久')[1].entityTerms
+  for (const content of ['青岩项目现在确认变更：快照保留 29 天。', '青岩项目的快照保留 29 天。']) {
+    assert.equal(matchesRecallEntity({ record: { content } }, entity), true, content)
+    assert.equal(matchesRecallEntity({ record: { content } }, ['青岩快照']), true, content)
+  }
+  for (const content of ['红杉项目现在确认变更：快照保留 29 天。', '青岩项目的红杉快照保留 29 天。', '青岩项目。快照保留 29 天。', '青岩项目中红杉服务确认变更：快照保留 29 天。']) {
+    assert.equal(matchesRecallEntity({ record: { content } }, entity), false, content)
+  }
+})
 
 function make(overrides = {}) {
   const built = buildRecord({
@@ -74,6 +85,7 @@ test('compileMemoryContext dedupes profile lines and keeps complete memory state
   assert.ok(block !== null)
   assert.match(block.text, /用户偏好简洁直接的表达方式（3 条证据/u)
   assert.equal(block.itemCount, 0)
+  assert.deepEqual(block.profileIds, [record.id])
   assert.doesNotMatch(block.text, /- \[事实\]/u)
   const long = make({ content: '这是一条非常长的记忆内容'.repeat(10) })
   const complete = compileMemoryContext([{ record: long, score: 1 }], { maxTokens: 600 })
@@ -111,6 +123,12 @@ test('compileMemoryContext keeps searching after an over-budget record without c
 test('compileMemoryContext returns null for no memories', () => {
   assert.equal(compileMemoryContext([], {}), null)
   assert.equal(compileMemoryContext(null, {}), null)
+})
+
+test('selected exact recall quote is the text injected for a memory', () => {
+  const line = formatMemoryLine({ kind: 'fact', content: '摘要未包含的原始安排。', recallQuote: '原话明确写了周二 14:30。' })
+  assert.match(line, /原话明确写了周二 14:30/u)
+  assert.doesNotMatch(line, /摘要未包含/u)
 })
 
 test('estimateTokens counts CJK chars as one token', () => {
@@ -175,7 +193,7 @@ test('recallQueries keeps a compound root question and adds bounded subquestions
   assert.deepEqual(recallQueries('pnpm 依赖和 Node 版本', undefined, false), [
     'pnpm 依赖和 Node 版本', 'pnpm 依赖', 'Node 版本',
   ])
-  assert.ok(recallQueries('pnpm 依赖、Node 版本、数据库版本、缓存版本', undefined, false).length <= 4)
+  assert.equal(recallQueries('pnpm 依赖、Node 版本、数据库版本、缓存版本', undefined, false).length, 5)
 })
 
 test('recallQueryPlan carries an entity anchor into an attribute-only child', () => {
@@ -186,6 +204,41 @@ test('recallQueryPlan carries an entity anchor into an attribute-only child', ()
   assert.deepEqual(plan[1].entityTerms, plan[2].entityTerms)
   const otherEntity = { record: { content: '乙设备湿度保持在 80% 以上' } }
   assert.equal(matchesRecallEntity(otherEntity, plan[2].entityTerms), false)
+})
+
+test('recallTimeIntent handles plural English weeks and leaves fractional calendar dates unanchored', () => {
+  const now = Date.UTC(2026, 10, 7, 4)
+  assert.deepEqual(recallTimeIntent('3 weeks ago', now), { kind: 'as-of', at: now - 21 * 86_400_000 })
+  assert.equal(recallTimeIntent('半个月前', now).kind, 'history')
+  assert.equal(recallTimeIntent('半个月前', now).at, null)
+})
+
+test('comma continuation keeps a shared object for a following attribute clause', () => {
+  const query = '青鹿快照保留多久'
+  const fact = { record: { content: '青鹿快照每天 05:43 生成，保留 23 天。' } }
+  const plan = recallQueryPlan(query, undefined, false)[0]
+  assert.equal(matchesRecallAttribute(fact, query, undefined, plan.entityTerms), true)
+
+  const otherObject = { record: { content: '青鹿快照每天 05:43 生成，灰鹿快照保留 45 天。' } }
+  assert.equal(matchesRecallAttribute(otherObject, query, 'retention', plan.entityTerms), false)
+})
+
+test('generic root terms stay searchable while named entities and implicit product versions stay scoped', () => {
+  const backupPlan = recallQueryPlan('发布前数据库备份策略', undefined, false)[0]
+  assert.deepEqual(backupPlan.entityTerms, [])
+  assert.equal(matchesRecallAttribute({ record: { content: '发布前先备份数据库状态' } }, backupPlan.query, undefined, backupPlan.entityTerms), true)
+
+  const twoValues = recallQueryPlan('生产数据库和缓存版本分别是什么', undefined, false)
+  const database = twoValues.find(item => item.role === 'subquestion' && item.query.includes('数据库'))
+  const cache = twoValues.find(item => item.role === 'subquestion' && item.query.includes('缓存'))
+  assert.equal(matchesRecallAttribute({ record: { content: '生产数据库运行 PostgreSQL 16' } }, database.query, database.detail, database.entityTerms), true)
+  assert.equal(matchesRecallAttribute({ record: { content: '生产缓存运行 Redis 7' } }, cache.query, cache.detail, cache.entityTerms), true)
+  assert.equal(matchesRecallAttribute({ record: { content: '生产数据库运行 PostgreSQL 16' } }, cache.query, cache.detail, cache.entityTerms), false)
+
+  const named = recallQueryPlan('Alpha 项目 Redis 版本是多少', undefined, false)[0]
+  assert.deepEqual(named.entityTerms, ['alpha', 'redis'])
+  assert.equal(matchesRecallEntity({ record: { content: 'Alpha 项目使用 Redis 7' } }, named.entityTerms), true)
+  assert.equal(matchesRecallEntity({ record: { content: 'Alpha 项目使用 PostgreSQL 16' } }, named.entityTerms), false)
 })
 
 test('recallQueryPlan extracts facts and shared attributes from the natural two-value prompt', () => {

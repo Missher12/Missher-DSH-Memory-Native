@@ -4,6 +4,9 @@
     "description": "本地优先的长期记忆：自动捕获、按需注入、可视化管理。"
   },
   "nav": "记忆",
+  "settings.captureAllowance": "今日自动调用 {used}/{limit} · 提炼与深查共用",
+  "settings.captureResume": "{count} 项等待额度 · 本地时间 {time} 自动继续。手动恢复会使用额外调用额度。",
+  "settings.capturePaused": "{count} 项等待额度 · 自动捕获已关闭或每日额度为 0。",
   "capture": "自动捕获",
   "inject": "注入记忆",
   "search": "搜索记忆",
@@ -84,7 +87,7 @@
   "pager.perPageLabel": "每页",
   "pager.prev": "上一页",
   "pager.next": "下一页",
-  "profile.title": "用户画像",
+  "profile.title": "用户偏好",
   "profile.summary": "共 {count} 条",
   "profile.evidence": "{count} 条证据"
 }

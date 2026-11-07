@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   inject: Object.freeze({
     enabled: true,
     maxTokens: 360,
-    maxItems: 6,
+    maxItems: 12,
     minScore: 0.2,
   }),
   retention: Object.freeze({

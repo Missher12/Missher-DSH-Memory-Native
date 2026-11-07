@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const NAMESPACE = 'dshMemory'
     const SERVICE_KEY = 'remote.' + NAMESPACE
     const NS = 'dsh-memory'
-    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry']
+    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'projectBrief']
     const RESULT_TYPES = {
       list: 'MemoryList',
       stats: 'MemoryStats',
@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
       knowledgeSync: 'MemoryKnowledgeSync',
       captureStatus: 'MemoryCaptureStatus',
       captureRetry: 'MemoryCaptureRetry',
+      projectBrief: 'MemoryProjectBrief',
     }
     const KINDS = ['preference', 'fact', 'decision', 'episode']
     const STATUSES = ['active', 'candidate', 'archived', 'superseded', 'deleted']
@@ -125,22 +126,21 @@ window.__ModuleLoader__.load({
         'row.updated': 'Updated {value}',
         'row.pinned': 'Pinned',
         'count.showing': 'Showing {shown} of {total}',
-        'view.memory': 'Memories',
-        'view.knowledge': 'Knowledge map',
-        'view.library': 'Knowledge base',
+        'view.memory': "Records",
+        'view.library': "Notes",
         'view.settings': 'Settings',
-        'view.capture': 'Capture & injection',
-        'view.retention': 'Retention & maintenance',
-        'view.data': 'Data',
-        'view.obsidian': 'Obsidian',
-        'library.title': 'Knowledge base',
-        'library.hint': 'Long-term notes promoted from memories. Sync them with your Obsidian vault below.',
-        'library.empty': 'No long-term notes yet. Open the knowledge map and promote a memory.',
+        'view.capture': "Capture & recall",
+        'view.retention': "Retention",
+        'view.data': "Backup & transfer",
+        'view.obsidian': "Obsidian sync",
+        'library.title': "Notes",
+        'library.hint': "Saved knowledge with its sources and recall scope.",
+        'library.empty': "No notes yet. Sync notes from Obsidian in Settings to get started.",
         'library.loading': 'Loading knowledge notes…',
         'library.failed': 'Knowledge base failed: {reason}',
         'library.total': '{count} notes',
         'library.vault': 'Vault: {path}',
-        'library.noVault': 'Configure the Obsidian vault in Settings first.',
+        'library.noVault': "Configure Obsidian sync in Settings.",
         'library.note': 'Note',
         'library.syncExport': 'Sync to Obsidian',
         'library.syncImport': 'Import from Obsidian',
@@ -164,45 +164,19 @@ window.__ModuleLoader__.load({
         'library.importResult': 'Imported {imported} · skipped {skipped} · conflicts {conflicts}.',
         'library.syncFailed': 'Sync failed: {reason}',
         'settings.captureQueue': 'Capture tasks: {pending} pending · {partial} partial · {unknown} unknown · {failed} failed · {done} done',
+        'settings.captureAllowance': 'Automatic calls today: {used}/{limit} · shared by extraction and deeper recall',
+        'settings.captureResume': '{count} waiting · resumes automatically at {time} (local time). Manual recovery uses additional calls.',
+        'settings.capturePaused': '{count} waiting · automatic capture is disabled or its daily allowance is zero.',
         'settings.captureStorage': 'Capture storage: {sources} sources · {size} · {tasks} tasks',
         'settings.captureRetry': 'Recover next task',
         'settings.captureUnknownConfirm': 'The previous request has no confirmed result. Retrying may charge again. Send a new request?',
         'settings.captureNothing': 'No recoverable leaf remains. Check any in-flight or unresolved child task.',
         'settings.captureRetried': 'Capture task queued for retry.',
         'settings.captureRetryFailed': 'Retry failed: {reason}',
-        'knowledge.title': 'Knowledge map',
-        'knowledge.hint': 'Topics stay distinct. Search or page through every node; select one to follow its outgoing links and backlinks.',
-        'knowledge.search': 'Search memories or topics',
-        'knowledge.zoomIn': 'Zoom in',
-        'knowledge.zoomOut': 'Zoom out',
-        'knowledge.reset': 'Reset',
-        'knowledge.topicChip': 'Topic: {topic}',
-        'knowledge.empty': 'No memories to visualize yet.',
-        'knowledge.loading': 'Building the knowledge map…',
-        'knowledge.failed': 'Knowledge map failed: {reason}',
-        'knowledge.stats': '{memories} memories · {topics} topics · {tags} tags',
-        'knowledge.truncated': 'Showing the most recent 400 memories.',
-        'knowledge.detail': 'Details',
-        'knowledge.promote': 'Promote to knowledge',
-        'knowledge.promoting': 'Promoting…',
-        'knowledge.promoted': 'Knowledge note written: {path}',
-        'knowledge.promoteFailed': 'Promote failed: {reason}',
-        'knowledge.knowledgeNote': 'Long-term knowledge note',
-        'knowledge.vaultNote': 'Vault note. Import it into the knowledge base to edit it here.',
-        'knowledge.legendMemories': 'Memories',
-        'knowledge.legendKnowledge': 'Knowledge notes',
-        'knowledge.legendVault': 'Vault notes',
-        'knowledge.traitNote': 'Profile preference derived from evidence memories',
-        'knowledge.noSelection': 'Click a node to inspect it.',
-        'knowledge.kind': 'Kind',
-        'knowledge.status': 'Status',
-        'knowledge.topic': 'Topic',
-        'knowledge.confidence': 'Confidence',
-        'knowledge.tags': 'Tags',
         'settings.title': 'Memory settings',
-        'settings.capture': 'Auto capture',
-        'settings.inject': 'Context injection',
-        'settings.budget': 'Injection budget',
+        'settings.capture': "Remember conversations",
+        'settings.inject': "Use memories in replies",
+        'settings.budget': "Recall context limit",
         'settings.retention': 'Episode retention',
         'settings.maintenance': 'Self-maintenance',
         'settings.group.capture': 'Capture & injection',
@@ -217,21 +191,8 @@ window.__ModuleLoader__.load({
         "obsidian.keepMemory": "Use Memory version (keep copies)",
         "obsidian.keepVault": "Use Obsidian version (keep copies)",
         "obsidian.deleted": "Deleted on this side",
-        "knowledge.pageInfo": "Showing {start}–{end} of {total}; search covers every page",
-        "knowledge.previous": "Previous page",
-        "knowledge.next": "Next page",
-        "knowledge.links": "Links and backlinks",
-        "knowledge.noLinks": "No links for this node",
-        "knowledge.outgoing": "Outgoing",
-        "knowledge.incoming": "Backlink",
         "kind.unresolved": "Unresolved link",
         "status.unresolved": "Target not found",
-        "knowledge.allTopics": "All topics",
-        "knowledge.edge.topic": "Topic",
-        "knowledge.edge.wiki": "Link",
-        "knowledge.edge.knowledge": "Knowledge",
-        "knowledge.edge.tag": "Shared tag",
-        "knowledge.edge.profile": "Profile evidence",
         'obsidian.vault': 'Vault path',
         'obsidian.folder': 'Folder',
         'obsidian.actions': 'Sync',
@@ -252,9 +213,11 @@ window.__ModuleLoader__.load({
         'settings.data.label': 'Export, import & backup',
         'data.export': 'Export',
         'data.import': 'Import',
-        'data.backup': 'Backup now',
+        'data.backup': 'Complete backup',
+        'data.backupHint': 'Export/import merges current records. Complete backups also retain history, source evidence, settings and request receipts; restore them to a new directory with the recovery tool.',
         'data.exported': 'Exported',
         'data.imported': 'Imported {imported}, skipped {skipped}',
+        'data.protectedDeleted': 'Kept {count} locally forgotten records deleted.',
         'data.backupDone': 'Backup written to {path}',
         'data.failed': 'Failed: {reason}',
         'settings.failed': 'Save failed: {reason}',
@@ -272,11 +235,11 @@ window.__ModuleLoader__.load({
         'usage.overBudget': '{count} over budget',
         'usage.provider': 'Provider usage: {calls} calls · input {input} · output {output} · total {total}',
         'usage.providerMissing': 'Provider did not return usage; the chart shows estimated prompt tokens only.',
-        'view.profile': 'User profile',
+        'view.profile': "Preferences",
         'profile.hint': 'Durable preferences grouped with evidence. Expand a row to see the source memories.',
         'profile.empty': 'No stable preferences yet.',
         'profile.evidenceTitle': 'Evidence',
-        'profile.title': 'User profile',
+        'profile.title': "Preferences",
         'profile.summary': '{count} traits',
         'profile.evidence': '{count} evidence',
         'pager.total': '{total} items',
@@ -351,6 +314,85 @@ window.__ModuleLoader__.load({
         'notice.rebuilt': 'Index rebuilt',
         'error.invalid': 'Invalid input: {message}',
         'error.missingProject': 'No current project is known yet.',
+        'section.memory': "Memories",
+        'section.brief': "Project brief",
+        'section.knowledge': "Knowledge",
+        "health.title": "Storage health",
+        "health.ok": "Available",
+        "health.attention": "Needs attention",
+        "health.unavailable": "Paused",
+        "health.download": "Export diagnostic summary",
+        "health.hint": "Contains only version, status codes and counts. Memory text, file paths and session identifiers are excluded.",
+        "health.profile": "Isolated by host profile",
+        "health.explicit": "Explicit standalone directory",
+        "health.memories": "Current memories {memories} · deletion markers {deleted}",
+        "health.jobs": "Queued {pending} · running {running} · incomplete {partial} · failed {failed} · unknown {unknown}",
+        "health.corrupt": "Unreadable authority lines: {count}",
+        "health.profile-unavailable": "The host profile identity is unavailable. Update the host or configure an independent data directory, then reload the plugin.",
+        "health.storage-owner-conflict": "This directory belongs to another host profile. Choose a separate directory, then reload the plugin.",
+        "health.storage-owner-invalid": "Directory ownership could not be verified. Check file permissions or restore a complete backup to a new directory.",
+        "health.storage-unavailable": "Storage is unavailable. Check directory permissions, free disk space and file version, then reload the plugin.",
+        "health.settings-invalid": "Settings are damaged. Capture, injection, maintenance and sync are paused until you explicitly save the settings again.",
+        "health.settings-unreadable": "Settings cannot be read. Check file permissions before reloading the plugin.",
+        "health.profile-explicit": "This standalone directory was explicitly configured; native profile isolation is not verified.",
+        "health.backup-failed": "The complete backup did not finish. Existing backups were retained; check storage or retry later.",
+        "health.corrupt-lines": "Unreadable authority lines were skipped. Check the local quarantine or restore a verified backup before relying on the record count.",
+        "health.capture-incomplete": "Some extraction tasks are incomplete or failed. Inspect them in the task list below.",
+        "health.capture-unknown": "Some request outcomes are unknown. They are not automatically resubmitted to avoid duplicate billing.",
+        'section.activity': "Activity",
+        'section.settings': "Settings",
+        'nav.sections': "Memory sections",
+        'view.activity': "Processing & usage",
+        'view.brief': "Project brief",
+        'sync.manual': "Manual transfer",
+        'sync.memories': "Memories",
+        'sync.notes': "Knowledge notes",
+        'brief.project': "Project",
+        'brief.choose': "Choose a project",
+        'brief.hint': "Current facts, decisions and history, linked to their original evidence.",
+        'brief.empty': "This project has no records yet.",
+        'brief.current': "Current facts & constraints",
+        'brief.decisions': "Confirmed decisions",
+        'brief.history': "Previous decisions & facts",
+        'brief.unresolved': "Pending confirmation or effective date",
+        'brief.pending': 'Not effective yet',
+        'brief.expired': 'Expired',
+        'brief.sources': "View evidence",
+        'brief.noQuote': "No exact quote was saved for this record.",
+        'brief.user': "User message",
+        'brief.since': "Effective from {time}",
+        'brief.until': "Effective until {time}",
+        'library.recallScope': "Use in replies",
+        'library.scope.unbound': "Do not use in replies",
+        'library.scope.project': "Only in one project",
+        'library.scope.global': "Across all projects",
+        'library.scopeHint': "Linked notes remain limited by their source memory. Forgotten content is not recalled.",
+        'recall.title': 'Latest evidence lookup',
+        'recall.empty': 'Evidence will appear here after a recall question.',
+        'recall.found': 'Evidence included in this answer',
+        'recall.missing': 'Still missing evidence',
+        'recall.coverage': 'Included {covered} of {total} questions',
+        'recall.candidates': 'Candidate passages included; answers not yet confirmed',
+        'recall.forgetSource': 'Forget this original message',
+        'recall.forgetConfirm': 'Forget the entire original message and its extracted memories? This also blocks all of its indexed passages.',
+        'recall.semantic': 'Local semantic search',
+        'recall.semanticProgress': '{indexed} of {total} passages indexed',
+        'recall.semantic.idle': 'Starts when needed',
+        'recall.semantic.loading': 'Loading model',
+        'recall.semantic.downloading': 'Downloading public model',
+        'recall.semantic.indexing': 'Indexing in background',
+        'recall.semantic.ready': 'Ready',
+        'recall.semantic.disabled': 'Disabled',
+        'recall.semantic.failed': 'Unavailable; using keyword search',
+        'recall.budgetOmitted': 'Found, but omitted by the context limit',
+        'recall.local': 'Local evidence was sufficient',
+        'recall.completed': 'Additional lookup completed',
+        'recall.failed': 'Additional lookup failed; no automatic retry',
+        'recall.unknown': 'Outcome unknown; no automatic retry',
+        'recall.notSent': 'No additional request sent',
+        'recall.budget': 'Additional lookup paused at the usage limit',
+        'recall.usage': 'Reported usage: {tokens} tokens',
+        'recall.usageUnknown': 'Provider usage unavailable',
       },
       zh: {
         nav: '\u8bb0\u5fc6',
@@ -414,22 +456,21 @@ window.__ModuleLoader__.load({
         'row.updated': '\u66f4\u65b0\u4e8e {value}',
         'row.pinned': '\u5df2\u7f6e\u9876',
         'count.showing': '\u663e\u793a {shown}/{total} \u6761',
-        'view.memory': '\u8bb0\u5fc6',
-        'view.knowledge': '\u77e5\u8bc6\u56fe\u8c31',
-        'view.library': '\u77e5\u8bc6\u5e93',
+        'view.memory': "记忆记录",
+        'view.library': "笔记",
         'view.settings': '\u8bbe\u7f6e',
-        'view.capture': '\u6355\u83b7\u4e0e\u6ce8\u5165',
-        'view.retention': '\u4fdd\u7559\u4e0e\u7ef4\u62a4',
-        'view.data': '\u6570\u636e',
-        'view.obsidian': 'Obsidian',
-        'library.title': '\u77e5\u8bc6\u5e93',
-        'library.hint': '\u7531\u8bb0\u5fc6\u63d0\u5347\u7684\u957f\u671f\u7b14\u8bb0\uff0c\u53ef\u540c\u6b65\u5230 Obsidian\u3002',
-        'library.empty': '\u8fd8\u6ca1\u6709\u957f\u671f\u7b14\u8bb0\uff1a\u53bb\u77e5\u8bc6\u56fe\u8c31\u63d0\u5347\u4e00\u6761\u8bb0\u5fc6\u5427\u3002',
+        'view.capture': "记忆方式",
+        'view.retention': "保留与清理",
+        'view.data': "备份与迁移",
+        'view.obsidian': "Obsidian 同步",
+        'library.title': "笔记",
+        'library.hint': "保存长期知识，查看出处并选择用于哪些对话。",
+        'library.empty': "还没有笔记。可到设置中同步 Obsidian 笔记。",
         'library.loading': '\u6b63\u5728\u52a0\u8f7d\u77e5\u8bc6\u7b14\u8bb0\u2026',
         'library.failed': '\u77e5\u8bc6\u5e93\u52a0\u8f7d\u5931\u8d25\uff1a{reason}',
         'library.total': '{count} \u6761\u7b14\u8bb0',
         'library.vault': 'Vault\uff1a{path}',
-        'library.noVault': '\u5148\u5728\u300c\u8bbe\u7f6e\u300d\u91cc\u914d\u7f6e Obsidian vault\u3002',
+        'library.noVault': "请到设置中配置 Obsidian 同步。",
         'library.note': '\u7b14\u8bb0',
         'library.syncExport': '\u540c\u6b65\u5230 Obsidian',
         'library.syncImport': '\u4ece Obsidian \u5bfc\u5165',
@@ -453,44 +494,18 @@ window.__ModuleLoader__.load({
         'library.importResult': '已导入 {imported} 条 · 跳过 {skipped} 条 · 冲突 {conflicts} 条。',
         'library.syncFailed': '同步失败：{reason}',
         'settings.captureQueue': '提炼任务：待处理 {pending} · 待补全 {partial} · 未知 {unknown} · 失败 {failed} · 完成 {done}',
+        'settings.captureAllowance': '今日自动调用 {used}/{limit} · 提炼与深查共用',
+        'settings.captureResume': '{count} 项等待额度 · 本地时间 {time} 自动继续。手动恢复会使用额外调用额度。',
+        'settings.capturePaused': '{count} 项等待额度 · 自动捕获已关闭或每日额度为 0。',
         'settings.captureRetry': '恢复下一项',
         'settings.captureUnknownConfirm': '上一次请求结果未知，重新发送可能再次计费。确认发送新请求？',
         'settings.captureNothing': '没有可恢复的末级任务，请检查正在运行或结果未知的子任务。',
         'settings.captureRetried': '已加入重试队列。',
         'settings.captureRetryFailed': '重试失败：{reason}',
-        'knowledge.title': '\u77e5\u8bc6\u56fe\u8c31',
-        'knowledge.hint': '每个主题独立保留。搜索或翻页可查看全部节点；点击节点可沿出链、反链继续查看。',
-        'knowledge.search': '\u641c\u7d22\u8bb0\u5fc6\u6216\u4e3b\u9898',
-        'knowledge.zoomIn': '\u653e\u5927',
-        'knowledge.zoomOut': '\u7f29\u5c0f',
-        'knowledge.reset': '\u91cd\u7f6e',
-        'knowledge.topicChip': '\u4e3b\u9898\uff1a{topic}',
-        'knowledge.empty': '\u6682\u65e0\u53ef\u53ef\u89c6\u5316\u7684\u8bb0\u5fc6\u3002',
-        'knowledge.loading': '\u6b63\u5728\u6784\u5efa\u77e5\u8bc6\u56fe\u8c31\u2026',
-        'knowledge.failed': '\u77e5\u8bc6\u56fe\u8c31\u52a0\u8f7d\u5931\u8d25\uff1a{reason}',
-        'knowledge.stats': '{memories} \u6761\u8bb0\u5fc6 \u00b7 {topics} \u4e2a\u4e3b\u9898 \u00b7 {tags} \u4e2a\u6807\u7b7e',
-        'knowledge.truncated': '\u4ec5\u5c55\u793a\u6700\u8fd1 400 \u6761\u8bb0\u5fc6\u3002',
-        'knowledge.detail': '\u8be6\u60c5',
-        'knowledge.promote': '\u63d0\u5347\u4e3a\u77e5\u8bc6',
-        'knowledge.promoting': '\u63d0\u5347\u4e2d\u2026',
-        'knowledge.promoted': '\u5df2\u5199\u5165\u77e5\u8bc6\u7b14\u8bb0\uff1a{path}',
-        'knowledge.promoteFailed': '\u63d0\u5347\u5931\u8d25\uff1a{reason}',
-        'knowledge.knowledgeNote': '\u957f\u671f\u77e5\u8bc6\u7b14\u8bb0',
-        'knowledge.vaultNote': 'Vault \u7b14\u8bb0\u3002\u5bfc\u5165\u77e5\u8bc6\u5e93\u540e\u53ef\u5728\u6b64\u7f16\u8f91\u3002',
-        'knowledge.legendMemories': '\u8bb0\u5fc6',
-        'knowledge.legendKnowledge': '\u77e5\u8bc6\u7b14\u8bb0',
-        'knowledge.legendVault': 'Vault \u7b14\u8bb0',
-        'knowledge.traitNote': '\u7531\u8bc1\u636e\u8bb0\u5fc6\u5f52\u7eb3\u7684\u753b\u50cf\u504f\u597d',
-        'knowledge.noSelection': '\u70b9\u51fb\u4e00\u4e2a\u8282\u70b9\u67e5\u770b\u8be6\u60c5\u3002',
-        'knowledge.kind': '\u7c7b\u578b',
-        'knowledge.status': '\u72b6\u6001',
-        'knowledge.topic': '\u4e3b\u9898',
-        'knowledge.confidence': '\u7f6e\u4fe1\u5ea6',
-        'knowledge.tags': '\u6807\u7b7e',
         'settings.title': '\u8bb0\u5fc6\u8bbe\u7f6e',
-        'settings.capture': '\u81ea\u52a8\u6355\u83b7',
-        'settings.inject': '\u4e0a\u4e0b\u6587\u6ce8\u5165',
-        'settings.budget': '\u6ce8\u5165\u9884\u7b97',
+        'settings.capture': "自动记住对话",
+        'settings.inject': "回答时参考记忆",
+        'settings.budget': "参考内容上限",
         'settings.retention': '\u7247\u6bb5\u4fdd\u7559',
         'settings.maintenance': '\u81ea\u7ef4\u62a4',
         'settings.group.capture': '\u6355\u83b7\u4e0e\u6ce8\u5165',
@@ -505,21 +520,8 @@ window.__ModuleLoader__.load({
         "obsidian.keepMemory": "使用 Memory 版本（保留副本）",
         "obsidian.keepVault": "使用 Obsidian 版本（保留副本）",
         "obsidian.deleted": "这一侧已删除",
-        "knowledge.pageInfo": "显示 {start}–{end} / 共 {total} 项；搜索覆盖全部分页",
-        "knowledge.previous": "上一页",
-        "knowledge.next": "下一页",
-        "knowledge.links": "出链与反链",
-        "knowledge.noLinks": "当前节点没有关联链接",
-        "knowledge.outgoing": "出链",
-        "knowledge.incoming": "反链",
         "kind.unresolved": "未解析链接",
         "status.unresolved": "目标尚不存在",
-        "knowledge.allTopics": "全部主题",
-        "knowledge.edge.topic": "主题",
-        "knowledge.edge.wiki": "双链",
-        "knowledge.edge.knowledge": "知识关联",
-        "knowledge.edge.tag": "共同标签",
-        "knowledge.edge.profile": "画像依据",
         'obsidian.vault': 'Vault \u8def\u5f84',
         'obsidian.folder': '\u6587\u4ef6\u5939',
         'obsidian.actions': '\u540c\u6b65',
@@ -540,9 +542,33 @@ window.__ModuleLoader__.load({
         'settings.data.label': '\u5bfc\u51fa\u3001\u5bfc\u5165\u4e0e\u5907\u4efd',
         'data.export': '\u5bfc\u51fa',
         'data.import': '\u5bfc\u5165',
-        'data.backup': '\u7acb\u5373\u5907\u4efd',
+        "health.title": "存储状态",
+        "health.ok": "可用",
+        "health.attention": "需要处理",
+        "health.unavailable": "已暂停",
+        "health.download": "导出诊断摘要",
+        "health.hint": "只包含版本、状态码和数量，不含记忆正文、文件路径或会话标识。",
+        "health.profile": "按宿主配置隔离",
+        "health.explicit": "独立指定目录",
+        "health.memories": "当前记忆 {memories} · 删除标记 {deleted}",
+        "health.jobs": "排队 {pending} · 处理中 {running} · 未完成 {partial} · 失败 {failed} · 待核实 {unknown}",
+        "health.corrupt": "无法读取的原始记录行：{count}",
+        "health.profile-unavailable": "无法确认宿主配置身份。请更新宿主或配置独立数据目录后重新加载插件。",
+        "health.storage-owner-conflict": "目录属于其他宿主配置。请选择独立目录后重新加载插件。",
+        "health.storage-owner-invalid": "无法确认数据目录归属。请检查文件权限或从完整备份恢复到新目录。",
+        "health.storage-unavailable": "存储不可用。请检查目录权限、磁盘空间和文件版本后重新加载插件。",
+        "health.settings-invalid": "设置损坏，捕获、注入、维护和同步已暂停。请在设置页重新确认并保存。",
+        "health.settings-unreadable": "无法读取设置。请检查文件权限后重新加载插件。",
+        "health.profile-explicit": "当前目录由独立配置指定，尚未核验宿主配置隔离。",
+        "health.backup-failed": "完整备份未完成，已有备份保留。请检查存储或稍后重试。",
+        "health.corrupt-lines": "已跳过无法读取的记录行。请检查本地隔离记录或恢复已验证备份，再判断记忆是否完整。",
+        "health.capture-incomplete": "存在未完成或失败的提炼任务，请查看下方任务列表。",
+        "health.capture-unknown": "部分请求结果未知，为避免重复计费不会自动重发。",
+        'data.backup': '完整备份',
+        'data.backupHint': '导出和导入用于迁移当前记忆。完整备份还保留历史、原文、设置和请求回执；通过恢复工具还原到新目录。',
         'data.exported': '\u5df2\u5bfc\u51fa',
         'data.imported': '\u5df2\u5bfc\u5165 {imported} \u6761\uff0c\u8df3\u8fc7 {skipped} \u6761',
+        'data.protectedDeleted': '已保留 {count} 条本地记忆的遗忘状态。',
         'data.backupDone': '\u5907\u4efd\u5df2\u5199\u5165 {path}',
         'data.failed': '\u64cd\u4f5c\u5931\u8d25\uff1a{reason}',
         'settings.failed': '\u4fdd\u5b58\u5931\u8d25\uff1a{reason}',
@@ -560,11 +586,11 @@ window.__ModuleLoader__.load({
         'usage.overBudget': '{count} 次超预算',
         'usage.provider': 'Provider \u7528\u91cf\uff1a{calls} \u6b21 \u00b7 \u8f93\u5165 {input} \u00b7 \u8f93\u51fa {output} \u00b7 \u603b {total}',
         'usage.providerMissing': 'Provider \u672a\u8fd4\u56de\u7528\u91cf\uff1b\u56fe\u8868\u4ec5\u5c55\u793a\u4f30\u7b97\u7684 prompt token\u3002',
-        'view.profile': '\u7528\u6237\u753b\u50cf',
+        'view.profile': "用户偏好",
         'profile.hint': '\u7531\u6301\u4e45\u504f\u597d\u5f52\u7eb3\uff0c\u6bcf\u6761\u90fd\u5e26\u8bc1\u636e\u3002',
         'profile.empty': '\u8fd8\u6ca1\u6709\u7a33\u5b9a\u504f\u597d\u3002',
         'profile.evidenceTitle': '\u8bc1\u636e',
-        'profile.title': '\u7528\u6237\u753b\u50cf',
+        'profile.title': "用户偏好",
         'profile.summary': '\u5171 {count} \u6761',
         'profile.evidence': '{count} \u6761\u8bc1\u636e',
         'pager.total': '\u5171 {total} \u6761',
@@ -639,6 +665,63 @@ window.__ModuleLoader__.load({
         'notice.rebuilt': '\u7d22\u5f15\u5df2\u91cd\u5efa',
         'error.invalid': '\u8f93\u5165\u65e0\u6548\uff1a{message}',
         'error.missingProject': '\u5c1a\u672a\u8bc6\u522b\u5f53\u524d\u9879\u76ee\u3002',
+        'section.memory': "记忆",
+        'section.brief': "项目档案",
+        'section.knowledge': "知识",
+        'section.activity': "活动",
+        'section.settings': "设置",
+        'nav.sections': "记忆导航",
+        'view.activity': "提炼与用量",
+        'view.brief': "项目档案",
+        'sync.manual': "手动导入与导出",
+        'sync.memories': "记忆记录",
+        'sync.notes': "知识笔记",
+        'brief.project': "项目",
+        'brief.choose': "选择项目",
+        'brief.hint': "按当前事实、决定和历史整理，每项保留原始依据。",
+        'brief.empty': "这个项目还没有记忆记录。",
+        'brief.current': "当前事实与约束",
+        'brief.decisions': "已确认的决定",
+        'brief.history': "历史变化",
+        'brief.unresolved': "待确认与待生效",
+        'brief.pending': '待生效',
+        'brief.expired': '已过期',
+        'brief.sources': "查看依据",
+        'brief.noQuote': "这条记录尚未保存可定位的原句。",
+        'brief.user': "用户原话",
+        'brief.since': "生效于 {time}",
+        'brief.until': "截止于 {time}",
+        'library.recallScope': "用于回答",
+        'library.scope.unbound': "不用于回答",
+        'library.scope.project': "仅指定项目",
+        'library.scope.global': "所有项目",
+        'library.scopeHint': "关联记忆的笔记仍受原记忆范围限制，已遗忘内容不会重新参与回答。",
+        'recall.title': '最近一次查证',
+        'recall.empty': '询问记忆后，这里会显示查证结果。',
+        'recall.found': '已放入本轮回答的证据',
+        'recall.missing': '仍缺少证据',
+        'recall.coverage': '本轮已覆盖 {covered} / {total} 项问题',
+        'recall.candidates': '已送入候选原文，答案尚未确认',
+        'recall.forgetSource': '忘记这条原始消息',
+        'recall.forgetConfirm': '忘记整条原始消息及其提炼出的记忆？这也会阻止该消息的所有分段再次进入召回。',
+        'recall.semantic': '本地语义检索',
+        'recall.semanticProgress': '已建立 {indexed} / {total} 段索引',
+        'recall.semantic.idle': '需要时启动',
+        'recall.semantic.loading': '正在加载模型',
+        'recall.semantic.downloading': '正在下载公开模型',
+        'recall.semantic.indexing': '正在后台建立索引',
+        'recall.semantic.ready': '已就绪',
+        'recall.semantic.disabled': '已关闭',
+        'recall.semantic.failed': '暂不可用，已使用关键词检索',
+        'recall.budgetOmitted': '已找到，但受上下文限额未放入本轮',
+        'recall.local': '本地证据已覆盖问题',
+        'recall.completed': '已完成补充查证',
+        'recall.failed': '补充查证失败，未自动重试',
+        'recall.unknown': '请求结果未知，未自动重试',
+        'recall.notSent': '未发送补充请求',
+        'recall.budget': '已达额度，暂停补充查证',
+        'recall.usage': '实际用量：{tokens} token',
+        'recall.usageUnknown': '服务商未返回用量',
       },
     }
 
@@ -853,41 +936,30 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;box-sizing:border-box;min-height:48px;font-size:13.5px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-row+.dsh-memory-settings-row{border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-label{min-width:0;overflow:visible;text-overflow:clip;white-space:normal;flex:1 1 auto}',
-      '.dsh-memory-view-tabs{display:flex;flex-wrap:wrap;justify-content:flex-start;width:100%;box-sizing:border-box;gap:4px;padding:0;margin:0 0 24px;border:0;border-radius:0;background:transparent}',
-      '.dsh-memory-view-tab{border:0;background:transparent;min-height:28px;padding:5px 9px;border-radius:6px;font:inherit;font-size:12px;font-weight:500;line-height:18px;white-space:nowrap;flex:0 0 auto;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
+      '.dsh-memory-navigation{display:flex;flex-direction:column;gap:12px;margin:0 0 12px;min-width:0}',
+      '.dsh-memory-brief{display:flex;flex-direction:column;gap:14px;min-width:0}',
+      '.dsh-memory-brief-tools{display:flex;gap:12px;align-items:center;justify-content:space-between;min-width:0}',
+      '.dsh-memory-brief-project{display:flex;align-items:center;gap:12px;min-width:0;flex:1}',
+      '.dsh-memory-brief-project select{min-width:0;max-width:100%;flex:1}',
+      '.dsh-memory-brief-section{margin-top:14px;min-width:0}',
+      '.dsh-memory-recall-report{margin:24px 0;min-width:0;overflow-wrap:anywhere}',
+      '.dsh-memory-recall-report ul{margin:8px 0;padding-left:20px}',
+      '.dsh-memory-recall-report li{margin:6px 0}',
+      '.dsh-memory-brief-meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.dsh-memory-brief-sources{margin-top:8px;font-size:12px;overflow-wrap:anywhere}',
+      '.dsh-memory-brief-sources summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}',
+      '.dsh-memory-brief-sources blockquote{margin:8px 0;padding:4px 12px;border-left:2px solid var(--dsh-memory-card-border);white-space:pre-wrap}',
+      '.dsh-memory-manual-sync{margin-top:24px;padding-top:16px;border-top:1px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-manual-sync summary{cursor:pointer;font-size:13px;font-weight:500}',
+      '.dsh-memory-library.dsh-memory-card,.dsh-memory-profile,.dsh-memory-settings.dsh-memory-card{border:0;background:transparent;box-shadow:none;border-radius:0;padding:0;margin-top:0}',
+      '.dsh-memory-view-tabs{display:flex;flex-wrap:wrap;width:100%;box-sizing:border-box;gap:4px;padding:0 0 10px;margin:0;border-bottom:1px solid var(--dsh-memory-card-border);background:transparent}',
+      '.dsh-memory-subnav{display:flex;flex-wrap:wrap;gap:4px;min-width:0}',
+      '.dsh-memory-subnav .dsh-memory-view-tab{font-size:12px;font-weight:400}',
+      '.dsh-memory-subnav .dsh-memory-view-tab[data-active="true"]{font-weight:600}',
+      '.dsh-memory-navigation .dsh-memory-view-tab:focus-visible{outline:2px solid var(--dsw-alias-label-primary);outline-offset:2px}',
+      '@container (max-width:400px){.dsh-memory-navigation .dsh-memory-view-tabs{gap:0;justify-content:space-between}.dsh-memory-navigation .dsh-memory-view-tab{padding-inline:7px}}',
+      '.dsh-memory-view-tab{border:0;background:transparent;min-height:28px;padding:5px 9px;border-radius:6px;font:inherit;font-size:13px;font-weight:500;line-height:18px;white-space:nowrap;flex:0 0 auto;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
       '.dsh-memory-view-tab[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary,#1f2328);box-shadow:none}',
-      '.dsh-memory-knowledge{display:flex;flex-direction:column;gap:8px}',
-      '.dsh-memory-knowledge-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}',
-      '.dsh-memory-graph-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-      '.dsh-memory-graph-search{box-sizing:border-box;height:28px;min-width:0;flex:1 1 180px;max-width:280px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 24px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;text-align:center}',
-      '.dsh-memory-graph-btn{box-sizing:border-box;height:28px;min-width:28px;padding:0 8px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;cursor:pointer}',
-      '.dsh-memory-graph-chip{box-sizing:border-box;height:28px;padding:0 10px;border:.5px solid var(--dsw-alias-state-business-primary,#2f6df6);border-radius:14px;background:transparent;color:var(--dsw-alias-state-business-primary,#2f6df6);font:inherit;font-size:12px;cursor:pointer}',
-      '.dsh-memory-graph-wrap{overflow:hidden;border:.5px solid var(--dsh-memory-card-border);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);cursor:grab;touch-action:none}',
-      '.dsh-memory-graph-hit{fill:transparent}',
-      '.dsh-memory-graph-node-group{cursor:pointer}',
-      '.dsh-memory-graph-results{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;max-height:180px;overflow:auto}',
-      '.dsh-memory-graph-result{display:flex;justify-content:space-between;gap:10px;width:100%;border:0;background:transparent;padding:4px 2px;font:inherit;font-size:12px;text-align:left;color:var(--dsw-alias-label-primary,#1f2328);cursor:pointer}',
-      '.dsh-memory-graph{display:block;width:100%;height:auto}',
-      '.dsh-memory-graph-edge{stroke:var(--dsw-alias-border-l3,rgba(127,127,127,.35));stroke-width:1;opacity:.55}',
-      '.dsh-memory-graph-edge[data-type="tag"]{stroke:var(--dsw-alias-state-business-primary,#2f6df6);stroke-dasharray:3 3;opacity:.45}',
-      '.dsh-memory-graph-hub circle{fill:color-mix(in srgb,var(--dsw-alias-label-tertiary,#6b7280) 14%,transparent);stroke:var(--dsw-alias-border-l3,rgba(127,127,127,.35))}',
-      '.dsh-memory-graph-hub-label{font-size:11px;fill:var(--dsw-alias-label-secondary,#6b7280)}',
-      '.dsh-memory-graph-node{cursor:pointer;stroke:var(--dsw-alias-bg-layer-1,#fff);stroke-width:1.5}',
-      '.dsh-memory-graph-node[data-kind="preference"]{fill:#2f6df6}',
-      '.dsh-memory-graph-node[data-kind="fact"]{fill:#1a9e63}',
-      '.dsh-memory-graph-node[data-kind="decision"]{fill:#b7791f}',
-      '.dsh-memory-graph-node[data-kind="episode"]{fill:#8b5cf6}',
-      '.dsh-memory-graph-node[data-kind="trait"]{fill:#eab308}',
-      '.dsh-memory-graph-node[data-kind="knowledge"]{fill:#0ea5e9}',
-      '.dsh-memory-graph-node[data-kind="vault"]{fill:#14b8a6}',
-      '.dsh-memory-graph-edge[data-type="wiki"]{stroke:#0ea5e9;stroke-dasharray:2 3;opacity:.6}',
-      '.dsh-memory-graph-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:2px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#6b7280)}',
-      '.dsh-memory-graph-legend span{display:inline-flex;align-items:center;gap:5px}',
-      '.dsh-memory-graph-dot{width:7px;height:7px;border-radius:50%;background:#6b7280}',
-      '.dsh-memory-graph-dot[data-kind="memory"]{background:#2f6df6}',
-      '.dsh-memory-graph-dot[data-kind="knowledge"]{background:#0ea5e9}',
-      '.dsh-memory-graph-dot[data-kind="vault"]{background:#14b8a6}',
-      '.dsh-memory-graph-node:focus{outline:none;stroke:#1f2328;stroke-width:2}',
       '.dsh-memory-load-row{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}',
       '.dsh-memory-profile-line{display:flex;align-items:baseline;gap:8px;min-width:0}',
       '.dsh-memory-profile-line .dsh-memory-profile-statement{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -948,7 +1020,8 @@ window.__ModuleLoader__.load({
       '.dsh-memory-diff-del{color:var(--dsw-alias-state-danger-primary,#c0392b)}',
       '.dsh-memory-diff-add{color:var(--dsw-alias-state-success-primary,#1a9e63)}',
       '.dsh-memory-file-input{display:none}',
-      '.dsh-memory-input,.dsh-memory-select,.dsh-memory-textarea,.dsh-memory-settings-input,.dsh-memory-graph-search{border-radius:10px;text-align:center;padding:0 24px}',
+      '.dsh-memory-input,.dsh-memory-select,.dsh-memory-textarea,.dsh-memory-settings-input{border-radius:10px;text-align:center;padding:0 24px}',
+      '.dsh-memory-library-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}',
       '.dsh-memory-view-tab:focus-visible,.dsh-memory-palette-trigger:focus-visible,.dsh-memory-palette-option:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
       '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}.dsh-memory-settings-head{gap:10px}.dsh-memory-settings-row{gap:12px}}',
       '@container (max-width:430px){.dsh-memory-settings-row{min-height:46px}.dsh-memory-settings .dsh-memory-button{height:30px;padding:0 10px;border-radius:8px;min-height:32px}}',
@@ -1472,6 +1545,120 @@ window.__ModuleLoader__.load({
         counts.size < 7 ? h('p', { className: 'dsh-memory-activity-hint' }, t('activity.sparseHint')) : null)
     }
 
+    function RecallReport({ report, t, locale, call, onSaved }) {
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+      const forget = async evidence => {
+        if (busy || !call || !window.confirm(t('recall.forgetConfirm'))) return
+        setBusy(true); setError('')
+        try { await call('removeMemory', { id: evidence.id, scope: 'project', projectKey: evidence.projectKey }); await onSaved?.() }
+        catch (failure) { setError(messageOf(failure)) }
+        finally { setBusy(false) }
+      }
+      if (!report) return h('section', { className: 'dsh-memory-recall-report' },
+        h('h3', { className: 'dsh-memory-settings-title' }, t('recall.title')),
+        h('p', { className: 'dsh-memory-muted' }, t('recall.empty')))
+      const stateKey = { 'not-needed': 'local', completed: 'completed', failed: 'failed', unknown: 'unknown', 'budget-exhausted': 'budget' }[report.completionState] ?? 'notSent'
+      const sent = ['completed', 'unknown', 'requested'].includes(report.providerState)
+      const tokens = report.usage?.totalTokens
+      const missing = report.unresolved ?? report.missing ?? []
+      const evidenceList = items => items.map((item, index) => {
+        const evidenceNodes = (item.evidence ?? []).map(evidence => {
+          const quotes = (evidence.sourceRefs ?? []).filter(ref => typeof ref.excerpt === 'string' && ref.excerpt !== '')
+          return h('div', { key: evidence.id },
+            evidence.noteTitle ? h('p', null, evidence.noteTitle) : null,
+            quotes.map((ref, refIndex) => h('blockquote', { key: refIndex }, ref.excerpt)),
+            !evidence.noteTitle && quotes.length === 0 ? h('p', { className: 'dsh-memory-muted' }, t('brief.noQuote')) : null,
+            evidence.kind === 'source' ? h('div', { className: 'dsh-memory-danger-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', disabled: busy, onClick: () => forget(evidence) }, t('recall.forgetSource'))) : null)
+        })
+        return h('li', { key: index }, item.query,
+          h('details', { className: 'dsh-memory-brief-sources' }, h('summary', null, t('brief.sources')), evidenceNodes))
+      })
+      const found = evidenceList(report.covered ?? [])
+      const candidates = evidenceList(report.candidates ?? [])
+      return h('section', { className: 'dsh-memory-recall-report' },
+        h('h3', { className: 'dsh-memory-settings-title' }, t('recall.title')),
+        h('p', { className: 'dsh-memory-brief-meta' },
+          Number.isFinite(report.at) ? h('time', { dateTime: new Date(report.at).toISOString() }, new Date(report.at).toLocaleString(locale)) : null,
+          h('span', null, t('recall.' + stateKey)),
+          sent && report.provider?.model ? h('span', null, report.provider.model) : null,
+          sent ? h('span', null, Number.isFinite(tokens) ? t('recall.usage', { tokens: String(tokens) }) : t('recall.usageUnknown')) : null),
+        error ? h('p', { role: 'alert', className: 'dsh-memory-error-text' }, error) : null,
+        report.reason ? h('p', { className: 'dsh-memory-muted' }, report.reason) : null,
+        Number.isInteger(report.total) ? h('p', null, t('recall.coverage', { covered: String(found.length), total: String(report.total) })) : null,
+        found.length ? h('div', null, h('strong', null, t('recall.found')), h('ul', null, found)) : null,
+        candidates.length ? h('div', null, h('strong', null, t('recall.candidates')), h('ul', null, candidates)) : null,
+        (report.budgetOmitted ?? []).length ? h('div', null,
+          h('strong', null, t('recall.budgetOmitted')),
+          h('ul', null, report.budgetOmitted.map((query, index) => h('li', { key: index }, query)))) : null,
+        missing.length ? h('div', null,
+          h('strong', null, t('recall.missing')),
+          h('ul', null, missing.map((query, index) => h('li', { key: index }, query)))) : null)
+    }
+
+    function ProjectBrief({ call, projectKeys, initialProject, t, locale }) {
+      const [project, setProject] = React.useState(initialProject ?? '')
+      const [offset, setOffset] = React.useState(0)
+      const [result, setResult] = React.useState(null)
+      const [error, setError] = React.useState('')
+      const [loading, setLoading] = React.useState(false)
+      const [refresh, setRefresh] = React.useState(0)
+      const options = [...new Set([...projectKeys, ...(initialProject ? [initialProject] : [])])]
+      React.useEffect(() => {
+        if (!project && initialProject) setProject(initialProject)
+      }, [project, initialProject])
+      React.useEffect(() => {
+        if (!call || !project) return undefined
+        let cancelled = false
+        setLoading(true); setError(''); setResult(null)
+        call('projectBrief', { projectKey: project, offset, limit: 40 })
+          .then(next => { if (!cancelled) setResult(next) })
+          .catch(failure => { if (!cancelled) setError(messageOf(failure)) })
+          .finally(() => { if (!cancelled) setLoading(false) })
+        return () => { cancelled = true }
+      }, [call, project, offset, refresh])
+      const sectionNodes = (result?.sections ?? []).map(section => {
+        const items = section.items.map(item => {
+          const statusKey = item.status !== 'active' ? 'status.' + item.status
+            : Number.isFinite(item.validTo) && item.validTo <= Date.now() ? 'brief.expired'
+              : Number.isFinite(item.validFrom) && item.validFrom > Date.now() ? 'brief.pending' : 'status.active'
+          const sources = (item.sourceRefs ?? []).map((ref, index) => h('div', { key: index },
+            ref.excerpt ? h('blockquote', null, ref.excerpt) : h('p', null, t('brief.noQuote')),
+            h('p', { className: 'dsh-memory-muted' }, [ref.role === 'user' ? t('brief.user') : ref.role, ref.sessionId].filter(Boolean).join(' · '))))
+          return h('li', { key: item.id, className: 'dsh-memory-history-item' },
+            h('p', { className: 'dsh-memory-history-content' }, item.content),
+            h('div', { className: 'dsh-memory-brief-meta' },
+              h('span', null, t(statusKey)),
+              Number.isFinite(item.validFrom) ? h('span', null, t('brief.since', { time: formatTime(item.validFrom, locale) })) : null,
+              Number.isFinite(item.validTo) ? h('span', null, t('brief.until', { time: formatTime(item.validTo, locale) })) : null),
+            h('details', { className: 'dsh-memory-brief-sources' },
+              h('summary', null, t('brief.sources')),
+              sources.length ? sources : h('p', { className: 'dsh-memory-muted' }, t('brief.noQuote'))))
+        })
+        return h('section', { key: section.id, className: 'dsh-memory-brief-section' },
+          h('h3', { className: 'dsh-memory-settings-title' }, t('brief.' + section.id)),
+          h('ul', { className: 'dsh-memory-history' }, items))
+      })
+      return h('section', { className: 'dsh-memory-brief' },
+        h('div', { className: 'dsh-memory-brief-tools' },
+          h('label', { className: 'dsh-memory-brief-project' }, t('brief.project'),
+            h('select', { className: 'dsh-memory-select', value: project, title: project, onChange: event => { setProject(event.target.value); setOffset(0) } },
+              !project ? h('option', { value: '' }, t('brief.choose')) : null,
+              options.map(key => h('option', { key, value: key }, key)))),
+          h('button', { type: 'button', className: 'dsh-memory-button', disabled: loading || !project, onClick: () => setRefresh(value => value + 1) }, t('actions.refresh'))),
+        h('p', { className: 'dsh-memory-muted' }, t('brief.hint')),
+        loading ? h('p', { role: 'status', className: 'dsh-memory-muted' }, t('list.loading')) : null,
+        error ? h('p', { role: 'alert', className: 'dsh-memory-error-text' }, error) : null,
+        !project ? h('p', { className: 'dsh-memory-muted' }, t('error.missingProject')) : null,
+        result?.total === 0 ? h('p', { className: 'dsh-memory-muted' }, t('brief.empty')) : null,
+        sectionNodes,
+        result ? h('div', { className: 'dsh-memory-pager' },
+          h('span', null, t('pager.total', { total: String(result.total) })),
+          h('div', { className: 'dsh-memory-pager-actions' },
+            h('button', { type: 'button', className: 'dsh-memory-button', disabled: offset === 0 || loading, onClick: () => setOffset(Math.max(0, offset - 40)) }, t('pager.prev')),
+            h('button', { type: 'button', className: 'dsh-memory-button', disabled: result.nextOffset == null || loading, onClick: () => setOffset(result.nextOffset) }, t('pager.next')))) : null)
+    }
+
     function ProfileView(props) {
       const { profile, t } = props
       const traits = profile !== null && profile !== undefined && Array.isArray(profile.traits) ? profile.traits : []
@@ -1607,7 +1794,7 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsCard(props) {
-      const { stats, call, t, onSaved, group = 'capture' } = props
+      const { stats, call, t, locale, onSaved, group = 'capture' } = props
       const [capture, setCapture] = React.useState(true)
       const [inject, setInject] = React.useState(true)
       const [budget, setBudget] = React.useState('360')
@@ -1647,6 +1834,7 @@ window.__ModuleLoader__.load({
       }, [stats])
 
       const dirty = baseline !== null && (
+        stats?.settingsIssue?.code === 'settings-invalid' ||
         capture !== baseline.capture ||
         inject !== baseline.inject ||
         budget !== baseline.budget ||
@@ -1753,7 +1941,8 @@ window.__ModuleLoader__.load({
         try {
           const payload = JSON.parse(await file.text())
           const result = await call('importData', { payload })
-          setNotice(t('data.imported', { imported: String(result.imported ?? 0), skipped: String(result.skipped ?? 0) }))
+          setNotice(t('data.imported', { imported: String(result.imported ?? 0), skipped: String(result.skipped ?? 0) }) +
+            (result.protectedDeleted > 0 ? ' ' + t('data.protectedDeleted', { count: String(result.protectedDeleted) }) : ''))
           onSaved()
         } catch (failure) {
           setNotice(t('data.failed', { reason: messageOf(failure) }))
@@ -1774,6 +1963,24 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
+      }
+
+      const transfer = async (kind, direction) => {
+        if (!call || busy || dirty) return
+        setBusy(true)
+        setNotice('')
+        try {
+          const result = kind === 'notes'
+            ? await call('knowledgeSync', { direction })
+            : await call(direction === 'export' ? 'obsidianExport' : 'obsidianImport', {
+              vaultPath: baseline.obsidianVault, folder: baseline.obsidianFolder, ...(direction === 'import' ? { dryRun: false } : {}),
+            })
+          setNotice(direction === 'export'
+            ? t('library.exportResult', { written: String(result?.written ?? 0), skipped: String(result?.skipped ?? 0) })
+            : t('library.importResult', { imported: String(result?.imported ?? 0), conflicts: String(result?.conflicts?.length ?? result?.conflicts ?? 0), skipped: String(result?.skipped ?? 0) }))
+          onSaved()
+        } catch (failure) { setNotice(t('obsidian.failed', { reason: messageOf(failure) })) }
+        finally { setBusy(false) }
       }
 
       const switchRow = (label, checked, onChange) => h('div', { className: 'dsh-memory-settings-row' },
@@ -1809,17 +2016,20 @@ window.__ModuleLoader__.load({
       }, label)
 
       return h('section', { className: 'dsh-memory-card dsh-memory-settings' },
+        stats?.settingsIssue ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.settingsIssue.message) : null,
+        (group === 'activity' || group === 'retention') && stats?.maintenance?.backupError ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.maintenance.backupError.message) : null,
         h('div', { className: 'dsh-memory-settings-head' },
           h('div', null,
             h('h3', { className: 'dsh-memory-settings-title' }, t('view.' + group))),
-          h('span', { className: 'dsh-memory-settings-badge', 'data-off': maintenance ? 'false' : 'true' },
+          group === 'retention' ? h('span', { className: 'dsh-memory-settings-badge', 'data-off': maintenance ? 'false' : 'true' },
             h('i', null),
-            maintenance ? t('settings.badge.on') : t('settings.badge.off'))),
+            maintenance ? t('settings.badge.on') : t('settings.badge.off')) : null),
         group === 'capture'
           ? h('div', { className: 'dsh-memory-settings-group' },
             switchRow(t('settings.capture'), capture, setCapture),
             switchRow(t('settings.inject'), inject, setInject),
-            numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value)),
+            numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value)))
+          : group === 'activity' ? h('div', { className: 'dsh-memory-settings-group' },
             captureQueue === null
               ? null
               : h('div', { className: 'dsh-memory-settings-row' },
@@ -1833,6 +2043,12 @@ window.__ModuleLoader__.load({
                 (captureQueue.unknown ?? 0) + (captureQueue.failed ?? 0) + (captureQueue.pending ?? 0) + (captureQueue.partial ?? 0) > 0
                   ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: retryCapture, disabled: retrying }, t('settings.captureRetry'))
                   : null),
+            stats?.captureBudget ? h('div', { role: 'status' },
+              h('p', { className: 'dsh-memory-muted' }, t('settings.captureAllowance', stats.captureBudget)),
+              stats.captureBudget.waiting > 0 ? h('p', { className: 'dsh-memory-muted' },
+                t(stats.captureBudget.resumeAt ? 'settings.captureResume' : 'settings.capturePaused', {
+                  count: stats.captureBudget.waiting, time: formatTime(stats.captureBudget.resumeAt, locale),
+                })) : null) : null,
             captureStorage === null
               ? null
               : h('div', { className: 'dsh-memory-settings-row' },
@@ -1848,6 +2064,7 @@ window.__ModuleLoader__.load({
               switchRow(t('settings.maintenance'), maintenance, setMaintenance))
             : group === 'data'
               ? h('div', { className: 'dsh-memory-settings-group' },
+                h('p', { className: 'dsh-memory-muted' }, t('data.backupHint')),
                 h('div', { className: 'dsh-memory-settings-row' },
                   h('span', { className: 'dsh-memory-settings-label' }, t('settings.data.label')),
                   h('div', { className: 'dsh-memory-settings-buttons' },
@@ -1866,9 +2083,20 @@ window.__ModuleLoader__.load({
                 h('p', { className:'dsh-memory-muted' }, t('obsidian.autoHint')),
                 textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
                 textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
-                h(ObsidianSyncStatus, {call,t,disabled:busy||dirty})),
+                h(ObsidianSyncStatus, {call,t,disabled:busy||dirty}),
+                h('details', { className: 'dsh-memory-manual-sync' },
+                  h('summary', null, t('sync.manual')),
+                  ['memories', 'notes'].map(kind => h('div', { key: kind, className: 'dsh-memory-settings-row' },
+                    h('span', { className: 'dsh-memory-settings-label' }, t('sync.' + kind)),
+                    h('div', { className: 'dsh-memory-settings-buttons' },
+                      ['export','import'].map(direction => h('button', {
+                        key: direction, type: 'button', className: 'dsh-memory-button',
+                        'aria-label': t('data.' + direction) + ' · ' + t('sync.' + kind),
+                        disabled: !call || busy || dirty || !baseline?.obsidianVault,
+                        onClick: () => transfer(kind, direction),
+                      }, t('data.' + direction)))))))),
         notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
-        h('div', { className: 'dsh-memory-settings-foot' },
+        group === 'activity' || group === 'data' ? null : h('div', { className: 'dsh-memory-settings-foot' },
           h('span', { className: 'dsh-memory-settings-state', 'data-dirty': dirty ? 'true' : 'false' },
             h('i', null),
             stateText),
@@ -1880,222 +2108,9 @@ window.__ModuleLoader__.load({
           }, busy ? t('settings.saving') : t('settings.save'))))
     }
 
-    function KnowledgeView(props) {
-      const { graph, loading, error, t, onPromote, promoting, request, onRequest } = props
-      const [selected, setSelected] = React.useState(null)
-      const [scale, setScale] = React.useState(1)
-      const [offset, setOffset] = React.useState({ x: 0, y: 0 })
-      const query=request.query??'', topicFilter=request.topic??null
-      const setQuery=value=>onRequest({query:value,topic:null,offset:0,focus:null})
-      const setTopicFilter=value=>onRequest({...request,topic:typeof value==='function'?value(topicFilter):value,offset:0,focus:null})
-      const dragRef = React.useRef(null)
-      React.useEffect(()=>{
-        if(graph?.focus)setSelected(graph.nodes.find(n=>n.id===graph.focus)??null)
-        else setSelected(null)
-      },[graph])
-      if (loading && graph===null) return h('p', { className: 'dsh-memory-muted', role: 'status' }, t('knowledge.loading'))
-      if (error !== '') return h('p', { className: 'dsh-memory-error-text', role: 'alert' }, t('knowledge.failed', { reason: error }))
-      if (graph === null || !Array.isArray(graph.nodes)) {
-        return h('div', { className: 'dsh-memory-empty' }, h('p', { className: 'dsh-memory-empty-title' }, t('knowledge.empty')))
-      }
-      const width = 800
-      const height = 460
-      const cx = width / 2
-      const cy = height / 2
-      const hubs = Array.isArray(graph.hubs) ? graph.hubs : []
-      const positions = new Map()
-      const membersByTopic = new Map()
-      for (const node of graph.nodes) {
-        if (!membersByTopic.has(node.topic)) membersByTopic.set(node.topic, [])
-        membersByTopic.get(node.topic).push(node)
-      }
-      hubs.forEach((hub, index) => {
-        const angle = (index / Math.max(1, hubs.length)) * Math.PI * 2 - Math.PI / 2
-        const distance = hubs.length <= 1 ? 0 : 165
-        const hx = cx + Math.cos(angle) * distance
-        const hy = cy + Math.sin(angle) * distance
-        positions.set(hub.id, { x: hx, y: hy })
-        const members = membersByTopic.get(hub.label) ?? []
-        const ring = Math.max(28, 14 + members.length * 2.6)
-        members.forEach((node, memberIndex) => {
-          const memberAngle = (memberIndex / Math.max(1, members.length)) * Math.PI * 2 + angle
-          positions.set(node.id, {
-            x: hx + Math.cos(memberAngle) * ring,
-            y: hy + Math.sin(memberAngle) * ring,
-          })
-        })
-      })
-      const visibleNodes=graph.nodes
-      const visibleIds=new Set(visibleNodes.map(n=>n.id))
-      const visibleHubs=hubs
-      const resetView = () => {
-        setScale(1)
-        setOffset({ x: 0, y: 0 })
-        onRequest({query:'',topic:null,offset:0,focus:null})
-      }
-      const zoomBy = (factor) => {
-        setScale((value) => Math.min(3, Math.max(0.4, Math.round(value * factor * 100) / 100)))
-      }
-      const onWheel = (event) => {
-        event.preventDefault()
-        zoomBy(event.deltaY < 0 ? 1.12 : 0.89)
-      }
-      const onPointerDown = (event) => {
-        if (event.button !== 0) return
-        const rect = event.currentTarget.getBoundingClientRect()
-        const factor = 800 / Math.max(1, rect.width)
-        dragRef.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y, factor }
-        if (typeof event.currentTarget.setPointerCapture === 'function') {
-          event.currentTarget.setPointerCapture(event.pointerId)
-        }
-      }
-      const onPointerMove = (event) => {
-        const drag = dragRef.current
-        if (drag === null) return
-        setOffset({
-          x: drag.ox + (event.clientX - drag.x) * drag.factor,
-          y: drag.oy + (event.clientY - drag.y) * drag.factor,
-        })
-      }
-      const onPointerUp = () => {
-        dragRef.current = null
-      }
-      const edgeNodes = graph.edges.map((edge, index) => {
-        if (!visibleIds.has(edge.source) && !visibleHubs.some((hub) => hub.id === edge.source)) return null
-        if (!visibleIds.has(edge.target) && !visibleHubs.some((hub) => hub.id === edge.target)) return null
-        const from = positions.get(edge.source)
-        const to = positions.get(edge.target)
-        if (from === undefined || to === undefined) return null
-        return h('line', {
-          key: 'e' + index,
-          x1: from.x,
-          y1: from.y,
-          x2: to.x,
-          y2: to.y,
-          className: 'dsh-memory-graph-edge',
-          'data-type': edge.type,
-        })
-      })
-      const hubNodes = visibleHubs.map((hub) => {
-        const point = positions.get(hub.id)
-        if (point === undefined) return null
-        return h('g', {
-          key: hub.id,
-          className: 'dsh-memory-graph-hub',
-          onClick: () => setTopicFilter((value) => (value === hub.label ? null : hub.label)),
-        },
-          h('circle', { cx: point.x, cy: point.y, r: 10 }),
-          h('text', { x: point.x, y: point.y - 15, className: 'dsh-memory-graph-hub-label', textAnchor: 'middle' }, hub.label))
-      })
-      const memoryNodes = visibleNodes.map((node) => {
-        const point = positions.get(node.id)
-        if (point === undefined) return null
-        return h('g', {
-          key: node.id,
-          className: 'dsh-memory-graph-node-group',
-          tabIndex: 0,
-          role: 'button',
-          'aria-label': node.label,
-          onClick: () => setSelected(node),
-          onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') setSelected(node) },
-        },
-          h('circle', { cx: point.x, cy: point.y, r: 12, className: 'dsh-memory-graph-hit' }),
-          h('circle', {
-            cx: point.x,
-            cy: point.y,
-            r: 4.5 + Math.max(0, Math.min(1, node.confidence)) * 3,
-            className: 'dsh-memory-graph-node',
-            'data-kind': node.kind,
-          }),
-          h('title', null, node.label))
-      })
-      const resultRows = visibleNodes
-      const follow=id=>id.startsWith('topic:')?onRequest({query:'',topic:id.slice(6),offset:0,focus:null}):onRequest({query:'',topic:null,offset:0,focus:id})
-      const related=selected===null?[]:graph.edges.filter(e=>e.source===selected.id||e.target===selected.id)
-      return h('section', { className: 'dsh-memory-card dsh-memory-knowledge' },
-        h('div', { className: 'dsh-memory-knowledge-head' },
-          h('h3', { className: 'dsh-memory-settings-title' }, t('knowledge.title')),
-          h('span', { className: 'dsh-memory-list-total' }, t('knowledge.stats', {
-            memories: String(graph.memoryCount ?? graph.nodes.length),
-            topics: String(graph.topicCount ?? hubs.length),
-            tags: String(graph.tagCount ?? 0),
-          }))),
-        h('p', { className: 'dsh-memory-muted' }, t('knowledge.hint')),
-        h('div', { className: 'dsh-memory-graph-legend' },
-          h('span', null, h('i', { className: 'dsh-memory-graph-dot', 'data-kind': 'memory' }), t('knowledge.legendMemories')),
-          h('span', null, h('i', { className: 'dsh-memory-graph-dot', 'data-kind': 'knowledge' }), t('knowledge.legendKnowledge')),
-          h('span', null, h('i', { className: 'dsh-memory-graph-dot', 'data-kind': 'vault' }), t('knowledge.legendVault'))),
-        h('div', { className: 'dsh-memory-graph-tools' },
-          h('input', {
-            className: 'dsh-memory-graph-search',
-            type: 'search',
-            value: query,
-            placeholder: t('knowledge.search'),
-            'aria-label': t('knowledge.search'),
-            onChange: (event) => setQuery(event.target.value),
-          }),
-          h('button', { type: 'button', className: 'dsh-memory-graph-btn', onClick: () => zoomBy(0.8), 'aria-label': t('knowledge.zoomOut') }, '−'),
-          h('button', { type: 'button', className: 'dsh-memory-graph-btn', onClick: () => zoomBy(1.25), 'aria-label': t('knowledge.zoomIn') }, '+'),
-          h('button', { type: 'button', className: 'dsh-memory-graph-btn', onClick: resetView }, t('knowledge.reset')),
-          topicFilter === null ? null : h('button', {
-            type: 'button',
-            className: 'dsh-memory-graph-chip',
-            onClick: () => setTopicFilter(null),
-          }, t('knowledge.topicChip', { topic: topicFilter }) + ' ×')),
-        h('div', { className: 'dsh-memory-graph-wrap' },
-          h('svg', {
-            viewBox: '0 0 ' + width + ' ' + height,
-            className: 'dsh-memory-graph',
-            role: 'img',
-            'aria-label': t('knowledge.title'),
-            onWheel,
-            onPointerDown,
-            onPointerMove,
-            onPointerUp,
-            onPointerLeave: onPointerUp,
-          },
-            h('g', { transform: 'translate(' + offset.x + ' ' + offset.y + ') scale(' + scale + ')' },
-              edgeNodes, hubNodes, memoryNodes))),
-        h('div',{className:'dsh-memory-load-row'},
-          h('span',{className:'dsh-memory-muted',role:'status'},loading?t('knowledge.loading'):t('knowledge.pageInfo',{start:graph.total?graph.offset+1:0,end:graph.offset+graph.nodes.length,total:graph.total})),
-          h('button',{type:'button',className:'dsh-memory-button',disabled:loading||graph.offset===0,onClick:()=>onRequest({...request,offset:Math.max(0,graph.offset-graph.limit),focus:null})},t('knowledge.previous')),
-          h('button',{type:'button',className:'dsh-memory-button',disabled:loading||graph.nextOffset===null,onClick:()=>onRequest({...request,offset:graph.nextOffset,focus:null})},t('knowledge.next'))),
-        resultRows.length === 0 ? null : h('ul', { className: 'dsh-memory-graph-results' }, resultRows.map((node) => h('li', { key: node.id },
-          h('button', { type: 'button', className: 'dsh-memory-graph-result', onClick: () => setSelected(node) },
-            h('span', null, String(node.label).slice(0, 56)),
-            h('span', { className: 'dsh-memory-muted' }, node.topic))))),
-        h('div', { className: 'dsh-memory-knowledge-detail' },
-          h('h4', { className: 'dsh-memory-settings-group-title' }, t('knowledge.detail')),
-          selected === null
-            ? h('p', { className: 'dsh-memory-muted' }, t('knowledge.noSelection'))
-            : h('div', { className: 'dsh-memory-knowledge-selected' },
-              h('p', { className: 'dsh-memory-content' }, selected.label),
-              h('div', { className: 'dsh-memory-load-row' },
-                h('span', { className: 'dsh-memory-muted' }, t('knowledge.kind') + ': ' + t('kind.' + selected.kind)),
-                h('span', { className: 'dsh-memory-muted' }, t('knowledge.status') + ': ' + t('status.' + selected.status)),
-                h('span', { className: 'dsh-memory-muted' }, t('knowledge.topic') + ': ' + selected.topic),
-                h('span', { className: 'dsh-memory-muted' }, t('knowledge.confidence') + ': ' + Number(selected.confidence).toFixed(2))),
-              h('h4',null,t('knowledge.links')),
-              related.length===0?h('p',{className:'dsh-memory-muted'},t('knowledge.noLinks')):h('ul',null,related.map((e,i)=>{
-                const outgoing=e.source===selected.id, target=outgoing?e.target:e.source
-                return h('li',{key:i},h('button',{type:'button',className:'dsh-memory-graph-result',onClick:()=>follow(target)},t(outgoing?'knowledge.outgoing':'knowledge.incoming')+' · '+t('knowledge.edge.'+e.type)+' · '+(outgoing?e.targetLabel:e.sourceLabel)))
-              })),
-              selected.type === 'memory'
-                ? h('button', {
-                  type: 'button',
-                  className: 'dsh-memory-button',
-                  onClick: () => onPromote(selected),
-                  disabled: promoting,
-                }, promoting ? t('knowledge.promoting') : t('knowledge.promote'))
-                : h('p', { className: 'dsh-memory-muted' }, selected.type === 'trait'
-                  ? t('knowledge.traitNote')
-                  : selected.kind === 'vault' ? t('knowledge.vaultNote') : t('knowledge.knowledgeNote')))))
-    }
-
     function KnowledgeLibrary(props) {
-      const { data, loading, error, t, onSync, busy, call, onChanged } = props
+      const { data, loading, error, t, call, onChanged, projectKeys = [] } = props
       const notes = data !== null && Array.isArray(data.notes) ? data.notes : []
-      const vault = data !== null && typeof data.vaultPath === 'string' ? data.vaultPath : ''
       const [editing, setEditing] = React.useState(false)
       const [note, setNote] = React.useState(null)
       const [draft, setDraft] = React.useState(null)
@@ -2104,8 +2119,6 @@ window.__ModuleLoader__.load({
       const [noteError, setNoteError] = React.useState('')
       const [conflict, setConflict] = React.useState(false)
       const [notice, setNotice] = React.useState('')
-      const [syncing, setSyncing] = React.useState(false)
-      const [syncError, setSyncError] = React.useState('')
       const titleId = React.useId()
 
       const close = () => {
@@ -2144,6 +2157,8 @@ window.__ModuleLoader__.load({
             topic: next.topic ?? '',
             tags: (Array.isArray(next.tags) ? next.tags : []).join(', '),
             body: next.body ?? '',
+            scope: next.scope ?? 'unbound',
+            projectKey: next.projectKey ?? '',
           })
         } catch (failure) {
           setNoteError(t('library.openFailed', { reason: messageOf(failure) }))
@@ -2167,6 +2182,8 @@ window.__ModuleLoader__.load({
             topic: draft.topic.trim(),
             tags,
             expectedMtimeMs: note.mtimeMs,
+            scope: draft.scope,
+            projectKey: draft.scope === 'project' ? draft.projectKey : null,
           })
           if (result !== null && result !== undefined && result.saved === false && result.reason === 'conflict') {
             setConflict(true)
@@ -2182,27 +2199,6 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const syncNotes = async (direction) => {
-        if (call === null || syncing) return
-        setSyncing(true)
-        setSyncError('')
-        setNotice('')
-        try {
-          const result = await call('knowledgeSync', { direction })
-          setNotice(direction === 'export'
-            ? t('library.exportResult', { written: String(result?.written ?? 0), skipped: String(result?.skipped ?? 0) })
-            : t('library.importResult', {
-              imported: String(result?.imported ?? 0),
-              skipped: String(result?.skipped ?? 0),
-              conflicts: String(result?.conflicts ?? 0),
-            }))
-          if (typeof onChanged === 'function') onChanged()
-        } catch (failure) {
-          setSyncError(t('library.syncFailed', { reason: messageOf(failure) }))
-        } finally {
-          setSyncing(false)
-        }
-      }
 
       const editor = draft === null
         ? null
@@ -2229,6 +2225,16 @@ window.__ModuleLoader__.load({
               placeholder: t('library.tagsHint'),
               onChange: (event) => setDraft({ ...draft, tags: event.target.value }),
             })),
+          h(Field, { label: t('library.recallScope') },
+            h('select', { className: 'dsh-memory-select', value: draft.scope, 'aria-label': t('library.recallScope'),
+              onChange: event => setDraft({ ...draft, scope: event.target.value, projectKey: event.target.value === 'project' ? draft.projectKey : '' }) },
+              ['unbound','project','global'].map(scope => h('option', { key: scope, value: scope }, t('library.scope.' + scope))))),
+          draft.scope === 'project' ? h(Field, { label: t('brief.project') },
+            h('select', { className: 'dsh-memory-select', value: draft.projectKey, 'aria-label': t('brief.project'),
+              onChange: event => setDraft({ ...draft, projectKey: event.target.value }) },
+              h('option', { value: '' }, t('brief.choose')),
+              [...new Set([...projectKeys, ...(draft.projectKey ? [draft.projectKey] : [])])].map(key => h('option', { key, value: key }, key)))) : null,
+          h('p', { className: 'dsh-memory-muted' }, t('library.scopeHint')),
           h(Field, { label: t('library.bodyField') },
             h('textarea', {
               className: 'dsh-memory-textarea dsh-memory-library-body',
@@ -2247,7 +2253,7 @@ window.__ModuleLoader__.load({
               type: 'submit',
               className: 'dsh-memory-button',
               'data-primary': 'true',
-              disabled: saving || draft.title.trim() === '',
+              disabled: saving || draft.title.trim() === '' || (draft.scope === 'project' && !draft.projectKey),
             }, saving ? t('library.saving') : t('actions.save'))))
 
       const modal = editing
@@ -2271,17 +2277,10 @@ window.__ModuleLoader__.load({
         : null
 
       return h('section', { className: 'dsh-memory-card dsh-memory-library' },
-        h('div', { className: 'dsh-memory-knowledge-head' },
+        h('div', { className: 'dsh-memory-library-head' },
           h('h3', { className: 'dsh-memory-settings-title' }, t('library.title')),
           h('span', { className: 'dsh-memory-list-total' }, t('library.total', { count: String(notes.length) }))),
         h('p', { className: 'dsh-memory-muted' }, t('library.hint')),
-        h('p', { className: 'dsh-memory-muted' }, vault === '' ? t('library.noVault') : t('library.vault', { path: vault })),
-        h('div', { className: 'dsh-memory-settings-buttons' },
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('export'), disabled: busy }, t('library.syncExport')),
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onSync('import'), disabled: busy }, t('library.syncImport')),
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => syncNotes('export'), disabled: syncing }, t('library.syncKnowledgeExport')),
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => syncNotes('import'), disabled: syncing }, t('library.syncKnowledgeImport'))),
-        syncError === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, syncError),
         notice === '' ? null : h('p', { className: 'dsh-memory-library-notice', role: 'status' }, notice),
         loading
           ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('library.loading'))
@@ -2299,7 +2298,8 @@ window.__ModuleLoader__.load({
                   h('strong', null, note.title),
                   note.topic === null ? null : h('span', { className: 'dsh-memory-tag' }, note.topic),
                   h('span', { className: 'dsh-memory-library-edit' }, t('library.edit'))),
-                h('span', { className: 'dsh-memory-muted' }, note.file))))),
+                h('span', { className: 'dsh-memory-muted' }, t('library.scope.' + (note.scope ?? 'unbound')),
+                  note.scope === 'project' && note.projectKey ? ' · ' + note.projectKey : ''))))),
         modal)
     }
 
@@ -2405,6 +2405,25 @@ window.__ModuleLoader__.load({
       return { removed: before.slice(start, endBefore + 1), added: after.slice(start, endAfter + 1) }
     }
 
+    function HealthStatus({ health, t }) {
+      if (!health) return null
+      const download = () => {
+        const blob = new Blob([JSON.stringify(health, null, 2)], { type: 'application/json' })
+        const url = URL.createObjectURL(blob), anchor = document.createElement('a')
+        anchor.href = url; anchor.download = 'dsh-memory-diagnostics.json'; anchor.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+      }
+      return h('section', { className: 'dsh-memory-settings' },
+        h('h3', { className: 'dsh-memory-settings-title' }, t('health.title') + ' · ' + t('health.' + health.status)),
+        h('p', { className: 'dsh-memory-muted' }, health.isolation === 'unavailable' ? null : t('health.' + health.isolation)),
+        health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.memories', health.counts)),
+        health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.jobs', health.counts)),
+        health.counts?.corruptLines ? h('p', { className: 'dsh-memory-error-text' }, t('health.corrupt', { count: health.counts.corruptLines })) : null,
+        health.issues.map(code => h('p', { key: code, className: 'dsh-memory-error-text', role: 'status' }, t('health.' + code))),
+        h('div', { className: 'dsh-memory-settings-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', onClick: download }, t('health.download'))),
+        h('p', { className: 'dsh-memory-muted' }, t('health.hint')))
+    }
+
     function MemoryPanel(props) {
       const { t, store } = props
       const locale = props.locale
@@ -2419,17 +2438,10 @@ window.__ModuleLoader__.load({
       const [query, setQuery] = React.useState('')
       const [page, setPage] = React.useState(0)
       const [pageSize, setPageSize] = React.useState(10)
-      const [view, setView] = React.useState('memory')
-      const [graph, setGraph] = React.useState(null)
-      const [graphLoading, setGraphLoading] = React.useState(false)
-      const [graphError, setGraphError] = React.useState('')
-      const [graphRequest,setGraphRequest]=React.useState({query:'',topic:null,offset:0,focus:null})
-      const [graphRefresh, setGraphRefresh] = React.useState(0)
-      const [promotingNode, setPromotingNode] = React.useState(false)
+      const [view, setView] = React.useState('activity')
       const [library, setLibrary] = React.useState(null)
       const [libraryLoading, setLibraryLoading] = React.useState(false)
       const [libraryError, setLibraryError] = React.useState('')
-      const [libraryBusy, setLibraryBusy] = React.useState(false)
       const [libraryRefresh, setLibraryRefresh] = React.useState(0)
       const [data, setData] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
@@ -2486,6 +2498,7 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const stats = await call('stats', { scope })
+          if (stats?.health?.status === 'unavailable') { setData({ stats, list: null, activity: null, profile: null }); return }
           const activity = await call('activity', { scope, days: 371 })
           const profile = await call('profile', { limit: 10 })
           const projectKey = scope === 'project' && typeof stats?.currentProjectKey === 'string'
@@ -2514,6 +2527,17 @@ window.__ModuleLoader__.load({
       }, [load])
 
       React.useEffect(() => {
+        if (view !== 'activity' || !call) return undefined
+        let cancelled = false
+        const refresh = () => call('stats', { scope }).then(stats => {
+          if (!cancelled) setData(previous => previous ? { ...previous, stats } : previous)
+        }).catch(failure => { if (!cancelled) setError(messageOf(failure)) })
+        void refresh()
+        const timer = setInterval(refresh, 5000)
+        return () => { cancelled = true; clearInterval(timer) }
+      }, [view, call, scope])
+
+      React.useEffect(() => {
         if (view !== 'library' || call === null) return undefined
         let cancelled = false
         setLibraryLoading(true)
@@ -2525,18 +2549,7 @@ window.__ModuleLoader__.load({
         return () => { cancelled = true }
       }, [view, call, libraryRefresh])
 
-      React.useEffect(() => {
-        if (view !== 'knowledge' || call === null) return undefined
-        let cancelled = false
-        const timer=setTimeout(()=>{
-          setGraphLoading(true);setGraphError('')
-          call('knowledgeGraph', { scope, limit:100, ...graphRequest })
-            .then((next) => { if (!cancelled) setGraph(next) })
-            .catch((failure) => { if (!cancelled) setGraphError(messageOf(failure)) })
-            .finally(() => { if (!cancelled) setGraphLoading(false) })
-        },200)
-        return () => { cancelled = true;clearTimeout(timer) }
-      }, [view, call, scope, graphRefresh, graphRequest])
+
 
       React.useEffect(() => {
         const listed = data === null ? null : data.list
@@ -2740,66 +2753,49 @@ window.__ModuleLoader__.load({
       const showMissingProject = !filtering && scope === 'project' && currentProjectKey === null &&
         stats !== null && stats.total > 0
 
-      const promoteNode = async (node) => {
-        if (call === null || promotingNode) return
-        const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
-        setPromotingNode(true)
-        setError('')
-        try {
-          const result = await call('knowledgePromote', { id: node.id, scope, projectKey })
-          setNotice(t('knowledge.promoted', { path: String(result.path ?? '') }))
-          setGraphRefresh((value) => value + 1)
-        } catch (failure) {
-          setError(t('knowledge.promoteFailed', { reason: messageOf(failure) }))
-        } finally {
-          setPromotingNode(false)
-        }
+      const sections = [
+        { key: 'activity', views: ['activity'] },
+        { key: 'memory', views: ['memory', 'profile'] },
+        { key: 'brief', views: ['brief'] },
+        { key: 'knowledge', views: ['library'] },
+        { key: 'settings', views: ['capture', 'retention', 'data', 'obsidian'] },
+      ]
+      const section = sections.find(item => item.views.includes(view)) ?? sections[0]
+      const navButtons = (items, label, secondary = false) => h('nav', {
+        className: secondary ? 'dsh-memory-subnav' : 'dsh-memory-view-tabs', 'aria-label': label,
+      }, items.map(item => h('button', {
+        key: item.value, type: 'button', className: 'dsh-memory-view-tab',
+        'aria-current': item.active ? 'page' : undefined,
+        'data-active': item.active ? 'true' : 'false',
+        onClick: () => setView(item.value),
+      }, item.label)))
+      const viewTabs = h('div', { className: 'dsh-memory-navigation' },
+        navButtons(sections.map(item => ({ value: item.views[0], label: t('section.' + item.key), active: item.key === section.key })), t('nav.sections')),
+        section.views.length > 1 ? navButtons(section.views.map(value => ({ value, label: t('view.' + value), active: view === value })), t('section.' + section.key), true) : null)
+
+      if (stats?.health?.status === 'unavailable') return h('div', { className: 'dsh-memory-root' }, header, h(HealthStatus, { health: stats.health, t }))
+
+      if (view === 'brief') {
+        return h('div', { className: 'dsh-memory-root' }, header, viewTabs,
+          error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
+          h(ProjectBrief, { call, t, locale, initialProject: stats?.currentProjectKey, projectKeys: stats?.projectKeys ?? [] }))
       }
 
-      const syncKnowledge = async (direction) => {
-        if (call === null || libraryBusy) return
-        const vaultPath = stats === null || typeof stats.obsidianVaultPath !== 'string' ? '' : stats.obsidianVaultPath
-        const folder = stats === null || typeof stats.obsidianFolder !== 'string' ? 'DSH Memory' : stats.obsidianFolder
-        setLibraryBusy(true)
-        setError('')
-        try {
-          if (direction === 'export') {
-            const result = await call('obsidianExport', { vaultPath, folder })
-            setNotice(t('obsidian.exported', { written: String(result.written ?? 0), skipped: String(result.skipped ?? 0) }))
-          } else {
-            const result = await call('obsidianImport', { vaultPath, folder, dryRun: false })
-            setNotice(t('obsidian.imported', {
-              imported: String(result.imported ?? 0),
-              updated: String(result.updated ?? 0),
-              skipped: String(result.skipped ?? 0),
-            }))
-          }
-          setLibraryRefresh((value) => value + 1)
-        } catch (failure) {
-          setError(messageOf(failure))
-        } finally {
-          setLibraryBusy(false)
-        }
-      }
-
-      const viewTabs = h('div', { className: 'dsh-memory-view-tabs', role: 'tablist' },
-        ['memory', 'profile', 'knowledge', 'library', 'capture', 'retention', 'data', 'obsidian'].map((value) => h('button', {
-          key: value,
-          type: 'button',
-          role: 'tab',
-          'aria-selected': view === value,
-          'data-active': view === value ? 'true' : 'false',
-          className: 'dsh-memory-view-tab',
-          onClick: () => setView(value),
-        }, t('view.' + value))))
-
-      if (view === 'knowledge') {
-        return h('div', { className: 'dsh-memory-root' },
-          header,
-          viewTabs,
-          notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
-          error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
-          h(KnowledgeView, { graph, loading: graphLoading, error: graphError, t, onPromote: promoteNode, promoting: promotingNode, request:graphRequest,onRequest:setGraphRequest }))
+      if (view === 'activity') {
+        return h('div', { className: 'dsh-memory-root' }, header, viewTabs,
+          error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
+          h('section', { className: 'dsh-memory-hero-cards' },
+            h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
+            h('div', { className: 'dsh-memory-hero-side' }, h(HeroInsights, { activity: data?.activity, stats, t, locale }))),
+          h(HealthStatus, { health: stats?.health, t }),
+          h(ActivityHeatmap, { activity: data?.activity, stats, t, locale }),
+          stats?.semantic ? h('section', { className: 'dsh-memory-recall-report' },
+            h('h3', { className: 'dsh-memory-settings-title' }, t('recall.semantic')),
+            h('p', { role: 'status' }, t('recall.semantic.' + stats.semantic.state)),
+            stats.semantic.total ? h('p', { className: 'dsh-memory-muted' }, t('recall.semanticProgress', { indexed: String(stats.semantic.indexed), total: String(stats.semantic.total) })) : null,
+            stats.semantic.error ? h('p', { className: 'dsh-memory-error-text' }, stats.semantic.error) : null) : null,
+          h(RecallReport, { report: stats?.lastRecall, t, locale, call, onSaved: load }),
+          h(SettingsCard, { stats, call, t, locale, onSaved: load, group: 'activity' }))
       }
 
       if (view === 'profile') {
@@ -2823,11 +2819,9 @@ window.__ModuleLoader__.load({
             error: libraryError,
             t,
             call,
-            onSync: syncKnowledge,
-            busy: libraryBusy,
+            projectKeys: stats?.projectKeys ?? (stats?.currentProjectKey ? [stats.currentProjectKey] : []),
             onChanged: () => {
               setLibraryRefresh((value) => value + 1)
-              setGraphRefresh((value) => value + 1)
             },
           }))
       }
@@ -2838,7 +2832,7 @@ window.__ModuleLoader__.load({
           viewTabs,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
-          h(SettingsCard, { stats, call, t, onSaved: load, group: view }))
+          h(SettingsCard, { stats, call, t, locale, onSaved: load, group: view }))
       }
 
       const suggestionItems = topicSuggestions !== null && Array.isArray(topicSuggestions.suggestions) ? topicSuggestions.suggestions : []
@@ -2910,10 +2904,6 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsh-memory-root' },
         header,
         viewTabs,
-        h('section', { className: 'dsh-memory-hero-cards' },
-          h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
-          h('div', { className: 'dsh-memory-hero-side' }, h(HeroInsights, { activity: data === null ? null : data.activity, stats, t, locale }))),
-        h(ActivityHeatmap, { activity: data === null ? null : data.activity, stats, t, locale }),
         h('div', { className: 'dsh-memory-toolbar', ref: setToolbarNode, 'data-narrow': toolbarNarrow ? 'true' : 'false' },
           h(Field, { label: t('filter.scope') },
             h('select', {
@@ -2939,18 +2929,6 @@ window.__ModuleLoader__.load({
             },
             h('option', { value: '' }, t('filter.status.all')),
             STATUSES.map((value) => h('option', { key: value, value }, t('status.' + value))))),
-          h(Field, { label: t('filter.kind') },
-            h('select', {
-              className: 'dsh-memory-select',
-              value: kind,
-              onChange: (event) => {
-                setKind(event.target.value)
-                setPage(0)
-              },
-              'aria-label': t('filter.kind'),
-            },
-            h('option', { value: '' }, t('filter.kind.all')),
-            KINDS.map((value) => h('option', { key: value, value }, t('kind.' + value))))),
           h(Field, { label: t('filter.search'), grow: true },
             h('input', {
               className: 'dsh-memory-input',
