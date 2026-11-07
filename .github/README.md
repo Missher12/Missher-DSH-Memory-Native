@@ -2,6 +2,8 @@
 
 <h1>DSH Memory · 本地长期记忆</h1>
 
+<p><img src="../docs/images/overview.svg" alt="Memory Native 功能示意" width="100%"></p>
+
 <p>把值得记住的内容留在本地，在需要时带回对话。</p>
 
 <p>
@@ -14,6 +16,10 @@
 </div>
 
 ---
+
+<!-- current-source -->
+当前开发源码：**1.3.8-native.20261107.0** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。安装包以实际 Release 为准。
+<!-- /current-source -->
 
 ## 功能一览
 
