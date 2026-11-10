@@ -89,5 +89,7 @@
   "pager.next": "下一页",
   "profile.title": "用户偏好",
   "profile.summary": "共 {count} 条",
-  "profile.evidence": "{count} 条证据"
+  "profile.evidence": "{count} 条证据",
+  "library.hint": "保存完整的 Markdown 笔记，可编辑并与 Obsidian 同步；每篇笔记可选择用于哪些对话。",
+  "obsidian.readingHint": "在同步目录打开「阅读/首页」，按项目和主题阅读并跳转原文。自动整理区下方可保留自己的补充。"
 }

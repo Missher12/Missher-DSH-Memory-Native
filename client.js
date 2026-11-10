@@ -134,10 +134,10 @@ window.__ModuleLoader__.load({
         'view.data': "Backup & transfer",
         'view.obsidian': "Obsidian sync",
         'library.title': "Notes",
-        'library.hint': "Saved knowledge with its sources and recall scope.",
+        'library.hint': "Long-form Markdown notes, editable here and synced with Obsidian. Choose where each note can be recalled.",
         'library.empty': "No notes yet. Sync notes from Obsidian in Settings to get started.",
-        'library.loading': 'Loading knowledge notes…',
-        'library.failed': 'Knowledge base failed: {reason}',
+        'library.loading': 'Loading notes…',
+        'library.failed': 'Could not load notes: {reason}',
         'library.total': '{count} notes',
         'library.vault': 'Vault: {path}',
         'library.noVault': "Configure Obsidian sync in Settings.",
@@ -145,7 +145,7 @@ window.__ModuleLoader__.load({
         'library.syncExport': 'Sync to Obsidian',
         'library.syncImport': 'Import from Obsidian',
         'library.edit': 'Edit',
-        'library.editorTitle': 'Knowledge note',
+        'library.editorTitle': 'Edit note',
         'library.titleField': 'Title',
         'library.topicField': 'Topic',
         'library.tagsField': 'Tags',
@@ -185,6 +185,7 @@ window.__ModuleLoader__.load({
         'settings.group.obsidian': 'Obsidian',
         "obsidian.auto": "Automatic two-way sync",
         "obsidian.autoHint": "Syncs while DSH is running, about every 5 seconds after the previous pass. Save settings first. Conflicts keep both copies in _conflicts; replaced files are retained in _history.",
+        'obsidian.readingHint': 'Open 阅读/首页 in the sync folder for project and topic pages, with links to complete source notes. Personal additions below the generated section are kept.',
         "obsidian.now": "Sync now",
         "obsidian.syncStatus": "Last sync: {time} · sent {sent} · received {received} · conflicts {conflicts}",
         "obsidian.notYet": "Not synced yet",
@@ -316,7 +317,6 @@ window.__ModuleLoader__.load({
         'error.missingProject': 'No current project is known yet.',
         'section.memory': "Memories",
         'section.brief': "Project brief",
-        'section.knowledge': "Knowledge",
         "health.title": "Storage health",
         "health.ok": "Available",
         "health.attention": "Needs attention",
@@ -464,7 +464,7 @@ window.__ModuleLoader__.load({
         'view.data': "备份与迁移",
         'view.obsidian': "Obsidian 同步",
         'library.title': "笔记",
-        'library.hint': "保存长期知识，查看出处并选择用于哪些对话。",
+        'library.hint': "保存完整的 Markdown 笔记，可编辑并与 Obsidian 同步；每篇笔记可选择用于哪些对话。",
         'library.empty': "还没有笔记。可到设置中同步 Obsidian 笔记。",
         'library.loading': '\u6b63\u5728\u52a0\u8f7d\u77e5\u8bc6\u7b14\u8bb0\u2026',
         'library.failed': '\u77e5\u8bc6\u5e93\u52a0\u8f7d\u5931\u8d25\uff1a{reason}',
@@ -475,7 +475,7 @@ window.__ModuleLoader__.load({
         'library.syncExport': '\u540c\u6b65\u5230 Obsidian',
         'library.syncImport': '\u4ece Obsidian \u5bfc\u5165',
         'library.edit': '编辑',
-        'library.editorTitle': '知识笔记',
+        'library.editorTitle': '编辑笔记',
         'library.titleField': '标题',
         'library.topicField': '主题',
         'library.tagsField': '标签',
@@ -488,8 +488,8 @@ window.__ModuleLoader__.load({
         'library.openFailed': '打开笔记失败：{reason}',
         'library.conflict': '文件已被外部修改。请先重新加载，否则保存会覆盖外部改动。',
         'library.reload': '重新加载',
-        'library.syncKnowledgeExport': '同步知识到 Obsidian',
-        'library.syncKnowledgeImport': '从 Obsidian 导入知识',
+        'library.syncKnowledgeExport': '同步笔记到 Obsidian',
+        'library.syncKnowledgeImport': '从 Obsidian 导入笔记',
         'library.exportResult': '已导出 {written} 条 · 跳过 {skipped} 条。',
         'library.importResult': '已导入 {imported} 条 · 跳过 {skipped} 条 · 冲突 {conflicts} 条。',
         'library.syncFailed': '同步失败：{reason}',
@@ -514,6 +514,7 @@ window.__ModuleLoader__.load({
         'settings.group.obsidian': 'Obsidian',
         "obsidian.auto": "自动双向同步",
         "obsidian.autoHint": "DSH 运行期间，上一轮结束后约每 5 秒同步一次。请先保存设置。冲突双方保留在 _conflicts，替换过的文件保留在 _history。",
+        'obsidian.readingHint': '在同步目录打开「阅读/首页」，按项目和主题阅读并跳转原文。自动整理区下方可保留自己的补充。',
         "obsidian.now": "立即同步",
         "obsidian.syncStatus": "最近同步：{time} · 导出 {sent} · 导入 {received} · 冲突 {conflicts}",
         "obsidian.notYet": "尚未同步",
@@ -667,7 +668,6 @@ window.__ModuleLoader__.load({
         'error.missingProject': '\u5c1a\u672a\u8bc6\u522b\u5f53\u524d\u9879\u76ee\u3002',
         'section.memory': "记忆",
         'section.brief': "项目档案",
-        'section.knowledge': "知识",
         'section.activity': "活动",
         'section.settings': "设置",
         'nav.sections': "记忆导航",
@@ -1037,6 +1037,15 @@ window.__ModuleLoader__.load({
       '.dsh-memory-danger-actions{display:flex;justify-content:flex-end;flex-basis:100%;margin-top:8px;padding-top:8px;border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-button[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}',
       '.dsh-memory-button[data-danger="true"]:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}',
+      'button.dsh-memory-select{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:0;max-width:100%;cursor:pointer;line-height:normal}',
+      '.dsh-memory-select-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dsh-memory-select-arrow{position:absolute;right:9px;width:12px;height:12px;pointer-events:none}',
+      '.dsh-memory-select:disabled{opacity:.5;cursor:default}',
+      '.dsh-memory-select-menu{position:fixed;inset:auto;margin:0;box-sizing:border-box;padding:4px;border:1px solid var(--dsw-alias-border-l3,var(--dsw-alias-border-l1));border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);box-shadow:0 4px 16px #0002;font:inherit;font-size:13px;line-height:1.45;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}',
+      '.dsh-memory-select-option{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:4px;overflow-wrap:anywhere;cursor:pointer}',
+      '.dsh-memory-select-option[data-active="true"]{background:var(--dsw-alias-bg-layer-2, color-mix(in srgb,currentColor 8%,transparent))}',
+      '.dsh-memory-select-option[aria-disabled="true"]{opacity:.5;cursor:default}',
+      '.dsh-memory-select-mark{width:12px;flex:none}',
     ].join('\n')
 
     function messageOf(error) {
@@ -1199,6 +1208,127 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsh-memory-stat' },
         h('span', { className: 'dsh-memory-stat-label' }, props.label),
         h('strong', { className: 'dsh-memory-stat-value' }, props.value))
+    }
+
+    // Keep the menu in the browser top layer so scrolling containers cannot clip
+    // it. Unlike an OS select popup, its bounds stay inside the settings dialog.
+    function Select(props) {
+      const { children, value, onChange, ...buttonProps } = props
+      const options = React.Children.toArray(children).filter(React.isValidElement).map(child => ({
+        value: String(child.props.value), label: child.props.children, disabled: child.props.disabled === true,
+      }))
+      const selected = options.findIndex(option => option.value === String(value))
+      const [open, setOpen] = React.useState(false)
+      const [active, setActive] = React.useState(selected)
+      const buttonRef = React.useRef(null)
+      const menuRef = React.useRef(null)
+      const typeahead = React.useRef({ text: '', at: 0 })
+      const id = React.useId()
+      const enabled = options.map((option, index) => option.disabled ? -1 : index).filter(index => index >= 0)
+
+      const choose = index => {
+        const option = options[index]
+        if (!option || option.disabled) return
+        setOpen(false)
+        if (option.value !== String(value)) onChange?.({ target: { value: option.value } })
+      }
+      const show = () => {
+        setActive(enabled.includes(selected) ? selected : enabled[0] ?? -1)
+        setOpen(true)
+      }
+
+      React.useLayoutEffect(() => {
+        if (!open) return undefined
+        const button = buttonRef.current, menu = menuRef.current
+        const position = () => {
+          const anchor = button.getBoundingClientRect()
+          const dialog = button.closest('[role="dialog"],dialog')?.getBoundingClientRect()
+          const viewport = window.visualViewport
+          const x = viewport?.offsetLeft ?? 0, y = viewport?.offsetTop ?? 0
+          const left = Math.max(x, dialog?.left ?? x) + 8
+          const right = Math.min(x + (viewport?.width ?? innerWidth), dialog?.right ?? innerWidth) - 8
+          const top = Math.max(y, dialog?.top ?? y) + 8
+          const bottom = Math.min(y + (viewport?.height ?? innerHeight), dialog?.bottom ?? innerHeight) - 8
+          if (anchor.bottom < top || anchor.top > bottom || right <= left) { setOpen(false); return }
+          const below = Math.max(0, bottom - anchor.bottom - 4), above = Math.max(0, anchor.top - top - 4)
+          const upward = below < Math.min(240, menu.scrollHeight) && above > below
+          const width = Math.min(Math.max(anchor.width, 220), right - left)
+          Object.assign(menu.style, {
+            width: width + 'px', maxHeight: Math.min(260, upward ? above : below) + 'px',
+            left: Math.max(left, Math.min(anchor.left, right - width)) + 'px',
+          })
+          menu.style.top = (upward ? anchor.top - menu.getBoundingClientRect().height - 4 : anchor.bottom + 4) + 'px'
+        }
+        menu.showPopover()
+        position()
+        const outside = event => {
+          if (!button.contains(event.target) && !menu.contains(event.target)) setOpen(false)
+        }
+        const scroll = event => { if (!menu.contains(event.target)) position() }
+        document.addEventListener('pointerdown', outside, true)
+        document.addEventListener('scroll', scroll, true)
+        window.addEventListener('resize', position)
+        window.visualViewport?.addEventListener('resize', position)
+        window.visualViewport?.addEventListener('scroll', position)
+        return () => {
+          if (menu.matches(':popover-open')) menu.hidePopover()
+          document.removeEventListener('pointerdown', outside, true)
+          document.removeEventListener('scroll', scroll, true)
+          window.removeEventListener('resize', position)
+          window.visualViewport?.removeEventListener('resize', position)
+          window.visualViewport?.removeEventListener('scroll', position)
+        }
+      }, [open])
+
+      React.useLayoutEffect(() => {
+        if (!open) return
+        const menu = menuRef.current, option = menu.children[active]
+        if (!option) return
+        if (option.offsetTop < menu.scrollTop) menu.scrollTop = option.offsetTop
+        else if (option.offsetTop + option.offsetHeight > menu.scrollTop + menu.clientHeight) {
+          menu.scrollTop = option.offsetTop + option.offsetHeight - menu.clientHeight
+        }
+      }, [open, active])
+
+      const keyDown = event => {
+        const key = event.key
+        if (key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); return }
+        if (key === 'Tab') { setOpen(false); return }
+        if (key === 'Enter' || key === ' ') {
+          event.preventDefault()
+          if (open) choose(active); else show()
+        } else if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'PageUp'].includes(key)) {
+          event.preventDefault()
+          const current = enabled.indexOf(open ? active : selected)
+          const offset = key === 'PageDown' ? 10 : key === 'PageUp' ? -10 : key === 'ArrowUp' ? -1 : 1
+          const next = key === 'Home' ? 0 : key === 'End' ? enabled.length - 1 : Math.max(0, Math.min(enabled.length - 1, current + offset))
+          setActive(enabled[next] ?? -1)
+          setOpen(true)
+        } else if (key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          const now = Date.now(), previous = typeahead.current
+          const text = (now - previous.at < 700 ? previous.text : '') + key.toLocaleLowerCase()
+          typeahead.current = { text, at: now }
+          const match = enabled.find(index => String(options[index].label).toLocaleLowerCase().startsWith(text))
+          if (match !== undefined) { event.preventDefault(); setActive(match); setOpen(true) }
+        }
+      }
+      return h(React.Fragment, null,
+        h('button', { ...buttonProps, ref: buttonRef, type: 'button', role: 'combobox',
+          'aria-expanded': open, 'aria-haspopup': 'listbox', 'aria-controls': id,
+          'aria-activedescendant': open && active >= 0 ? id + '-' + active : undefined,
+          title: buttonProps.title ?? String(options[selected]?.label ?? ''),
+          onClick: () => open ? setOpen(false) : show(), onKeyDown: keyDown, onBlur: () => setOpen(false),
+        }, h('span', { className: 'dsh-memory-select-value' }, options[selected]?.label ?? ''),
+        h('svg', { className: 'dsh-memory-select-arrow', viewBox: '0 0 12 12', 'aria-hidden': true },
+          h('path', { d: 'm3 4.5 3 3 3-3', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3 }))),
+        h('div', { ref: menuRef, id, className: 'dsh-memory-select-menu', popover: 'manual', role: 'listbox',
+          'aria-label': buttonProps['aria-label'], onMouseDown: event => event.preventDefault(),
+          onClick: event => event.preventDefault(),
+        }, options.map((option, index) => h('div', {
+          key: option.value, id: id + '-' + index, role: 'option', className: 'dsh-memory-select-option',
+          'aria-selected': index === selected, 'aria-disabled': option.disabled || undefined, 'data-active': index === active,
+          onPointerMove: () => { if (!option.disabled) setActive(index) }, onClick: () => choose(index),
+        }, h('span', { className: 'dsh-memory-select-mark', 'aria-hidden': true }, index === selected ? '✓' : ''), option.label))))
     }
 
     function Field(props) {
@@ -1642,7 +1772,7 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'dsh-memory-brief' },
         h('div', { className: 'dsh-memory-brief-tools' },
           h('label', { className: 'dsh-memory-brief-project' }, t('brief.project'),
-            h('select', { className: 'dsh-memory-select', value: project, title: project, onChange: event => { setProject(event.target.value); setOffset(0) } },
+            h(Select, { className: 'dsh-memory-select', value: project, title: project, 'aria-label': t('brief.project'), onChange: event => { setProject(event.target.value); setOffset(0) } },
               !project ? h('option', { value: '' }, t('brief.choose')) : null,
               options.map(key => h('option', { key, value: key }, key)))),
           h('button', { type: 'button', className: 'dsh-memory-button', disabled: loading || !project, onClick: () => setRefresh(value => value + 1) }, t('actions.refresh'))),
@@ -2081,6 +2211,7 @@ window.__ModuleLoader__.load({
               : h('div', { className: 'dsh-memory-settings-group' },
                 switchRow(t('obsidian.auto'), obsidianAuto, setObsidianAuto),
                 h('p', { className:'dsh-memory-muted' }, t('obsidian.autoHint')),
+                h('p', { className:'dsh-memory-muted' }, t('obsidian.readingHint')),
                 textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
                 textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
                 h(ObsidianSyncStatus, {call,t,disabled:busy||dirty}),
@@ -2226,11 +2357,11 @@ window.__ModuleLoader__.load({
               onChange: (event) => setDraft({ ...draft, tags: event.target.value }),
             })),
           h(Field, { label: t('library.recallScope') },
-            h('select', { className: 'dsh-memory-select', value: draft.scope, 'aria-label': t('library.recallScope'),
+            h(Select, { className: 'dsh-memory-select', value: draft.scope, 'aria-label': t('library.recallScope'),
               onChange: event => setDraft({ ...draft, scope: event.target.value, projectKey: event.target.value === 'project' ? draft.projectKey : '' }) },
               ['unbound','project','global'].map(scope => h('option', { key: scope, value: scope }, t('library.scope.' + scope))))),
           draft.scope === 'project' ? h(Field, { label: t('brief.project') },
-            h('select', { className: 'dsh-memory-select', value: draft.projectKey, 'aria-label': t('brief.project'),
+            h(Select, { className: 'dsh-memory-select', value: draft.projectKey, 'aria-label': t('brief.project'),
               onChange: event => setDraft({ ...draft, projectKey: event.target.value }) },
               h('option', { value: '' }, t('brief.choose')),
               [...new Set([...projectKeys, ...(draft.projectKey ? [draft.projectKey] : [])])].map(key => h('option', { key, value: key }, key)))) : null,
@@ -2365,9 +2496,10 @@ window.__ModuleLoader__.load({
               placeholder: t('edit.tagsHint'),
             })),
           h(Field, { label: t('edit.status') },
-            h('select', {
+            h(Select, {
               className: 'dsh-memory-select',
               value: status,
+              'aria-label': t('edit.status'),
               onChange: (event) => setStatus(event.target.value),
             }, EDITABLE_STATUSES.map((value) => h('option', { key: value, value }, t('status.' + value))))),
           h('label', { className: 'dsh-memory-check' },
@@ -2755,9 +2887,8 @@ window.__ModuleLoader__.load({
 
       const sections = [
         { key: 'activity', views: ['activity'] },
-        { key: 'memory', views: ['memory', 'profile'] },
+        { key: 'memory', views: ['memory', 'library', 'profile'] },
         { key: 'brief', views: ['brief'] },
-        { key: 'knowledge', views: ['library'] },
         { key: 'settings', views: ['capture', 'retention', 'data', 'obsidian'] },
       ]
       const section = sections.find(item => item.views.includes(view)) ?? sections[0]
@@ -2906,7 +3037,7 @@ window.__ModuleLoader__.load({
         viewTabs,
         h('div', { className: 'dsh-memory-toolbar', ref: setToolbarNode, 'data-narrow': toolbarNarrow ? 'true' : 'false' },
           h(Field, { label: t('filter.scope') },
-            h('select', {
+            h(Select, {
               className: 'dsh-memory-select',
               value: scope,
               onChange: (event) => {
@@ -2918,7 +3049,7 @@ window.__ModuleLoader__.load({
             h('option', { value: 'project' }, t('filter.scope.project')),
             h('option', { value: 'global' }, t('filter.scope.global')))),
           h(Field, { label: t('filter.status') },
-            h('select', {
+            h(Select, {
               className: 'dsh-memory-select',
               value: status,
               onChange: (event) => {
@@ -2986,7 +3117,7 @@ window.__ModuleLoader__.load({
               },
             }, t('kind.' + value), h('span', { className: 'dsh-memory-kind-count' }, String(kindCounts[value] ?? 0))))),
           h('div', { className: 'dsh-memory-list-tools' },
-            h('select', {
+            h(Select, {
               className: 'dsh-memory-select dsh-memory-topic-select',
               value: topic,
               onChange: (event) => {
@@ -3144,7 +3275,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-memory-pager-actions' },
             h('label', { className: 'dsh-memory-page-size' },
               h('span', null, t('pager.perPageLabel')),
-              h('select', {
+              h(Select, {
                 className: 'dsh-memory-select dsh-memory-page-select',
                 value: String(pageSize),
                 onChange: (event) => {
