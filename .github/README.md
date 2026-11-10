@@ -2,7 +2,7 @@
 
 <h1>DSH Memory · 本地长期记忆</h1>
 
-<p><img src="../docs/images/overview.svg" alt="Memory Native 功能示意" width="100%"></p>
+<p><img src="../docs/images/cover-v2.png" alt="Memory Native · 长期记忆（品牌插画）" width="100%"></p>
 
 <p>把值得记住的内容留在本地，在需要时带回对话。</p>
 
