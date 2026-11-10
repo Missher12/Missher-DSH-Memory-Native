@@ -101,13 +101,27 @@ export class SourcePassageIndex {
     return cached
   }
   validate(hit, projectKey) {
-    const record = hit?.record ?? hit, ref = record?.sourceRefs?.[0]
-    if (record?.scope !== 'project' || record.projectKey !== projectKey || record.kind !== 'source' ||
-        !ref || !Number.isSafeInteger(ref.from) || !Number.isSafeInteger(ref.to) || ref.from < 0 || ref.to <= ref.from) return false
-    const source = authorized(this.#root, ref.sourceId, projectKey)
-    return Boolean(source && record.id === `source:${source.id}:${ref.from}:${ref.to}` &&
-      record.sourceHash === hash(source.text) && ref.to <= source.text.length &&
-      source.text.slice(ref.from, ref.to) === record.content && record.contentHash === hash(record.content))
+    return this.validateMany([hit], projectKey).length === 1
+  }
+  validateMany(hits, projectKey) {
+    const sources = new Map(), valid = []
+    for (const hit of Array.isArray(hits) ? hits : []) {
+      const record = hit?.record ?? hit, ref = record?.sourceRefs?.[0]
+      if (record?.scope !== 'project' || record.projectKey !== projectKey || record.kind !== 'source' ||
+          !ref || !Number.isSafeInteger(ref.from) || !Number.isSafeInteger(ref.to) || ref.from < 0 || ref.to <= ref.from) continue
+      if (!sources.has(ref.sourceId)) {
+        const source = authorized(this.#root, ref.sourceId, projectKey)
+        sources.set(ref.sourceId, source ? { source, hash: hash(source.text) } : null)
+      }
+      const verified = sources.get(ref.sourceId)
+      if (!verified) continue
+      const { source, hash: sourceHash } = verified
+      if (record.id !== `source:${source.id}:${ref.from}:${ref.to}` || record.sourceHash !== sourceHash ||
+          ref.to > source.text.length || source.text.slice(ref.from, ref.to) !== record.content ||
+          record.contentHash !== hash(record.content)) continue
+      valid.push(hit)
+    }
+    return valid
   }
   candidates(projectKey) {
     const cached = this.#refresh(projectKey)
@@ -117,8 +131,9 @@ export class SourcePassageIndex {
   }
   search(query, { projectKey, now = Date.now(), limit = 40 } = {}) {
     const cached = this.#refresh(projectKey)
-    return cached ? cached.index.search(query, { projectKey, scopes: ['project'], statuses: ['active'], now, limit })
-      .filter(hit => this.validate(hit, projectKey)) : []
+    return cached ? this.validateMany(cached.index.search(query, {
+      projectKey, scopes: ['project'], statuses: ['active'], now, limit,
+    }), projectKey) : []
   }
 }
 

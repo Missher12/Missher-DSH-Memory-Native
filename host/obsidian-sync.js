@@ -21,8 +21,7 @@ async function names(path) {
   try { return (await readdir(path, { withFileTypes: true })).filter(e => e.isFile() && e.name.endsWith('.md') && !e.name.startsWith('_')).map(e => e.name).sort() }
   catch (e) { if (e.code === 'ENOENT') return []; throw e }
 }
-function memoryInput(text) {
-  const parsed = parseMemoryNote(text)
+function memoryInput(text, parsed = parseMemoryNote(text)) {
   if (parsed?.data.dsh_memory !== true) throw new Error('不是 DSH 记忆笔记')
   const d = parsed.data
   if (typeof d.id !== 'string' || !/^mem_[A-Za-z0-9]+$/u.test(d.id) || !MEMORY_KINDS.includes(d.kind)) throw new Error('记忆 id 或类型无效')
@@ -141,7 +140,7 @@ export class ObsidianSync {
       try {
         const text = await this.cachedText(join(dir, file)), parsed = parseMemoryNote(text)
         if (parsed?.data.dsh_memory !== true) continue
-        const input = memoryInput(text), key = `memory:${input.id}`
+        const input = memoryInput(text, parsed), key = `memory:${input.id}`
         if (seen.has(key)) { blocked.add(key); throw new Error('多个笔记使用相同记忆 id') }
         seen.add(key)
         const record = records.get(input.id)
@@ -174,7 +173,7 @@ export class ObsidianSync {
         if (pair.kind === 'memory') {
           lv = left === null ? null : this.memory(pair.record).value
           if (right !== null) {
-            const input = memoryInput(right)
+            const input = pair.diskText === right && pair.input ? pair.input : memoryInput(right)
             if (input.id !== pair.id) throw new Error('笔记 id 已变化')
             pair.input = input; rv = semantic(input)
           }

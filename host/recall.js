@@ -271,18 +271,53 @@ function isQualifiedValueClause(hit, query, clause) {
 }
 
 /** Keep decomposed recall results tied to the entity named in that part. */
+function joinedChineseEntity(entityTerms) {
+  if (entityTerms.length === 1 && /^[\p{Script=Han}]{4,}$/u.test(entityTerms[0])) return entityTerms[0]
+  if (entityTerms.length < 2 || !entityTerms.every(term => /^[\p{Script=Han}]{2}$/u.test(term))) return null
+  for (let index = 0; index + 1 < entityTerms.length; index += 1) {
+    if (entityTerms[index][1] !== entityTerms[index + 1][0]) return null
+  }
+  return entityTerms[0][0] + entityTerms.map(term => term[1]).join('')
+}
+
+function hasGrammaticalObjectBoundary(content, entity) {
+  const match = entity.match(/^([\p{Script=Han}]{2,}?)(路由器|快照|设备|服务|任务|组件|系统|作业|主机|模块|数据库|缓存|日志|队列|容器|集群|接口|账号)$/u)
+  if (!match) return false
+  const phrase = `${match[1]}的${match[2]}`
+  const modifiers = /(?:当前|现有|这个|本次|本|该)$/u
+  const separators = /[\s\p{P}]/u
+  for (let offset = 0; ; ) {
+    const found = content.indexOf(phrase, offset)
+    if (found < 0) return false
+    const before = content.slice(0, found), preceding = [...before].at(-1)
+    if (!preceding || separators.test(preceding)) return true
+    const modifier = modifiers.exec(before)
+    if (modifier) {
+      const beforeModifier = [...before.slice(0, -modifier[0].length)].at(-1)
+      if (!beforeModifier || separators.test(beforeModifier)) return true
+    }
+    offset = found + phrase.length
+  }
+}
+
 export function matchesRecallEntity(hit, entityTerms) {
   if (!Array.isArray(entityTerms) || entityTerms.length === 0) return false
   const content = String(hit?.record?.content ?? '').toLowerCase()
   const terms = new Set(tokenize(content))
-  if (entityTerms.every(term => terms.has(term) || content.includes(term.toLowerCase()))) return true
+  const directlyMatches = term => terms.has(term) || content.includes(term.toLowerCase())
+  if (entityTerms.every(directlyMatches)) return true
+  // A single known object boundary can be written with 的: “方案快照” and
+  // “方案的快照”. Reconstruct only contiguous Han anchors and require the
+  // named object suffix; the rest of the phrase must match exactly.
+  const joinedEntity = joinedChineseEntity(entityTerms)
+  if (joinedEntity && hasGrammaticalObjectBoundary(content, joinedEntity)) return true
   // A project header may qualify a bare object: “青岩项目确认变更：快照…”.
   // Stay within the clause and reject another named object/project in between.
   // These aliases are only for matching; injected evidence remains verbatim.
   const aliases = [...content.matchAll(PROJECT_OBJECT_REFERENCE_PATTERN)]
     .filter(([, , header]) => !/(?:项目|工程)/u.test(header) && !EXPLICIT_OBJECT_PATTERN.test(header))
     .map(([, project, , object]) => `${project}${object}`)
-  return aliases.length > 0 && entityTerms.every(term => terms.has(term) || content.includes(term.toLowerCase()) ||
+  return aliases.length > 0 && entityTerms.every(term => directlyMatches(term) ||
     aliases.some(alias => alias.includes(term.toLowerCase())))
 }
 
@@ -393,7 +428,7 @@ function entityResidueForPart(part) {
     .replace(/(?:发布|部署|迁移|启动|运行|上线)[前后]/gu, ' ')
     // Separate grammatical particles before bigram tokenization: "日志各"
     // must not create an object anchor "志各", nor "列的" from "队列的".
-    .replace(/(?:分别|各自|到底|究竟|目前|具体|每日|每天|用了|用的|在哪里|哪里|叫什么|改用|各|的)/gu, ' ')
+    .replace(/(?:分别|各自|到底|究竟|目前|具体|每日|每天|用了|用的|在哪里|哪里|叫什么|改用|各|该负责人|该人员|该人|此人|这个人|前者|上述人员|何人|哪位|哪个人|什么人|是谁|的)/gu, ' ')
     .replace(/(?:工作)?线程(?:数|数量)?/gu, ' ')
     .replace(/(?:保留(?:期限|时间|时长|多久|多少天|几天)?|留存(?:期限|多久)?|保存(?:多久)?|保多久|留多久|多久|几点|什么时[候刻])/gu, ' ')
     .replace(/(?:最终|最后|哪款|哪个|哪些|哪种|什么|为何|为什么|怎么|如何|多少|几种|产品|工具|方式|办法|采用|选用|使用|改成|改为)/gu, ' ')
@@ -421,6 +456,135 @@ export function recallAnchorTerms(part) {
     terms.add(match[0].toLowerCase())
   }
   return [...terms]
+}
+
+const PERSON_QUESTION_PATTERN = /(?:谁|哪位|何人|who\b|whom\b)/iu
+const PERSON_REFERENCE_PATTERN = /(?:该负责人|该人员|该人|此人|这个人|这位负责人|前者|上述人员|负责人|responsible person|the owner|the lead|he\b|she\b|they\b|(?:^|[，,、\s])(?:他|她|其)(?=.{0,10}(?:请假|病假|休假|离岗|缺席|leave|vacation|absence)))/iu
+const PLAN_SELECTION_QUESTION_PATTERN = /(?:哪个|什么).{0,8}(?:方案|计划|策略)|(?:which|what)\s+(?:plan|scheme)|(?:采用|选用|选择|决定|选定).{0,14}(?:方案|计划|策略)/iu
+const RELATION_CUES = [
+  /(?:请假|病假|休假|离岗|缺席|leave|vacation|absence)/giu,
+  /(?:代班|替班|顶班|代岗|替岗|接手|接替|接管|handoff|take over|cover|substitut\w*)/giu,
+]
+const RELATION_CUE_ALTERNATIVES = [
+  ['请假', '病假', '休假', '离岗', '缺席', 'leave', 'vacation', 'absence'],
+  ['代班', '替班', '顶班', '代岗', '替岗', '接手', '接替', '接管', 'handoff', 'take over', 'cover', 'substitute'],
+]
+const RELATION_EVENT_PATTERN = /(?:请假|病假|休假|离岗|缺席|leave|vacation|absence)/iu
+const ROLE_PATTERN = /(?:负责人|责任人|维护者|管理员|项目经理|维护|管理|负责|owner|lead|manager|maintainer|responsible)/iu
+
+function relationTermsForPart(part) {
+  const text = String(part ?? '')
+  return [...new Set(RELATION_CUES.flatMap(pattern => [...text.matchAll(pattern)].map(match => match[0].toLowerCase())))]
+}
+
+function relationCueGroupsForPart(part) {
+  const text = String(part ?? '').toLowerCase()
+  return RELATION_CUE_ALTERNATIVES.filter(group => group.some(term => text.includes(term)))
+}
+
+function relationRoleSeedQuery(part) {
+  const text = String(part ?? '')
+  const event = RELATION_EVENT_PATTERN.exec(text)
+  if (!event || !ROLE_PATTERN.test(text.slice(0, event.index))) return ''
+  const prefix = text.slice(0, event.index).trim()
+  const role = prefix.match(/(?:维护负责人|值班负责人|负责人|责任人|维护者|管理员|项目经理|owner|lead|manager|维护|管理|负责)/iu)?.[0]
+  const subjectPrefix = (role ? prefix.replace(role, ' ') : prefix).replace(/(?:^|[，,、]\s*)(?:他|她|其)\s*$/u, ' ')
+  const subject = entityResidueForPart(subjectPrefix)
+  return [subject, role].filter(Boolean).join(' ').trim()
+}
+
+/** Extract a person only when the evidence states a role-to-person relation. */
+export function recallRelationAnswer(query, content) {
+  const subjectTerms = recallSubjectTerms(query)
+  const clauses = String(content ?? '').split(/[;；。！？!?\n]+/u).map(value => value.trim()).filter(Boolean)
+  const values = new Set()
+  const ownerEntity = String.raw`([\p{Script=Han}]{2,4}(?=\s*(?:$|[,，。！？!?；;]|负责|担任|兼任|作为|现任|目前))|[A-Z][A-Za-z0-9_.-]*(?:\s+[A-Z][A-Za-z0-9_.-]*)?(?=\s*(?:$|[,，。！？!?；;])))`
+  const assignedEntity = String.raw`([\p{Script=Han}]{2,4}?|[A-Z][A-Za-z0-9_.-]*(?:\s+[A-Z][A-Za-z0-9_.-]*)?)`
+  const patterns = [
+    new RegExp(String.raw`(?:负责人|责任人|维护者|管理员|owner|lead|manager)\s*(?:是|为|叫|[:：]|\bis\b)\s*${ownerEntity}`, 'iu'),
+    new RegExp(String.raw`(?:由|by)\s*${assignedEntity}\s*(?:负责|维护|管理|承担|担任|接手|执行|处理|值班|maintain(?:s|ed)?|manage(?:s|d)?|own(?:s|ed)?|lead(?:s|ing)?|handle(?:s|d)?)`, 'iu'),
+  ]
+  for (const clause of clauses) {
+    const matched = subjectTerms.filter(term => clause.toLowerCase().includes(term.toLowerCase())).length
+    if (subjectTerms.length > 0 && matched / subjectTerms.length < 0.6) continue
+    for (const pattern of patterns) {
+      const match = pattern.exec(clause)
+      if (!match?.[1]) continue
+      const prefix = clause.slice(0, match.index)
+      if (/(?:不|未|并非|不是|并未|没有|从不|not|never|no)\s*$/iu.test(prefix) ||
+          /(?:如果|若|只有|仅在|只要|除非|条件是|\bif\b|\bonly if\b|\bunless\b)/iu.test(clause)) continue
+      values.add(match[1].trim())
+    }
+  }
+  return values.size === 1 ? [...values][0] : null
+}
+
+/** Extract a uniquely and affirmatively selected, named plan as a relation bridge. */
+export function recallDecisionAnswer(query, content) {
+  const subjectTerms = recallSubjectTerms(query)
+  const clauses = String(content ?? '').split(/[;；。！？!?\n]+/u).map(value => value.trim()).filter(Boolean)
+  const values = new Set()
+  const plan = String.raw`([\p{Script=Han}]{1,8}(?:方案|计划|策略)|[A-Z][A-Za-z0-9_.-]*(?:\s+(?:方案|计划|策略|plan|scheme))?)`
+  const selected = new RegExp(String.raw`(?:最终(?:采用|选用|选择)|最后(?:采用|选用|选择)|决定(?:采用|选用|选择)|决定|采用|选用|选择|选定|定为)\s*${plan}`, 'iu')
+  for (const clause of clauses) {
+    const matched = subjectTerms.filter(term => clause.toLowerCase().includes(term.toLowerCase())).length
+    if (subjectTerms.length > 0 && matched / subjectTerms.length < 0.6) continue
+    const match = selected.exec(clause)
+    if (!match?.[1]) continue
+    const prefix = clause.slice(0, match.index)
+    if (/(?:不|未|并非|不是|并未|没有|并没有|不再|never|not)\s*$/iu.test(prefix) ||
+        /(?:考虑|拟|可能|也许|或许|建议|倾向于|计划|打算|暂定|提议|预计|准备|希望|proposed?|consider(?:ing)?|may|might|possibly|recommend(?:ed|s)?)\s*$/iu.test(prefix) ||
+        /(?:如果|若|只有|仅在|只要|除非|条件是|\bif\b|\bonly if\b|\bunless\b)/iu.test(clause)) continue
+    values.add(match[1].trim())
+  }
+  return values.size === 1 ? [...values][0] : null
+}
+
+/** Require an explicit causal statement tied to the same selected plan. */
+export function recallHasDecisionReasonEvidence(content, bridge) {
+  if (!bridge) return false
+  const escaped = String(bridge).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  const choice = String.raw`(?:选择|选用|采用|选定|决定(?:采用|选用|选择)?|选中)`
+  const negatedSelection = new RegExp(String.raw`(?:不|未|并未|没有|并没有|并非|不是|not|never)\s*(?:(?:最终|最后|仍)\s*)?(?:选择|选用|采用|选定|决定(?:采用|选用|选择)?|选中)\s*${escaped}`, 'iu')
+  const choiceBeforeReason = new RegExp(String.raw`${choice}\s*${escaped}[\s,，:：]*(?:是\s*)?(?:因为|由于|为了|原因是|原因在于|because|since|in order to)`, 'iu')
+  const contrastiveReason = new RegExp(String.raw`${choice}\s*${escaped}[\s,，:：]*(?:并非|不是|并不是)\s*因为[^。！？!?；;]{0,120}[，,]\s*而是因为`, 'iu')
+  const reasonBeforeChoice = new RegExp(String.raw`(?:因为|由于|为了|because|since|in order to)[^。！？!?；;]{0,120}(?:所以|因此|最终|最后)?[^。！？!?；;]{0,24}${choice}\s*${escaped}`, 'iu')
+  return String(content ?? '').split(/[;；。！？!?\n]+/u).some(clause => {
+    if (negatedSelection.test(clause)) return false
+    if (choiceBeforeReason.test(clause) || contrastiveReason.test(clause)) return true
+    const cause = /(?:因为|由于|为了|because|since|in order to)/iu.exec(clause)
+    const prefix = cause ? clause.slice(Math.max(0, cause.index - 8), cause.index) : ''
+    const causeIsNegated = /(?:并非|并不是|不是|不|非|not)\s*$/iu.test(prefix)
+    return !causeIsNegated && reasonBeforeChoice.test(clause)
+  })
+}
+
+/** Require an explicit assignment/takeover predicate linked to the absent owner. */
+export function recallHasHandoffEvidence(content, bridge) {
+  const action = String.raw`(?:代班|替班|顶班|代岗|替岗|接手|接替|接管|顶替|cover(?:s|ed|ing)?|take(?:s|n)? over|substitut\w*)`
+  const person = String.raw`(?:[\p{Script=Han}]{2,4}?|[A-Z][A-Za-z0-9_.-]*)`
+  const assignmentMarker = String.raw`(?:由|交由|交给|改由|安排|请|让|by)`
+  const assignment = new RegExp(String.raw`${assignmentMarker}\s*${person}\s*(?:(?:来|负责|将|临时|to)\s*)?${action}`, 'iu')
+  const negatedAssignment = new RegExp(String.raw`(?:不|未|并非|不是|并未|没有|从不|not|never|no)\s*(?:${assignmentMarker}\s*)?${person}\s*(?:(?:会|将|负责|来|临时|应该|应当|能|去|to)\s*)?${action}`, 'iu')
+  const clauses = String(content ?? '').split(/[;；。！？!?\n]+/u).map(value => value.trim()).filter(Boolean)
+  for (const clause of clauses) {
+    const lower = clause.toLowerCase()
+    const bridgeAt = lower.indexOf(String(bridge ?? '').toLowerCase())
+    if (!bridge || bridgeAt < 0) continue
+    if (negatedAssignment.test(clause) ||
+        /(?:不|未|并非|不是|并未|没有|从不|not|never|no)\s*(?:(?:会|将|负责|来|临时)\s*)?(?:代班|替班|顶班|代岗|替岗|接手|接替|接管|顶替|cover|take\s+over|substitut\w*)/iu.test(clause)) continue
+    const prefix = clause.slice(0, bridgeAt)
+    const startsOwner = bridgeAt === 0 ||
+      /(?:^|[，,、\s])(?:当时|当|如果|若|在|只有|仅在|仅当|只要|除非)?\s*$/iu.test(prefix) ||
+      /(?:负责人|责任人|维护者|管理员|项目经理|owner|lead|manager)(?:是|为|叫)?\s*$/iu.test(prefix)
+    if (!startsOwner) continue
+    const afterBridge = clause.slice(bridgeAt + String(bridge).length)
+    const event = /(?:请假|病假|休假|离岗|缺席|leave|vacation|absence)/iu.exec(afterBridge)
+    if (!event || !/^\s*(?:(?:本人|当前|目前|正在|已|因故|临时|本周|今天|在)\s*)*$/iu.test(afterBridge.slice(0, event.index))) continue
+    const match = assignment.exec(clause)
+    if (match && match.index >= bridgeAt + String(bridge).length + event.index + event[0].length) return true
+  }
+  return false
 }
 
 function recencyScore(record, now) {
@@ -499,6 +663,53 @@ export function recallQueryPlan(query, previousQuery, followUp) {
   if (followUp) {
     add(previous, 'fallback')
     add(current, 'fallback')
+  }
+  const slots = plan.filter(item => item.role === 'subquestion')
+  for (let index = 0; index < slots.length; index += 1) {
+    const item = slots[index]
+    if (item.detail === 'reason') {
+      const decisionSlot = slots.slice(0, index).reverse()
+        .find(previous => PLAN_SELECTION_QUESTION_PATTERN.test(previous.query))
+      if (decisionSlot) {
+        item.requiresRelationTrace = true
+        item.relationType = 'decision-reason'
+        item.relationSourceQuery = decisionSlot.query
+        item.entityTerms = []
+        continue
+      }
+    }
+    const relationTerms = relationTermsForPart(item.query)
+    if (relationTerms.length === 0) continue
+    let previousPersonQuestion
+    for (let prior = index - 1; prior >= 0; prior -= 1) {
+      if (PERSON_QUESTION_PATTERN.test(slots[prior].query)) {
+        previousPersonQuestion = slots[prior]
+        break
+      }
+    }
+    const refersToPriorPerson = PERSON_REFERENCE_PATTERN.test(item.query) ||
+      (previousPersonQuestion !== undefined && PERSON_QUESTION_PATTERN.test(item.query))
+    if (!refersToPriorPerson) continue
+    const seedQuery = relationRoleSeedQuery(item.query) || relationRoleSeedQuery(root)
+    if (!previousPersonQuestion && seedQuery === '') continue
+    item.requiresRelationTrace = true
+    item.relationTerms = relationTerms
+    item.relationCueGroups = relationCueGroupsForPart(item.query)
+    item.entityTerms = []
+    if (previousPersonQuestion) item.relationSourceQuery = previousPersonQuestion.query
+    if (seedQuery !== '') item.relationSeedQuery = seedQuery
+  }
+  if (slots.length === 0) {
+    const rootPlan = plan.find(item => item.role === 'root')
+    const relationTerms = relationTermsForPart(root)
+    const seedQuery = relationRoleSeedQuery(root)
+    if (rootPlan && relationTerms.length > 0 && seedQuery !== '') {
+      rootPlan.requiresRelationTrace = true
+      rootPlan.relationTerms = relationTerms
+      rootPlan.relationCueGroups = relationCueGroupsForPart(root)
+      rootPlan.relationSeedQuery = seedQuery
+      rootPlan.entityTerms = []
+    }
   }
   return plan
 }
@@ -598,6 +809,7 @@ export function compileMemoryContext(ranked, options = {}) {
   for (const item of (Array.isArray(ranked) ? ranked : [])) {
     if (ids.length >= maxItems) break
     const record = item.record
+    if (item.relationFromId && !ids.includes(item.relationFromId)) continue
     const recordKey = normalizeForDedupe(record.content)
     if (recordKey.length >= 6 && [...profileKeys].some((key) => key.startsWith(recordKey))) {
       profileIds.push(record.id)

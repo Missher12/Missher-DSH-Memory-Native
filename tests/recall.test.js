@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildRecord, nextRevision } from '../host/records.js'
-import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, formatMemoryLine, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallQueries, recallQueryPlan, recallTimeIntent } from '../host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, formatMemoryLine, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallQueries, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from '../host/recall.js'
 import { analyzeUserMessageControls } from '../host/user-controls.js'
 
 const NOW = 1_700_000_000_000
@@ -17,6 +17,81 @@ test('project-qualified bare objects match their name without accepting competin
   for (const content of ['红杉项目现在确认变更：快照保留 29 天。', '青岩项目的红杉快照保留 29 天。', '青岩项目。快照保留 29 天。', '青岩项目中红杉服务确认变更：快照保留 29 天。']) {
     assert.equal(matchesRecallEntity({ record: { content } }, entity), false, content)
   }
+})
+
+test('a grammatical 的 may bridge only one split Chinese entity bigram', () => {
+  const slots = recallQueryPlan('碧潮方案快照每天几点运行，保留多久？').filter(item => item.role === 'subquestion')
+  const matching = { record: { content: '碧潮方案的快照每天07:26运行，保留43天。' } }
+  assert.equal(slots.length, 2)
+  assert.ok(slots.every(slot => matchesRecallEntity(matching, slot.entityTerms)))
+  assert.equal(matchesRecallAttribute(matching, slots[0].query, slots[0].detail, slots[0].entityTerms), true)
+  assert.equal(matchesRecallAttribute(matching, slots[1].query, slots[1].detail, slots[1].entityTerms), true)
+  for (const content of [
+    '赤潮方案的快照每天07:26运行，保留43天。',
+    '碧潮计划的快照每天07:26运行，保留43天。',
+    '碧潮方案的日志每天07:26运行，保留43天。',
+    '碧潮的方案快照每天07:26运行，保留43天。',
+    '新碧潮方案的快照每天19:51运行，保留43天。',
+    '碧潮方案每天07:26运行；快照保留43天。',
+  ]) {
+    const hit = { record: { content } }
+    assert.equal(matchesRecallEntity(hit, slots[0].entityTerms), false, content)
+    assert.equal(matchesRecallAttribute(hit, slots[0].query, slots[0].detail, slots[0].entityTerms), false, content)
+  }
+  assert.equal(matchesRecallEntity(matching, ['碧潮方案快照']), true)
+  assert.equal(matchesRecallEntity({ record: { content: '赤潮方案的快照每天07:26运行，保留43天。' } }, ['碧潮方案快照']), false)
+  assert.equal(matchesRecallEntity({ record: { content: '新碧潮方案的快照每天19:51运行。' } }, recallAnchorTerms('碧潮方案快照每天几点运行')), false)
+  assert.equal(matchesRecallEntity({ record: { content: '当前碧潮方案的快照每天19:51运行。' } }, recallAnchorTerms('碧潮方案快照每天几点运行')), true)
+})
+
+test('relation bridges require an unconditional owner fact and accept explicit owner syntax', () => {
+  const query = '青岩项目的负责人是谁'
+  assert.equal(recallRelationAnswer(query, '青岩项目的负责人是林青。'), '林青')
+  assert.equal(recallRelationAnswer(query, '青岩项目的负责人是张晓明。'), '张晓明')
+  assert.equal(recallRelationAnswer(query, '青岩项目由陆珂负责维护。'), '陆珂')
+  assert.equal(recallRelationAnswer(query, '青岩项目的负责人不是林青。'), null)
+  assert.equal(recallRelationAnswer(query, '如果青岩项目负责人请假，则由林青临时代班。'), null)
+})
+
+test('decision-reason bridges require the same explicitly chosen scheme and causal wording', () => {
+  const query = '沐桥项目的备份方式最终采用哪个方案'
+  assert.equal(recallDecisionAnswer(query, '沐桥项目的备份方式最终采用星港方案。'), '星港方案')
+  assert.equal(recallDecisionAnswer(query, '沐桥项目的备份方式考虑采用星港方案。'), null)
+  assert.equal(recallDecisionAnswer(query, '沐桥项目的备份方式可能采用星港方案。'), null)
+  assert.equal(recallDecisionAnswer(query, '沐桥项目建议采用星港方案。'), null)
+  assert.equal(recallDecisionAnswer(query, '沐桥项目的备份方式并未采用星港方案。'), null)
+  assert.equal(recallHasDecisionReasonEvidence('选择星港方案，是因为它允许夜间限速传输。', '星港方案'), true)
+  assert.equal(recallHasDecisionReasonEvidence('选择云岚方案，是因为它允许夜间限速传输。', '星港方案'), false)
+  assert.equal(recallHasDecisionReasonEvidence('选择星港方案升级版，是因为它允许夜间限速传输。', '星港方案'), false)
+  assert.equal(recallHasDecisionReasonEvidence('选择星港方案，并非因为它允许夜间限速传输。', '星港方案'), false)
+  assert.equal(recallHasDecisionReasonEvidence('选择星港方案，不是因为省钱，而是因为允许夜间限速传输。', '星港方案'), true)
+  assert.equal(recallHasDecisionReasonEvidence('星港方案和夜间限速传输曾被同时讨论。', '星港方案'), false)
+  assert.equal(recallHasDecisionReasonEvidence('并未选择星港方案，因为它允许夜间限速传输。', '星港方案'), false)
+})
+
+test('handoff evidence requires a directed assignment, not shared relation words', () => {
+  assert.equal(recallHasHandoffEvidence('林青请假时，交付值班由周岚接手。', '林青'), true)
+  assert.equal(recallHasHandoffEvidence('许岚休假期间由夏知接手维护工作。', '许岚'), true)
+  assert.equal(recallHasHandoffEvidence('许岚和顾宁一起讨论过请假和代班手续。', '许岚'), false)
+  assert.equal(recallHasHandoffEvidence('林青请假时，周岚不负责接手。', '林青'), false)
+  assert.equal(recallHasHandoffEvidence('张晓明请假时，不是由顾宁代班。', '张晓明'), false)
+  assert.equal(recallHasHandoffEvidence('顾宁请假时，由许岚代班。', '许岚'), false)
+  assert.equal(recallHasHandoffEvidence('张晓明提到林青请假时由顾宁代班。', '张晓明'), false)
+})
+
+test('a relation target is omitted when its bridge does not fit the injection budget', () => {
+  const bridge = { record: { id: 'owner', kind: 'fact', content: `青岩项目的负责人是林青。${'长'.repeat(500)}` }, score: 1 }
+  const target = { record: { id: 'handoff', kind: 'fact', content: '林青请假时由周岚代班。' }, relationFromId: 'owner', score: 1 }
+  const minimumTargetBudget = estimateTokens(formatMemoryLine(target.record)) + 70
+  const block = compileMemoryContext([bridge, target], { maxTokens: minimumTargetBudget, maxItems: 2 })
+  assert.ok(block === null || !block.ids.includes('handoff'))
+})
+
+test('relation query cleanup keeps a prior owner seed local to the relation plan', () => {
+  const slots = recallQueryPlan('青岩项目的负责人是谁，他请假时谁接手？').filter(item => item.role === 'subquestion')
+  assert.equal(slots[1].requiresRelationTrace, true)
+  assert.equal(slots[1].relationSourceQuery, slots[0].query)
+  assert.equal(slots[1].relationSeedQuery, '青岩 负责人')
 })
 
 function make(overrides = {}) {
@@ -282,6 +357,16 @@ test('recall query cleaning strips leading directives but preserves the factual 
     assert.doesNotMatch(queries, /只根据|不调用工具/u)
   }
   assert.equal(analyzeUserMessageControls('不调用工具').retrievalQuery, '')
+})
+
+test('unknown-answer and no-save instructions stay outside recall questions', () => {
+  const prompt = '碧潮方案快照每天几点运行，保留多久？缺少依据就说不知道。不要保存或提炼这次问答。'
+  const controls = analyzeUserMessageControls(prompt)
+  assert.equal(controls.retrievalQuery, '碧潮方案快照每天几点运行，保留多久')
+  assert.equal(controls.noSaveDirective, true)
+  const slots = recallQueryPlan(prompt, undefined, false).filter(item => item.role === 'subquestion')
+  assert.equal(slots.length, 2)
+  assert.ok(slots.every(item => !/缺少依据|不知道|保存|提炼/u.test(item.query)))
 })
 
 test('qualified gray evidence is eligible only for value questions and retains a numeric limit', () => {

@@ -13,7 +13,7 @@ import { grantSourceRecall } from '../host/source-passages.js'
 async function setup(t, records = [], llm, testOptions) {
   const root = mkdtempSync(join(tmpdir(), 'memory-evidence-integration-'))
   const dataDir = join(root, 'data'), cwd = join(root, 'project'), key = projectIdentity(cwd).key
-  const store = new MemoryStore({ root: dataDir }).open(), handlers = {}, effects = []
+  const store = new MemoryStore({ root: dataDir }).open(), handlers = {}, effects = [], warnings = []
   for (const row of records) {
     assert.ok(store.write({ kind: 'fact', scope: 'project', projectKey: key, confidence: .95, ...row }).ok)
     if (row.status === 'superseded') store.update(row.id, { status: row.status }, [{ scope: 'project', projectKey: key }])
@@ -23,7 +23,7 @@ async function setup(t, records = [], llm, testOptions) {
   const webServer = { register(route) { onRoute(route); return () => {} } }
   apply({ get: name => name === 'webServer' ? webServer : name === 'llm' ? llm : undefined,
     on: (name, fn) => { handlers[name] = fn; return () => {} },
-    effect: factory => { effects.push(factory); return () => {} }, logger: { warn() {}, info() {} },
+    effect: factory => { effects.push(factory); return () => {} }, logger: { warn(...args) { warnings.push(args.join(' ')) }, info() {} },
   }, { dataDir, capture: { enabled: false }, maintenance: { enabled: false }, obsidian: { autoSync: false } }, testOptions)
   const route = await routeReady
   t.after(() => { for (const effect of effects) { try { effect()?.() } catch {} }; rmSync(root, { recursive: true, force: true }) })
@@ -43,7 +43,7 @@ async function setup(t, records = [], llm, testOptions) {
     }, async () => ({ kind: 'enter', messages }))
     return result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n')
   }
-  return { root, dataDir, key, panel, ask }
+  return { root, dataDir, key, panel, ask, warnings }
 }
 
 test('unextracted original evidence remains usable without another paid call, but is not reported as confirmed coverage', async t => {
@@ -72,6 +72,16 @@ test('a high vector score cannot inject unrelated global memories for a physical
     {id:'mem_unrelated_global',scope:'global',projectKey:null,kind:'fact',content:'用户今天要整理 Git 仓库。'}],undefined,{semantic:{enabled:true,engine}})
   assert.equal(await ask('雪松交接的备用物料盒放在哪里？'),'')
   assert.equal((await panel('stats',{scope:'global'})).lastRecall.candidates.length,0)
+})
+
+test('semantic fallback carries each attempt through candidate fusion without a provider call',async t=>{
+  const engine={state:'ready',modes:[],async embed(texts,mode){this.modes.push(mode);return texts.map(()=>[1,...Array(383).fill(0)])},dispose(){}}
+  const {ask,warnings}=await setup(t,[{id:'mem_semantic_fallback',content:'交接工具的登记名称是雨燕七号。'}],undefined,
+    {semantic:{enabled:true,engine}})
+  const answer=await ask('紫杉巡检的备用代号是什么？')
+  assert.ok(engine.modes.includes('query'),'the mock local query embedding reaches semantic recall')
+  assert.match(answer,/雨燕七号/u)
+  assert.ok(!warnings.some(message=>message.includes('query is not defined')),warnings.join('\n'))
 })
 
 test('a note imported through the activated panel is immediately recalled without a restart', async t => {
@@ -128,4 +138,62 @@ test('current and previous values retain the current change reason as a separate
   assert.match(result, /17 天/u); assert.match(result, /29 天/u)
   assert.match(result, /覆盖完整账期/u); assert.doesNotMatch(result, /节省磁盘容量/u)
   assert.doesNotMatch(result, /82 天|74 天/u)
+})
+
+test('recall follows an explicit person relation across two separate memories', async t => {
+  const { ask } = await setup(t, [
+    { id: 'mem_project_lead', content: '青岩项目的负责人是林青。' },
+    { id: 'mem_leave_handoff', content: '林青请假时，交付值班由周岚接手。' },
+    { id: 'mem_name_cooccurrence', content: '林青和周岚属于同一个值班组。' },
+  ])
+
+  const result = await ask('青岩项目的负责人是谁，他请假时谁接手？')
+
+  assert.match(result, /青岩项目的负责人是林青/u)
+  assert.match(result, /林青请假时，交付值班由周岚接手/u)
+  assert.doesNotMatch(result, /同一个值班组/u)
+})
+
+test('a role-based relation question joins its owner fact without exposing co-occurrence', async t => {
+  const positive = await setup(t, [
+    { id: 'mem_role_owner', content: '桐湾项目的值班负责人是许岚。' },
+    { id: 'mem_role_delegate', content: '许岚请假时，由顾宁代班。' },
+  ])
+  const result = await positive.ask('桐湾项目的负责人请假时谁代班？')
+  assert.match(result, /许岚/u)
+  assert.match(result, /顾宁/u)
+
+  const unrelated = await setup(t, [
+    { id: 'mem_role_owner', content: '桐湾项目的值班负责人是许岚。' },
+    { id: 'mem_role_cooccurrence', content: '许岚和顾宁一起讨论过请假手续。' },
+  ])
+  assert.equal(await unrelated.ask('桐湾项目的负责人请假时谁代班？'), '')
+})
+
+test('a chosen plan connects only to its separately recorded causal reason', async t => {
+  const project = await setup(t, [
+    { id: 'mem_backup_decision', kind: 'decision', content: '沐桥项目的备份方式最终采用星港方案。' },
+    { id: 'mem_backup_reason', content: '选择星港方案，是因为它允许夜间限速传输。' },
+    { id: 'mem_wrong_plan_reason', content: '选择云岚方案，是因为它允许夜间限速传输。' },
+    { id: 'mem_cooccurring_reason', content: '星港方案和夜间限速传输曾被同时讨论。' },
+    { id: 'mem_foreign_reason', projectKey: projectIdentity('/foreign-project').key,
+      content: '选择星港方案，是因为另一个项目需要审计留痕。' },
+  ])
+  const query = '沐桥项目的备份方式最终采用哪个方案，为什么选这个方案？'
+  const answer = await project.ask(query)
+  assert.match(answer, /星港方案/u)
+  assert.match(answer, /允许夜间限速传输/u)
+  assert.doesNotMatch(answer, /云岚方案|同时被讨论|另一个项目/u)
+
+  await project.panel('removeMemory', { id: 'mem_backup_decision', scope: 'project', projectKey: project.key })
+  assert.doesNotMatch(await project.ask(query), /允许夜间限速传输/u)
+})
+
+test('a denied plan cannot establish a decision-reason bridge', async t => {
+  const { ask } = await setup(t, [
+    { id: 'mem_denied_backup', kind: 'decision', content: '沐桥项目的备份方式并未采用星港方案。' },
+    { id: 'mem_denied_reason', content: '选择星港方案，是因为它允许夜间限速传输。' },
+  ])
+  const answer = await ask('沐桥项目的备份方式最终采用哪个方案，为什么选这个方案？')
+  assert.doesNotMatch(answer, /允许夜间限速传输/u)
 })

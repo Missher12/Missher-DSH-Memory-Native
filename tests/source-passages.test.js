@@ -21,6 +21,14 @@ test('complete long source has exact overlapping ranges including its end, acros
   assert.ok(grantSourceRecall(root,source,projectKey))
   const index=new SourcePassageIndex(root), records=index.candidates(projectKey)
   assert.ok(records.length>20)
+  const validated=index.validateMany?.(records,projectKey) ?? []
+  assert.equal(validated.length,records.length,'batch validation keeps every currently granted passage')
+  assert.deepEqual(validated.map(hit=>hit.record.id),records.map(hit=>hit.record.id))
+  const tampered={...records[0],record:{...records[0].record,sourceHash:'forged'}}
+  assert.equal(tampered.record.id,records[0].record.id,'the tampered copy keeps the authorized record id')
+  const validatedPair=index.validateMany([records[0],tampered],projectKey)
+  assert.deepEqual(validatedPair,[records[0]])
+  assert.strictEqual(validatedPair[0],records[0],'batch validation preserves the authorized hit identity')
   const covered=new Uint8Array(source.text.length)
   for(const {record} of records){const ref=record.sourceRefs[0];assert.equal(record.content,source.text.slice(ref.from,ref.to));covered.fill(1,ref.from,ref.to)}
   assert.ok(covered.every(Boolean),'no original range is silently truncated')
@@ -47,6 +55,7 @@ test('project/root boundaries and permanent forgetting invalidate cached and res
   assert.equal(index.validate(hit,other),false)
   assert.deepEqual(new SourcePassageIndex(join(root,'other-profile')).candidates(projectKey),[])
   blockSourceRecall(root,hit.record)
+  assert.deepEqual(index.validateMany?.([hit],projectKey) ?? [],[])
   assert.equal(index.validate(hit,projectKey),false)
   assert.deepEqual(index.search('琉璃交接',{projectKey}),[])
   assert.deepEqual(new SourcePassageIndex(root).candidates(projectKey),[])

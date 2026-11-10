@@ -7,7 +7,7 @@ import { MemoryStore } from '../host/store.js'
 import { MemoryIndex } from '../host/search.js'
 import { ObsidianSync } from '../host/obsidian-sync.js'
 import { promoteMemoryToKnowledge } from '../host/knowledge.js'
-import { buildReadingPages } from '../host/obsidian-reading.js'
+import { buildReadingPages, refreshReadingPages } from '../host/obsidian-reading.js'
 
 function setup(t) {
   const root = mkdtempSync(join(tmpdir(), 'memory-reading-')), vault = join(root, 'vault')
@@ -41,6 +41,92 @@ test('reading groups complete source text and decisions by topic, keeps project 
   for (const file of ['阅读/首页.md', ...pages.map(p => p.file.slice(c.dir.length + 1))]) {
     for (const [, target] of readFileSync(join(c.dir, file), 'utf8').matchAll(/\[\[([^|\]]+)\|/gu)) assert.ok(statSync(join(c.config.vaultPath, target + '.md')).isFile(), target)
   }
+})
+
+test('reading merges only formatting variants and explicit same-topic aliases, with redirects that preserve personal additions', async t => {
+  const c = setup(t)
+  const alias = c.write({ topic: 'CloudSync', content: 'CloudSync保留 30 天。' })
+  const canonical = c.write({ topic: '云同步', content: '云同步也称 CloudSync，由项目负责维护。' })
+  c.write({ topic: '备份 计划', content: '空格写法的备份计划。' })
+  c.write({ topic: '备份计划', content: '紧凑写法的备份计划。' })
+  c.write({ topic: '备份计划历史', content: '相似名称但不同主题。' })
+  c.write({ projectKey: 'project-beta', topic: '云同步', content: '另一项目的独立云同步。' })
+  await c.sync.run()
+
+  const pages = topicPages(c.dir)
+  const merged = pages.find(page => page.text.includes(alias.content) && page.text.includes(canonical.content))
+  assert.ok(merged, 'explicit alias should share the canonical topic page')
+  assert.match(merged.text, /## 主题归并/u)
+  assert.match(merged.text, /CloudSync/u)
+  assert.match(merged.text, /也称/u)
+  assert.ok(pages.some(page => page.text.includes('相似名称但不同主题。')))
+  assert.ok(pages.some(page => page.text.includes('另一项目的独立云同步。')))
+  assert.equal(pages.filter(page => page.text.includes('空格写法的备份计划。') || page.text.includes('紧凑写法的备份计划。')).length, 1)
+
+  const redirect = pages.find(page => page.file.includes('/CloudSync-') )
+  assert.ok(redirect, 'old topic path should remain as a redirect')
+  assert.match(redirect.text, /已归并/u)
+  assert.match(redirect.text, /\[\[[^|]+\|云同步\]\]/u)
+  const built = buildReadingPages({ records: c.store.listAll({ includeDeleted: true }), notes: [], files: new Map(), folder: c.config.folder })
+  assert.ok(built.sources.get(redirect.file.slice(c.dir.length + 1)).includes(canonical), 'redirect depends on the record that proves the alias')
+  for (const [, target] of redirect.text.matchAll(/\[\[([^|\]]+)\|/gu)) {
+    assert.ok(statSync(join(c.config.vaultPath, target + '.md')).isFile(), target)
+  }
+  writeFileSync(redirect.file, redirect.text + '\n我在旧主题页补充的内容仍要保留。\n')
+  c.store.update(alias.id, { content: 'CloudSync更新为 45 天。' }, [{ scope: 'project', projectKey: 'project-alpha' }])
+  assert.deepEqual((await c.sync.run()).errors, [])
+  const refreshedRedirect = readFileSync(redirect.file, 'utf8')
+  assert.match(refreshedRedirect, /已归并/u)
+  assert.match(refreshedRedirect, /我在旧主题页补充的内容仍要保留/u)
+  const refreshedCanonical = topicPages(c.dir).find(page => page.text.includes('更新为 45 天。'))
+  assert.ok(refreshedCanonical)
+  assert.doesNotMatch(refreshedCanonical.text, /保留 30 天/u)
+})
+
+test('a note linked to an inactive memory cannot prove that two current topics are aliases', t => {
+  const c = setup(t), original = c.write({ topic: '星港备份', content: '备份原话。' })
+  const other = { ...original, id: 'mem-other', topic: '星港快照', content: '快照原话。' }
+  const proof = { ...original, id: 'mem-proof', status: 'candidate', content: '待确认的别名来源。' }
+  const note = { scope: 'project', projectKey: 'project-alpha', topic: '星港备份', title: '别名线索', file: 'alias.md', memoryId: proof.id, content: '星港备份也称星港快照。' }
+  const { pages } = buildReadingPages({ records: [original, other, proof], notes: [note], files: new Map(), folder: 'DSH Memory' })
+  const topicBodies = [...pages].filter(([file]) => file.startsWith('阅读/主题/')).map(([, body]) => body)
+  assert.equal(topicBodies.some(body => body.includes(original.content) && body.includes(other.content)), false)
+})
+
+test('a redirect rechecks an alias proof stored under another topic before writing', async t => {
+  const c = setup(t); c.write({ topic: 'CloudSync', content: '独立的旧主题来源。' })
+  const proof = c.write({ topic: '云同步', content: '云同步也称 CloudSync。' })
+  assert.deepEqual((await c.sync.run()).errors, [])
+  const redirect = topicPages(c.dir).find(page => page.file.includes('/CloudSync-'))
+  assert.ok(redirect)
+
+  c.sync.readingSignature = null
+  const replace = c.sync.replace.bind(c.sync)
+  let removedProof = false, wroteRedirect = false
+  c.sync.replace = async (file, before, after, vaultDir) => {
+    const result = await replace(file, before, after, vaultDir)
+    if (!removedProof && file.includes('/阅读/主题/云同步-')) {
+      c.store.remove(proof.id, [{ scope: 'project', projectKey: 'project-alpha' }])
+      removedProof = true
+    }
+    if (file === redirect.file) wroteRedirect = true
+    return result
+  }
+  const result = { errors: [] }
+  await refreshReadingPages(c.sync, c.dir, c.config, result)
+  assert.equal(removedProof, true)
+  assert.equal(wroteRedirect, false)
+  assert.ok(result.errors.some(error => error.file === redirect.file.slice(c.dir.length + 1)))
+})
+
+test('unclassified entries stay unclassified instead of being inferred into a named theme', t => {
+  const c = setup(t), named = c.write({ content: '已有主题的原话。' }), uncategorized = { ...named, id: 'uncategorized', topic: '', content: '未分类内容。' }
+  const { pages } = buildReadingPages({ records: [named, uncategorized], notes: [], files: new Map(), folder: 'DSH Memory' })
+  const texts = [...pages.values()].join('\n')
+  assert.match(texts, /# 未分类/u)
+  assert.match(texts, /未分类内容。/u)
+  assert.match(texts, /# 备份/u)
+  assert.doesNotMatch(texts, /主题归并[\s\S]*?未分类内容/u)
 })
 
 test('renamed source files still resolve and unchanged sync does not rewrite reading pages or memory revisions', async t => {

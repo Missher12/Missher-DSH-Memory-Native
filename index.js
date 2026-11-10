@@ -23,7 +23,7 @@ import { resolveConfig } from './host/config.js'
 import { projectIdentity } from './host/paths.js'
 import { prepareStorage } from './host/storage-boundary.js'
 import { memoryHealth, storageIssue } from './host/health.js'
-import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, hasContentMatch, isEffectiveAt, isFollowUpQuery, isHistoricalQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallSubjectTerms, recallQueryPlan, recallTimeIntent } from './host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, hasContentMatch, isEffectiveAt, isFollowUpQuery, isHistoricalQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallSubjectTerms, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from './host/recall.js'
 import { analyzeUserMessageControls } from './host/user-controls.js'
 import { sourceResolver } from './host/source-recall.js'
 import { SourceCandidateIndex } from './host/source-index.js'
@@ -139,20 +139,27 @@ function matchesRecallTime(record, timeIntent, now = timeIntent.at) {
 }
 
 function recallCandidatePool({ attempts, index, knowledgeIndex, passageIndex, semanticLists = [], store, projectKey, timeIntents, now }) {
-  const allowed = hit => {
-    const record = hit.record
-    return timeIntents.some(time => isSafeRecallRecord(record, projectKey, time, now)) &&
-      (record.kind !== 'knowledge' || knowledgeIndex.validate(hit, projectKey, now)) &&
-      (record.kind !== 'source' || passageIndex.validate(hit, projectKey))
-  }
   const historical = timeIntents.some(time => time.kind !== 'current')
   const current = timeIntents.some(time => time.kind === 'current')
-  const lists = attempts.map((query, i) => {
+  const lanesByAttempt = attempts.map((query, i) => {
     const lanes = [index.search(query, { statuses: historical ? ['active', 'superseded'] : ['active'],
       includeExpired: historical, scopes: ['project', 'global'], projectKey, now, limit: 40 })]
     if (current) lanes.push(knowledgeIndex.search(query, { projectKey, now, limit: 40 }),
       passageIndex.search(query, { projectKey, now, limit: 40 }))
     lanes.push(semanticLists[i] ?? [])
+    return lanes
+  })
+  const validSourceHits = new Set(passageIndex.validateMany(
+    lanesByAttempt.flat(2).filter(hit => hit.record.kind === 'source'), projectKey,
+  ))
+  const allowed = hit => {
+    const record = hit.record
+    return timeIntents.some(time => isSafeRecallRecord(record, projectKey, time, now)) &&
+      (record.kind !== 'knowledge' || knowledgeIndex.validate(hit, projectKey, now)) &&
+      (record.kind !== 'source' || validSourceHits.has(hit))
+  }
+  const lists = lanesByAttempt.map((lanes, attemptIndex) => {
+    const query = attempts[attemptIndex]
     const fused = new Map()
     for (const lane of lanes) lane.forEach((hit, rank) => {
       if (!allowed(hit)) return
@@ -188,10 +195,30 @@ function slotEvidence(slot, hits, hasSubquestions) {
     if (hit.candidateSlots?.includes(slot.query)) return false
     if (slot.timeIntent && !matchesRecallTime(hit.record, slot.timeIntent)) return false
     if (!hasSubquestions && slot.coverageRequired === false) return true
-    if (hit.selectedSlots?.includes(slot.query)) return true
     const evidence = typeof hit.record.recallQuote === 'string'
       ? { ...hit, record: { ...hit.record, content: hit.record.recallQuote } }
       : hit
+    if (slot.requiresRelationTrace) {
+      if (!Array.isArray(slot.bridgeTerms) || slot.bridgeTerms.length === 0) return false
+      const clauses = String(evidence.record.content ?? '').split(/[;；。！？!?\n]+/u)
+      const connected = clauses.some(clause => {
+        const text = clause.toLowerCase()
+        if (slot.relationType === 'decision-reason') {
+          return slot.bridgeTerms.every(term => text.includes(term.toLowerCase())) &&
+            slot.bridgeTerms.every(term => recallHasDecisionReasonEvidence(clause, term))
+        }
+        const relationMatches = slot.relationCueGroups?.length
+          ? slot.relationCueGroups.every(group => group.some(term => text.includes(term)))
+          : slot.relationTerms.every(term => text.includes(term.toLowerCase()))
+        return slot.bridgeTerms.every(term => text.includes(term.toLowerCase())) && relationMatches &&
+          slot.bridgeTerms.every(term => recallHasHandoffEvidence(clause, term))
+      })
+      if (!connected) return false
+      if (hit.selectedSlots?.includes(slot.query)) return true
+      const anchors = recallAnchorTerms(slot.query)
+      return anchors.length === 0 || matchesRecallEntity(evidence, anchors)
+    }
+    if (hit.selectedSlots?.includes(slot.query)) return true
     const anchors = recallAnchorTerms(slot.query)
     const subjects = slot.role === 'subquestion' ? slot.entityTerms : recallSubjectTerms(slot.query)
     if (anchors.length === 0 && subjects.length > 0) {
@@ -203,8 +230,15 @@ function slotEvidence(slot, hits, hasSubquestions) {
   })
 }
 
+function sameRelationScope(left, right, projectKey) {
+  if (left?.scope !== right?.scope) return false
+  if (left.scope === 'global') return true
+  return left.scope === 'project' && left.projectKey === projectKey && right.projectKey === projectKey
+}
+
 function selectionFitsSlot(slot, candidate, quote) {
   const hit = { record: { ...candidate.record, content: quote } }
+  if (slot.requiresRelationTrace) return slotEvidence(slot, [hit], true).length > 0
   // A verified model selection can connect paraphrases without shared words.
   // Specific value/property questions retain their stricter entity/unit checks.
   if (candidate.semantic && !slot.detail && !/版本|多少|多久|数量|阈值|上限|下限|\bversion\b|how many|how much|limit|threshold/iu.test(slot.query)) return true
@@ -416,6 +450,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     const rootAcceptedById = new Map()
     const subquestionPrimaryIds = []
     const qualifiedValueIds = []
+    const relationSupportIds = []
     const grayById = new Map()
     let gateThresholds = null
     let readSupportingSource
@@ -456,7 +491,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       } else if (planItem.role === 'root' && isRecallQuestion(query)) {
         scoped = candidate.filter(hit => slotEvidence(planItem, [hit], false).length > 0)
       } else if (planItem.role === 'subquestion') {
-        scoped = candidate.filter((hit) => matchesRecallEntity(hit, planItem.entityTerms))
+        scoped = candidate.filter((hit) => planItem.requiresRelationTrace || matchesRecallEntity(hit, planItem.entityTerms))
         if (recallObserver !== null) traceRecall(recallObserver, {
           phase: 'scope', query: attempt, entityTerms: planItem.entityTerms,
           ids: scoped.map((hit) => hit.record.id), excludedIds: candidate.filter((hit) => !scoped.includes(hit)).map((hit) => hit.record.id),
@@ -547,23 +582,140 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         if (!grayById.has(hit.record.id)) grayById.set(hit.record.id, hit)
       }
     }
+    const relationSearch = (searchQuery, timeIntent) => {
+      const historical = timeIntent.kind !== 'current'
+      const found = index.search(searchQuery, {
+        statuses: historical ? ['active', 'superseded'] : ['active'],
+        includeExpired: historical,
+        scopes: ['project', 'global'], projectKey: identity.key, now, limit: 40,
+      })
+      if (timeIntent.kind === 'current') {
+        found.push(...knowledgeIndex.search(searchQuery, { projectKey: identity.key, now, limit: 40 }),
+          ...passageIndex.search(searchQuery, { projectKey: identity.key, now, limit: 40 }),
+          ...sourceIndex.search(searchQuery, { projectKey: identity.key, now, limit: 40 }))
+      }
+      const validSourceHits = new Set(passageIndex.validateMany(
+        found.filter(hit => hit.record.kind === 'source'), identity.key,
+      ))
+      const byId = new Map()
+      for (const hit of found) {
+        if (!isSafeRecallRecord(hit.record, identity.key, timeIntent, now)) continue
+        if (hit.record.kind === 'knowledge' && !knowledgeIndex.validate(hit, identity.key, now)) continue
+        if (hit.record.kind === 'source' && !validSourceHits.has(hit)) continue
+        const previous = byId.get(hit.record.id)
+        if (!previous || hit.score > previous.score) byId.set(hit.record.id, hit)
+      }
+      return [...byId.values()]
+    }
+    const groundRelationCandidate = (plan, hit) => {
+      if (!isSafeRecallRecord(hit.record, identity.key, plan.timeIntent, now)) return null
+      if (hit.record.kind === 'source') return passageIndex.validate(hit, identity.key) ? hit : null
+      if (hit.record.kind === 'knowledge') return knowledgeIndex.validate(hit, identity.key, now) ? hit : null
+      const scopes = hit.record.scope === 'global'
+        ? [{ scope: 'global', projectKey: null }]
+        : [{ scope: 'project', projectKey: identity.key }]
+      const current = store.find(hit.record.id, scopes)
+      if (!current || current.revision !== hit.record.revision || current.contentHash !== hit.record.contentHash ||
+          !isSafeRecallRecord(current, identity.key, plan.timeIntent, now)) return null
+      if (!Array.isArray(current.sourceRefs) || current.sourceRefs.length === 0) return hit
+      readSupportingSource ??= sourceResolver(root, store, identity.key, now)
+      const grounded = readSupportingSource(plan, [hit])
+      if (!grounded) return null
+      const quotes = sourceHits.get(current.id) ?? []
+      if (!quotes.some(other => other.record.content === grounded.record.content)) quotes.push(grounded)
+      sourceHits.set(current.id, quotes)
+      return grounded
+    }
+    for (const plan of slotPlans.filter(item => item.requiresRelationTrace)) {
+      const sourcePlan = slotPlans.find(item => item.query === plan.relationSourceQuery)
+      const seedPlan = sourcePlan ?? (plan.relationSeedQuery ? {
+        query: plan.relationSeedQuery,
+        role: 'root',
+        entityTerms: recallSubjectTerms(plan.relationSeedQuery),
+        timeIntent: plan.timeIntent,
+      } : null)
+      if (!seedPlan) continue
+      let seeds = sourcePlan ? slotEvidence(sourcePlan, [...hitsById.values()], hasSubquestions) : []
+      if (seeds.length === 0) seeds = relationSearch(seedPlan.query, seedPlan.timeIntent)
+      seeds = seeds.filter(hit => isSafeRecallRecord(hit.record, identity.key, seedPlan.timeIntent, now))
+      const byAnswer = new Map()
+      for (const seed of seeds) {
+        const grounded = groundRelationCandidate(seedPlan, seed)
+        if (!grounded || !sameRelationScope(grounded.record, seed.record, identity.key)) continue
+        const quote = grounded.record.recallQuote ?? grounded.record.content
+        const answer = plan.relationType === 'decision-reason'
+          ? recallDecisionAnswer(seedPlan.query, quote)
+          : recallRelationAnswer(seedPlan.query, quote)
+        if (answer === null) continue
+        const matches = byAnswer.get(answer) ?? []
+        matches.push(grounded)
+        byAnswer.set(answer, matches)
+      }
+      if (byAnswer.size !== 1) continue
+      const [bridge, matchingSeeds] = byAnswer.entries().next().value
+      plan.bridgeTerms = [bridge]
+      const support = matchingSeeds[0]
+      plan.relationSeedHit = support
+      plan.relationSeedPlan = seedPlan
+      plan.searchQuery = `${bridge} ${plan.query}`
+      const candidates = new Map([...hitsById.values()].map(hit => [hit.record.id, hit]))
+      for (const hit of relationSearch(plan.searchQuery, plan.timeIntent)) candidates.set(hit.record.id, hit)
+      const connected = []
+      for (const hit of candidates.values()) {
+        if (!sameRelationScope(support.record, hit.record, identity.key) ||
+            !isSafeRecallRecord(hit.record, identity.key, plan.timeIntent, now)) continue
+        const grounded = groundRelationCandidate(plan, hit)
+        if (!grounded || !slotEvidence(plan, [grounded], hasSubquestions).length) continue
+        connected.push(grounded)
+      }
+      if (connected.length === 0) continue
+      const addRelationSupport = targetId => {
+        if (targetId === support.record.id) return
+        const existing = hitsById.get(support.record.id) ?? support
+        const links = existing.relationSupportFor ?? []
+        const relationSupportFor = links.some(link => link.targetId === targetId)
+          ? links
+          : [...links, { targetId, timeIntent: seedPlan.timeIntent }]
+        hitsById.set(support.record.id, { ...existing, relationSupportFor })
+        if (!relationSupportIds.includes(support.record.id)) relationSupportIds.push(support.record.id)
+        if (hasSubquestions && !subquestionPrimaryIds.includes(support.record.id)) subquestionPrimaryIds.push(support.record.id)
+      }
+      if (!hitsById.has(support.record.id)) {
+        addRelationSupport(connected[0].record.id)
+      }
+      for (const hit of connected) {
+        addRelationSupport(hit.record.id)
+        const linked = hit.record.id === support.record.id ? hit : {
+          ...hit,
+          selectedSlots: [...new Set([...(hit.selectedSlots ?? []), plan.query])],
+          relationFromId: support.record.id,
+          relationFromRevision: support.record.revision,
+          relationFromTimeIntent: seedPlan.timeIntent,
+        }
+        hitsById.set(linked.record.id, linked)
+        if (hasSubquestions) {
+          if (!subquestionPrimaryIds.includes(linked.record.id)) subquestionPrimaryIds.push(linked.record.id)
+        } else rootAcceptedById.set(linked.record.id, linked)
+      }
+    }
     let coverage = slotPlans.map(plan => slotEvidence(plan, [...hitsById.values()], hasSubquestions))
     let missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
     let completionReceipt = null
     let candidatePool = []
     if (missingSlots.length > 0) {
+      const validPassages = passageIndex.validateMany(passageIndex.candidates(identity.key), identity.key)
       const semanticCorpus = [...store.list('project', identity.key), ...store.list('global', null),
         ...knowledgeIndex.candidates(identity.key, { now, limit: Number.MAX_SAFE_INTEGER }).map(hit => hit.record),
-        ...passageIndex.candidates(identity.key).filter(hit => passageIndex.validate(hit, identity.key)).map(hit => hit.record)]
+        ...validPassages.map(hit => hit.record)]
         .filter(record => !record.quoted && !looksSensitive(record.content))
       let semanticLists = []
       try {
-        semanticLists = await semanticIndex.search(missingSlots.slice(0, MAX_RECALL_LOOKUPS).map(entry => entry.plan.query),
+        semanticLists = await semanticIndex.search(missingSlots.slice(0, MAX_RECALL_LOOKUPS).map(entry => entry.plan.searchQuery ?? entry.plan.query),
           semanticCorpus, { projectKey: identity.key, signal: payload?.signal })
       } catch (error) { ctx.logger?.warn?.(`[dsh-memory] semantic lookup unavailable: ${error.message}`) }
       if (payload?.signal?.aborted) return withoutPrevious
       candidatePool = recallCandidatePool({
-        attempts: missingSlots.slice(0, MAX_RECALL_LOOKUPS).map(entry => entry.plan.query),
+        attempts: missingSlots.slice(0, MAX_RECALL_LOOKUPS).map(entry => entry.plan.searchQuery ?? entry.plan.query),
         index, knowledgeIndex, passageIndex, semanticLists, store, projectKey: identity.key,
         timeIntents: missingSlots.map(entry => entry.plan.timeIntent), now,
       })
@@ -574,7 +726,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         readSupportingSource ??= sourceResolver(root, store, identity.key, now)
         for (const entry of missingSlots.slice(0, MAX_RECALL_LOOKUPS)) {
           if (entry.plan.timeIntent.kind !== 'current') continue
-          const indexedCandidates = sourceIndex.search(entry.plan.query, {
+          const indexedCandidates = sourceIndex.search(entry.plan.searchQuery ?? entry.plan.query, {
             projectKey: identity.key, now, limit: 40,
           })
           const sourceCandidatesById = new Map()
@@ -641,11 +793,33 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
                 !isSafeRecallRecord(current, identity.key, selectionTime, now) || !current.content.includes(selection.quote)) continue
             selectedRecord = { ...current, recallQuote: quote }
           }
-          const quotes = quoteListById.get(selection.id) ?? []
-          if (!quotes.includes(quote)) quotes.push(quote)
-          quoteListById.set(selection.id, quotes)
+          if (!missingSlot.plan.requiresRelationTrace) {
+            const quotes = quoteListById.get(selection.id) ?? []
+            if (!quotes.includes(quote)) quotes.push(quote)
+            quoteListById.set(selection.id, quotes)
+          }
           const hit = { ...candidate, record: selectedRecord, score: Math.max(1, candidate.score ?? 0), matched: candidate.matched ?? [], termScores: candidate.termScores ?? [],
             selectedSlots: [...new Set([...(hitsById.get(selection.id)?.selectedSlots ?? []), missingSlot.plan.query])] }
+          if (missingSlot.plan.requiresRelationTrace) {
+            const relationHit = { ...hit, record: { ...hit.record } }
+            delete relationHit.record.recallQuote
+            delete relationHit.record.noteQuote
+            const grounded = groundRelationCandidate(missingSlot.plan, relationHit)
+            const seed = missingSlot.plan.relationSeedHit
+            if (!grounded || !seed || !sameRelationScope(seed.record, grounded.record, identity.key)) continue
+            hit.record = grounded.record
+            hit.relationFromId = seed.record.id
+            hit.relationFromRevision = seed.record.revision
+            hit.relationFromTimeIntent = missingSlot.plan.relationSeedPlan?.timeIntent
+            const existingSeed = hitsById.get(seed.record.id) ?? seed
+            const supportLinks = existingSeed.relationSupportFor ?? []
+            if (!supportLinks.some(link => link.targetId === hit.record.id)) {
+              hitsById.set(seed.record.id, { ...existingSeed, relationSupportFor: [...supportLinks,
+                { targetId: hit.record.id, timeIntent: hit.relationFromTimeIntent }] })
+              if (!relationSupportIds.includes(seed.record.id)) relationSupportIds.push(seed.record.id)
+              if (hasSubquestions && !subquestionPrimaryIds.includes(seed.record.id)) subquestionPrimaryIds.push(seed.record.id)
+            }
+          }
           hitsById.set(selection.id, hit)
           if (hasSubquestions) {
             if (!subquestionPrimaryIds.includes(selection.id)) subquestionPrimaryIds.push(selection.id)
@@ -666,16 +840,17 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       // A completed/unknown model selection is not overridden or sent again.
       if (completionReceipt?.callState === 'not-sent') {
         for (const { plan } of missingSlots.slice(0, MAX_RECALL_LOOKUPS)) {
+          const semanticQuery = plan.searchQuery ?? plan.query
           const directSource = hit => hit.record.kind === 'source' && slotEvidence(plan, [hit], hasSubquestions).length > 0
           const candidate = candidatePool.filter(hit => matchesRecallTime(hit.record, plan.timeIntent, now) &&
             (hit.record.kind !== 'preference' || isPreferenceQuery(plan.query)) &&
             // A vector alone cannot tie a global record to this project's
             // question when the model has not verified that association.
             (hit.record.scope === 'project' || isPreferenceQuery(plan.query) || slotEvidence(plan, [hit], hasSubquestions).length > 0) &&
-            (directSource(hit) || ((hit.semanticQueries?.[plan.query] ?? 0) >= .8 &&
+            (directSource(hit) || ((hit.semanticQueries?.[semanticQuery] ?? 0) >= .8 &&
               selectionFitsSlot(plan, hit, hit.record.recallContent ?? hit.record.content))))
-            .sort((a,b) => (directSource(b) ? 2 + b.score : b.semanticQueries[plan.query]) -
-              (directSource(a) ? 2 + a.score : a.semanticQueries[plan.query]))[0]
+            .sort((a,b) => (directSource(b) ? 2 + b.score : b.semanticQueries[semanticQuery]) -
+              (directSource(a) ? 2 + a.score : a.semanticQueries[semanticQuery]))[0]
           if (!candidate) continue
           const old = hitsById.get(candidate.record.id)
           const quote = originalCandidateQuote(candidate.record, plan)
@@ -724,6 +899,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     }
     updateLastRecall()
     const removeRecallHit = id => {
+      const dependents = [...hitsById.values()].filter(hit => hit.relationFromId === id).map(hit => hit.record.id)
       hitsById.delete(id)
       rootAcceptedById.delete(id)
       sourceHits.delete(id)
@@ -731,6 +907,13 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       if (primaryIndex >= 0) subquestionPrimaryIds.splice(primaryIndex, 1)
       const qualifiedIndex = qualifiedValueIds.indexOf(id)
       if (qualifiedIndex >= 0) qualifiedValueIds.splice(qualifiedIndex, 1)
+      for (const [otherId, hit] of hitsById) {
+        if (!hit.relationSupportFor?.some(link => link.targetId === id)) continue
+        const relationSupportFor = hit.relationSupportFor.filter(link => link.targetId !== id)
+        const { relationSupportFor: _removed, ...withoutLinks } = hit
+        hitsById.set(otherId, relationSupportFor.length ? { ...withoutLinks, relationSupportFor } : withoutLinks)
+      }
+      for (const dependent of dependents) removeRecallHit(dependent)
     }
     if (hitsById.size === 0) {
       if (grayById.size > 0) {
@@ -739,9 +922,12 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       if (recallObserver !== null) traceRecall(recallObserver, { phase: 'inject', status: 'no-accepted-evidence', ids: [], text: null })
       return withoutPrevious
     }
+    const validSourceHits = new Set(passageIndex.validateMany(
+      [...hitsById.values()].filter(hit => hit.record.kind === 'source'), identity.key,
+    ))
     for (const [id, hit] of hitsById) {
       if (hit.record.kind === 'source') {
-        if (!passageIndex.validate(hit, identity.key)) removeRecallHit(id)
+        if (!validSourceHits.has(hit)) removeRecallHit(id)
         continue
       }
       if (hit.record.kind === 'knowledge') {
@@ -755,9 +941,22 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       const current = store.find(id, scopes)
       const quotesValid = typeof hit.record.recallQuote !== 'string' || hit.record.recallQuote.split('；')
         .filter(Boolean).every(quote => current?.content.includes(quote))
+      const linkedRelationValid = hit.relationFromId === undefined || (() => {
+        const support = hitsById.get(hit.relationFromId)
+        const relationTime = hit.relationFromTimeIntent ?? slotPlans.find(plan => plan.query === hit.selectedSlots?.at(-1))?.timeIntent
+        return support?.record.revision === hit.relationFromRevision && relationTime &&
+          sameRelationScope(support.record, current, identity.key) &&
+          isSafeRecallRecord(support.record, identity.key, relationTime, now)
+      })()
+      const validRelationSupport = (hit.relationSupportFor ?? []).some(link => {
+        const target = hitsById.get(link.targetId)
+        return target?.relationFromId === id && target.relationFromRevision === current?.revision &&
+          isSafeRecallRecord(current, identity.key, link.timeIntent, now)
+      })
       if (!current || current.revision !== hit.record.revision || current.contentHash !== hit.record.contentHash ||
           !slotPlans.some(plan => isSafeRecallRecord(current, identity.key, plan.timeIntent, now) &&
-            (slotEvidence(plan, [hit], hasSubquestions).length > 0 || hit.candidateSlots?.includes(plan.query))) || !quotesValid) {
+            (slotEvidence(plan, [hit], hasSubquestions).length > 0 || hit.candidateSlots?.includes(plan.query))) &&
+          !validRelationSupport || !quotesValid || !linkedRelationValid) {
         removeRecallHit(id)
       } else {
         hitsById.set(id, { ...hit, record: {
@@ -793,6 +992,29 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       ].filter(Boolean))].join('；')
       hitsById.set(id, {...accepted, record: {...original, recallQuote: quote}})
     }
+    for (const [id, hit] of [...hitsById]) {
+      if (hit.relationFromId === undefined) continue
+      const support = hitsById.get(hit.relationFromId)
+      const relationTime = hit.relationFromTimeIntent ?? slotPlans.find(plan => plan.query === hit.selectedSlots?.at(-1))?.timeIntent
+      if (!support || support.record.revision !== hit.relationFromRevision || !relationTime ||
+          !sameRelationScope(support.record, hit.record, identity.key) ||
+          !isSafeRecallRecord(support.record, identity.key, relationTime, now)) removeRecallHit(id)
+    }
+    for (const [id, hit] of [...hitsById]) {
+      if (!hit.relationSupportFor) continue
+      const relationSupportFor = hit.relationSupportFor.filter(link => {
+        const target = hitsById.get(link.targetId)
+        return target?.relationFromId === id && target.relationFromRevision === hit.record.revision
+      })
+      if (relationSupportFor.length) {
+        hitsById.set(id, { ...hit, relationSupportFor })
+      } else {
+        const { relationSupportFor: _removed, ...withoutLinks } = hit
+        hitsById.set(id, withoutLinks)
+        if (!slotPlans.some(plan => isSafeRecallRecord(hit.record, identity.key, plan.timeIntent, now) &&
+            slotEvidence(plan, [hit], hasSubquestions).length > 0)) removeRecallHit(id)
+      }
+    }
     updateLastRecall()
     if (hitsById.size === 0) return withoutPrevious
     const hits = [...hitsById.values()]
@@ -809,13 +1031,16 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       minScore: 0,
       maxItems: hits.length,
       topicHint: topicHint !== undefined && topicHint[1] >= 2 ? topicHint[0] : null,
+    }).map(hit => {
+      const relation = hitsById.get(hit.record.id)
+      return relation?.relationFromId ? { ...hit, relationFromId: relation.relationFromId } : hit
     })
     const rankedById = new Map(rankedAll.map((hit) => [hit.record.id, hit]))
     const rankedRootIds = rankHits([...rootAcceptedById.values()], {
       now, minScore: 0, maxItems: rootAcceptedById.size,
       topicHint: topicHint !== undefined && topicHint[1] >= 2 ? topicHint[0] : null,
     }).map((hit) => hit.record.id)
-    const prioritizedIds = [...new Set([...subquestionPrimaryIds, ...rankedRootIds, ...qualifiedValueIds])]
+    const prioritizedIds = [...new Set([...relationSupportIds, ...subquestionPrimaryIds, ...rankedRootIds, ...qualifiedValueIds])]
     const prioritized = prioritizedIds.map((id) => rankedById.get(id)).filter(Boolean)
     const ranked = [...prioritized, ...rankedAll.filter((hit) => !prioritizedIds.includes(hit.record.id))]
     if (recallObserver !== null) traceRecall(recallObserver, {
