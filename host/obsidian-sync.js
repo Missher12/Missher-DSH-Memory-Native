@@ -7,6 +7,7 @@ import { parseMemoryNote, resolveObsidianTarget, serializeMemory } from './obsid
 import { isKnowledgeFile, parseKnowledgeNote } from './knowledge.js'
 import { buildRecord, nextRevision, MEMORY_KINDS, MEMORY_STATUSES } from './records.js'
 import { isValidProjectKey } from './paths.js'
+import { refreshReadingPages } from './obsidian-reading.js'
 
 const hash = value => createHash('sha256').update(value).digest('hex')
 const fields = ['kind', 'scope', 'projectKey', 'content', 'topic', 'tags', 'confidence', 'importance', 'status']
@@ -124,6 +125,7 @@ export class ObsidianSync {
       try { state = JSON.parse(await textAt(stateFile)) } catch { /* An absent baseline means conflict, never overwrite. */ }
       this.state = state?.version === 1 && state.entries && typeof state.entries === 'object' ? state : { version: 1, entries: {} }
       this.target = dir; this.files.clear()
+      this.readingSignature = null
     }
     this.synchronize()
     const records = new Map(this.store.listAll({ includeDeleted: true }).map(r => [r.id, r]))
@@ -243,6 +245,7 @@ export class ObsidianSync {
     if (knowledgeChanged) {
       try { this.onKnowledgeChange() } catch { /* Recall refresh is fail-soft; the next edit retries it. */ }
     }
+    await refreshReadingPages(this, dir, config, result)
     const serialized = JSON.stringify(this.state)
     if (await textAt(stateFile) !== serialized) {
       const temp = `${stateFile}.tmp`; await writeFile(temp, serialized, {mode:0o600}); await rename(temp, stateFile)

@@ -89,5 +89,7 @@
   "pager.next": "Next",
   "profile.title": "Preferences",
   "profile.summary": "{count} traits",
-  "profile.evidence": "{count} evidence"
+  "profile.evidence": "{count} evidence",
+  "library.hint": "Long-form Markdown notes, editable here and synced with Obsidian. Choose where each note can be recalled.",
+  "obsidian.readingHint": "Open 阅读/首页 in the sync folder for project and topic pages, with links to complete source notes. Personal additions below the generated section are kept."
 }
