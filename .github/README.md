@@ -7,7 +7,7 @@
 <p>把值得记住的内容留在本地，在需要时带回对话。</p>
 
 <p>
-  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0"><img src="https://img.shields.io/badge/%E9%A2%84%E5%8F%91%E8%A1%8C-1.3.8--native.20261107.0-4D6BFE?style=flat-square" alt="原生预发行版: 1.3.8-native.20261107.0"></a>
+  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.4.0-native.20261110.1"><img src="https://img.shields.io/badge/%E9%A2%84%E5%8F%91%E8%A1%8C-1.4.0--native.20261110.1-4D6BFE?style=flat-square" alt="原生预发行版: 1.4.0-native.20261110.1"></a>
   <a href="https://github.com/Missher12/Missher-DSH-Memory-Native"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-%E4%B8%AD%E6%96%87-4D6BFE?style=flat-square" alt="文档: 中文"></a>
 </p>
 
@@ -18,7 +18,7 @@
 ---
 
 <!-- current-source -->
-当前开发源码：**1.3.8-native.20261107.0** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。[同版预发行安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0)。
+当前开发源码：**1.4.0-native.20261110.1** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。[同版预发行安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.4.0-native.20261110.1)。
 <!-- /current-source -->
 
 ## 功能一览
