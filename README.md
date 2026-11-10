@@ -1,5 +1,7 @@
 # DSH Memory
 
+![Memory Native · 长期记忆（品牌插画）](docs/images/cover-v2.png)
+
 当前原生预发行版 **1.3.8-native.20261107.0** · [下载同版安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.3.8-native.20261107.0)
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
