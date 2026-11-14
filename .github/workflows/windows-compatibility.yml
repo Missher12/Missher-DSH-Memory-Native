@@ -40,4 +40,5 @@ jobs:
       - name: Capture, recall, forgetting and persistence
         run: node --test tests/persistence.test.js tests/atomic-replacement.test.js tests/settings.test.js tests/storage-boundary.test.js tests/capture.test.js tests/capture-internal-evidence.test.js tests/source-passages.test.js tests/recall-completeness.test.js tests/recall.test.js tests/evidence-integration.test.js tests/semantic-index.test.js tests/backup-recovery.test.js
       - name: Real WASM model under a Unicode and space-containing path
+        if: ${{ !cancelled() }}
         run: node scripts/check-local-embedding.mjs
