@@ -25,18 +25,19 @@ jobs:
       matrix:
         node: ['22.19.0', '24.22.1']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
+          package-manager-cache: false
       - name: Install public parser dependency
         run: npm install --ignore-scripts --legacy-peer-deps --no-package-lock --no-audit --no-fund
       - name: Compare native storage behavior with 1.5.0
         run: node scripts/check-platform-storage.mjs --baseline ae1fc4e2c50487cb456576544361abcc1e40f679
       - name: Capture, recall, forgetting and persistence
-        run: node --test tests/persistence.test.js tests/atomic-replacement.test.js tests/settings.test.js tests/storage-boundary.test.js tests/capture.test.js tests/capture-internal-evidence.test.js tests/source-passages.test.js tests/recall-completeness.test.js
+        run: node --test tests/persistence.test.js tests/atomic-replacement.test.js tests/settings.test.js tests/storage-boundary.test.js tests/capture.test.js tests/capture-internal-evidence.test.js tests/source-passages.test.js tests/recall-completeness.test.js tests/recall.test.js tests/evidence-integration.test.js tests/semantic-index.test.js tests/backup-recovery.test.js
       - name: Real WASM model under a Unicode and space-containing path
         run: node scripts/check-local-embedding.mjs

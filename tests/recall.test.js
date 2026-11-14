@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildRecord, nextRevision } from '../host/records.js'
-import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, formatMemoryLine, hasContentMatch, hasMeaningfulMatch, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallQueries, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from '../host/recall.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, estimateTokens, formatMemoryLine, hasContentMatch, hasMeaningfulMatch, idfFirstOccurrence, isFollowUpQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallQueries, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from '../host/recall.js'
+import { MemoryIndex } from '../host/search.js'
 import { analyzeUserMessageControls } from '../host/user-controls.js'
 
 const NOW = 1_700_000_000_000
@@ -255,6 +256,28 @@ test('classifyRecallHits scales thresholds with index size', () => {
   const large = classifyRecallHits([], 'x', { indexSize: 5000 })
   assert.ok(large.thresholds.drop > small.thresholds.drop)
   assert.ok(large.thresholds.auto > small.thresholds.auto)
+})
+
+test('single-record IDF matches the actual corpus while larger-corpus gates stay stable', () => {
+  assert.equal(idfFirstOccurrence(1), Math.log(4 / 3))
+  assert.equal(idfFirstOccurrence(2), Math.log(2))
+  assert.ok(Math.abs(idfFirstOccurrence(3) - Math.log(8 / 3)) < 1e-12)
+
+  const built = buildRecord({ kind: 'fact', scope: 'project', projectKey: KEY,
+    content: '会话 A 决定项目使用 pnpm 管理依赖', tags: [], confidence: 0.95 }, { now: NOW, autoApproveConfidence: 0.75 })
+  assert.equal(built.ok, true)
+  const index = new MemoryIndex().rebuild([built.record])
+  const [hit] = index.search('pnpm 依赖', { now: NOW, projectKey: KEY })
+  assert.ok(hit)
+  assert.equal(hit.termScores.find(item => item.term === 'pnpm').idf, idfFirstOccurrence(1))
+  const gate = classifyRecallHits([hit], 'pnpm 依赖', { indexSize: index.size, idfOf: term => index.idfOf(term) })
+  assert.deepEqual(gate.auto.map(item => item.record.id), [hit.record.id])
+
+  const weakUnrelated = { record: { id: 'weak-unrelated', content: '其他项目无关记录' }, matched: ['pnpm'],
+    termScores: [{ term: 'pnpm', idf: idfFirstOccurrence(1), value: idfFirstOccurrence(1) * 0.5 }] }
+  const weakGate = classifyRecallHits([weakUnrelated], 'pnpm 依赖', { indexSize: 1, idfOf: () => idfFirstOccurrence(1) })
+  assert.deepEqual(weakGate.auto, [])
+  assert.deepEqual(weakGate.gray.map(item => item.record.id), ['weak-unrelated'])
 })
 
 

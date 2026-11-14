@@ -84,6 +84,22 @@ test('semantic fallback carries each attempt through candidate fusion without a 
   assert.ok(!warnings.some(message=>message.includes('query is not defined')),warnings.join('\n'))
 })
 
+test('direct lexical evidence without tags survives disabled and failed semantic recall',async t=>{
+  for (const tags of [[], ['pnpm']]) {
+    for (const semanticMode of ['disabled', 'failed']) {
+      const engine={state:'ready',calls:0,async embed(){this.calls++;throw new Error('offline fixture')},dispose(){}}
+      const {ask,warnings}=await setup(t,[{id:`mem_${tags.length}_${semanticMode}`,content:'会话 A 决定项目使用 pnpm 管理依赖',tags}],undefined,
+        {semantic:{enabled:semanticMode==='failed',engine}})
+      const answer=await ask('pnpm 依赖和 Node 版本')
+      if (semanticMode === 'failed') assert.ok(engine.calls>0,'the missing Node slot exercises the unavailable semantic lane')
+      else assert.equal(engine.calls,0)
+      assert.match(answer,/pnpm 管理依赖/u,`tags=${JSON.stringify(tags)}, semantic=${semanticMode}`)
+      assert.doesNotMatch(answer,/Node 版本要求是/u)
+      assert.ok(!warnings.some(message=>message.includes('offline fixture')),warnings.join('\n'))
+    }
+  }
+})
+
 test('a note imported through the activated panel is immediately recalled without a restart', async t => {
   const { root, key, panel, ask } = await setup(t, Array.from({ length: 64 }, (_, i) => ({
     id: `mem_other_${i}`, content: `无关设备的盘点编号为 OTHER-${i}。`,

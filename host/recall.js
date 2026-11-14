@@ -151,7 +151,8 @@ export const GATE_RATIOS = Object.freeze({
 
 /** idf of a term that appears in exactly one document, for an index of N docs. */
 export function idfFirstOccurrence(indexSize) {
-  const n = Math.max(2, Number(indexSize) || 2)
+  const size = Number(indexSize)
+  const n = Number.isInteger(size) && size >= 1 ? size : 2
   return Math.log(1 + (n - 0.5) / 1.5)
 }
 

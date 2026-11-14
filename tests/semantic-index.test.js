@@ -45,3 +45,21 @@ test('forgetting during embedding cannot resurrect the document, on disk or in a
   const other=new SemanticRecallIndex(join(root,'different-profile'),{engine:engine()});t.after(()=>other.dispose())
   assert.deepEqual(await other.search(['环境'],[],{projectKey:key}),[[]])
 })
+
+test('an uncached model that cannot reach the network degrades to an empty semantic lane', async t => {
+  const {root,key,record}=fixture(t),originalFetch=globalThis.fetch
+  let fetchCalls=0
+  globalThis.fetch=async()=>{fetchCalls++;throw new TypeError('offline fixture')}
+  const index=new SemanticRecallIndex(root,{enabled:true,allowDownload:true,modelDir:join(root,'uncached-model')})
+  try {
+    const result=await index.search(['部署环境是什么'],[record],{projectKey:key,waitMs:100})
+    await index.settle()
+    assert.deepEqual(result,[[]])
+    assert.equal(fetchCalls,1,'the download attempt is intercepted; no external request is sent')
+    assert.equal(index.status().state,'failed')
+    assert.match(index.status().error,/offline fixture/u)
+  } finally {
+    globalThis.fetch=originalFetch
+    index.dispose()
+  }
+})

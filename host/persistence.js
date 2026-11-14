@@ -13,9 +13,19 @@ export function writeAll(fd, value) {
 }
 
 export function syncDirectory(dir) {
-  const fd = openSync(dir, 'r')
+  let fd
+  try { fd = openSync(dir, 'r') }
+  catch (error) {
+    const knownUnsupported = ['EINVAL', 'ENOTSUP', 'EBADF'].includes(error?.code)
+    const windowsDirectoryOpen = process.platform === 'win32' && ['EPERM', 'EISDIR'].includes(error?.code)
+    if (knownUnsupported || windowsDirectoryOpen) return
+    throw error
+  }
   try { fsyncSync(fd) }
-  catch (error) { if (!['EINVAL', 'ENOTSUP', 'EBADF'].includes(error?.code)) throw error }
+  catch (error) {
+    const knownUnsupported = ['EINVAL', 'ENOTSUP', 'EBADF'].includes(error?.code)
+    if (!knownUnsupported && !(process.platform === 'win32' && error?.code === 'EPERM')) throw error
+  }
   finally { closeSync(fd) }
 }
 

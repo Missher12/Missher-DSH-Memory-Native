@@ -7,6 +7,7 @@ import test from 'node:test'
 import { CapturePipeline } from '../host/capture.js'
 import { readCaptureTasks } from '../host/capture-journal.js'
 import { resolveConfig } from '../host/config.js'
+import { atomicWritePrivate } from '../host/persistence.js'
 import { projectIdentity } from '../host/paths.js'
 import { MemoryIndex } from '../host/search.js'
 import { MemoryStore } from '../host/store.js'
@@ -66,4 +67,91 @@ test('failed replacement preserves authority and index; retry reuses the saved m
   assert.equal(persisted.find(old.id, [{ scope: 'project', projectKey: key }]).status, 'superseded')
   assert.equal(persisted.history(old.id, [{ scope: 'project', projectKey: key }]).length, 2)
   assert.equal(readCaptureTasks(root)[0].status, 'done')
+})
+
+for (const code of ['EPERM', 'EISDIR']) test(`Windows directory-open ${code} does not turn a committed atomic write into failure`, t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'memory-win-sync-open-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const target = join(root, 'owner.json')
+  fs.writeFileSync(target, 'old')
+  const originalOpen = fs.openSync
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+  let injected = 0
+  Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' })
+  fs.openSync = (path, flags, ...args) => {
+    if (path === root && flags === 'r') {
+      injected += 1
+      throw Object.assign(new Error(`simulated Windows directory open ${code}`), { code })
+    }
+    return originalOpen(path, flags, ...args)
+  }
+  syncBuiltinESMExports()
+  try { atomicWritePrivate(target, 'new') }
+  finally {
+    fs.openSync = originalOpen
+    syncBuiltinESMExports()
+    Object.defineProperty(process, 'platform', originalPlatform)
+  }
+  assert.equal(injected, 1, 'fault injection reached the directory-open stage')
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new', 'the atomic replacement remains committed')
+})
+
+test('Windows directory fsync EPERM is best-effort after atomic replacement', t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'memory-win-sync-fsync-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const target = join(root, 'owner.json')
+  fs.writeFileSync(target, 'old')
+  const originalOpen = fs.openSync, originalFsync = fs.fsyncSync, originalClose = fs.closeSync
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+  const directoryFd = -8417
+  let injected = 0
+  Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' })
+  fs.openSync = (path, flags, ...args) => path === root && flags === 'r'
+    ? directoryFd : originalOpen(path, flags, ...args)
+  fs.fsyncSync = fd => {
+    if (fd === directoryFd) {
+      injected += 1
+      throw Object.assign(new Error('simulated Windows directory fsync EPERM'), { code: 'EPERM' })
+    }
+    return originalFsync(fd)
+  }
+  fs.closeSync = fd => fd === directoryFd ? undefined : originalClose(fd)
+  syncBuiltinESMExports()
+  try { atomicWritePrivate(target, 'new') }
+  finally {
+    fs.openSync = originalOpen
+    fs.fsyncSync = originalFsync
+    fs.closeSync = originalClose
+    syncBuiltinESMExports()
+    Object.defineProperty(process, 'platform', originalPlatform)
+  }
+  assert.equal(injected, 1, 'fault injection reached directory fsync after the atomic rename')
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new')
+})
+
+test('Windows atomic writes still surface file permission errors and preserve the previous file', t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'memory-win-file-eacces-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const target = join(root, 'owner.json')
+  fs.writeFileSync(target, 'old')
+  const originalOpen = fs.openSync
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+  let injected = 0
+  Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' })
+  fs.openSync = (path, flags, ...args) => {
+    if (String(path).startsWith(`${target}.`) && flags === 'wx') {
+      injected += 1
+      throw Object.assign(new Error('simulated file permission denial'), { code: 'EACCES' })
+    }
+    return originalOpen(path, flags, ...args)
+  }
+  syncBuiltinESMExports()
+  try { assert.throws(() => atomicWritePrivate(target, 'new'), error => error.code === 'EACCES') }
+  finally {
+    fs.openSync = originalOpen
+    syncBuiltinESMExports()
+    Object.defineProperty(process, 'platform', originalPlatform)
+  }
+  assert.equal(injected, 1, 'fault injection reached the temporary file open')
+  assert.equal(fs.readFileSync(target, 'utf8'), 'old', 'a denied file write does not replace the old file')
 })
