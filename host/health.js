@@ -87,9 +87,9 @@ export function memoryHealth({ isolation, unavailable, settingsIssue, maintenanc
     number(checks.injection?.injected) ? make('ready') :
     number(checks.injection?.attempts) ? make('waiting', 'capture') : make('waiting')
   const obsidian = checks.obsidian?.enabled === false ? make('disabled', 'obsidian') :
+    checks.obsidian?.running ? make('running', 'obsidian') :
     number(checks.obsidian?.errors) || checks.obsidian?.watchersReady === false && checks.obsidian?.lastAt
       ? make('attention', 'obsidian', 'obsidian-failed') :
-    checks.obsidian?.running ? make('running', 'obsidian') :
     checks.obsidian?.lastAt ? make('ready', 'obsidian') : make('waiting', 'obsidian')
   const components = { storage, panel, hooks, capture: captureState, extraction, lexical, semantic, injection, obsidian }
   for (const component of Object.values(components)) if (component.issue && !issues.includes(component.issue)) issues.push(component.issue)

@@ -54,6 +54,14 @@ test('waiting, disabled and pending health components do not report attention, a
   assert.equal(report.components.obsidian.state, 'disabled')
 })
 
+test('an active Obsidian reconfiguration reports running while watchers are being rebound', () => {
+  const report = memoryHealth({ isolation: 'profile', checks: {
+    obsidian: { enabled: true, running: true, lastAt: 123, errors: 0, watchersReady: false },
+  } })
+  assert.deepEqual(report.components.obsidian, { state: 'running', action: 'obsidian', issue: null })
+  assert.equal(report.status, 'ok')
+})
+
 test('two native-profile compositions recall only their own global records and ownership failure leaves a usable read-only diagnostic panel', async t => {
   const home = mkdtempSync(join(tmpdir(), 'memory-native-profile-'))
   t.after(() => rmSync(home, { recursive: true, force: true }))

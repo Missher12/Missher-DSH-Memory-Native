@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative, sep, win32 } from 'node:path'
 import { MemoryStore } from '../host/store.js'
 import { MemoryIndex } from '../host/search.js'
 import { ObsidianSync } from '../host/obsidian-sync.js'
@@ -14,16 +14,28 @@ function setup(t) {
   mkdirSync(vault)
   const store = new MemoryStore({ root: join(root, 'data') }).open(), index = new MemoryIndex()
   const config = { vaultPath: vault, folder: 'DSH Memory', autoSync: true }
-  const make = () => new ObsidianSync({ root: store.root, store, index, getConfig: () => config })
+  const controllers = new Set()
+  const make = () => {
+    const controller = new ObsidianSync({ root: store.root, store, index, getConfig: () => config })
+    controllers.add(controller)
+    return controller
+  }
   const sync = make(), dir = join(vault, config.folder)
   const write = input => {
     const result = store.write({ kind: 'fact', scope: 'project', projectKey: 'project-alpha', confidence: .95, topic: '备份', ...input })
     assert.equal(result.ok, true, result.reason); return result.record
   }
-  t.after(() => { sync.dispose(); rmSync(root, { recursive: true, force: true }) })
+  t.after(() => { for (const controller of controllers) controller.dispose(); rmSync(root, { recursive: true, force: true }) })
   return { root, store, index, config, make, sync, dir, write }
 }
 const topicPages = dir => readdirSync(join(dir, '阅读/主题')).map(file => ({ file: join(dir, '阅读/主题', file), text: readFileSync(join(dir, '阅读/主题', file), 'utf8') }))
+const pageKeyFromFile = (base, file, pathApi = { relative, sep }) => pathApi.relative(base, file).split(pathApi.sep).join('/')
+
+test('Windows local topic paths map to stable POSIX reading keys', () => {
+  const base = win32.resolve('C:\\vault\\DSH Memory')
+  const file = win32.join(base, '阅读', '主题', 'CloudSync-deadbeef.md')
+  assert.equal(pageKeyFromFile(base, file, win32), '阅读/主题/CloudSync-deadbeef.md')
+})
 
 test('reading groups complete source text and decisions by topic, keeps project boundaries and valid wiki targets', async t => {
   const c = setup(t)
@@ -38,7 +50,7 @@ test('reading groups complete source text and decisions by topic, keeps project 
   const decisionFile = readdirSync(join(c.dir, '阅读/决策'))[0]
   assert.match(readFileSync(join(c.dir, '阅读/决策', decisionFile), 'utf8'), /因为凌晨导入任务到 06:00/u)
   assert.match(readFileSync(join(c.dir, '阅读/首页.md'), 'utf8'), /## 按用途阅读/u)
-  for (const file of ['阅读/首页.md', ...pages.map(p => p.file.slice(c.dir.length + 1))]) {
+  for (const file of ['阅读/首页.md', ...pages.map(p => pageKeyFromFile(c.dir, p.file))]) {
     for (const [, target] of readFileSync(join(c.dir, file), 'utf8').matchAll(/\[\[([^|\]]+)\|/gu)) assert.ok(statSync(join(c.config.vaultPath, target + '.md')).isFile(), target)
   }
 })
@@ -63,12 +75,12 @@ test('reading merges only formatting variants and explicit same-topic aliases, w
   assert.ok(pages.some(page => page.text.includes('另一项目的独立云同步。')))
   assert.equal(pages.filter(page => page.text.includes('空格写法的备份计划。') || page.text.includes('紧凑写法的备份计划。')).length, 1)
 
-  const redirect = pages.find(page => page.file.includes('/CloudSync-') )
+  const redirect = pages.find(page => pageKeyFromFile(c.dir, page.file).startsWith('阅读/主题/CloudSync-'))
   assert.ok(redirect, 'old topic path should remain as a redirect')
   assert.match(redirect.text, /已归并/u)
   assert.match(redirect.text, /\[\[[^|]+\|云同步\]\]/u)
   const built = buildReadingPages({ records: c.store.listAll({ includeDeleted: true }), notes: [], files: new Map(), folder: c.config.folder })
-  assert.ok(built.sources.get(redirect.file.slice(c.dir.length + 1)).includes(canonical), 'redirect depends on the record that proves the alias')
+  assert.ok(built.sources.get(pageKeyFromFile(c.dir, redirect.file)).includes(canonical), 'redirect depends on the record that proves the alias')
   for (const [, target] of redirect.text.matchAll(/\[\[([^|\]]+)\|/gu)) {
     assert.ok(statSync(join(c.config.vaultPath, target + '.md')).isFile(), target)
   }
@@ -97,7 +109,7 @@ test('a redirect rechecks an alias proof stored under another topic before writi
   const c = setup(t); c.write({ topic: 'CloudSync', content: '独立的旧主题来源。' })
   const proof = c.write({ topic: '云同步', content: '云同步也称 CloudSync。' })
   assert.deepEqual((await c.sync.run()).errors, [])
-  const redirect = topicPages(c.dir).find(page => page.file.includes('/CloudSync-'))
+  const redirect = topicPages(c.dir).find(page => pageKeyFromFile(c.dir, page.file).startsWith('阅读/主题/CloudSync-'))
   assert.ok(redirect)
 
   c.sync.readingSignature = null
@@ -105,7 +117,7 @@ test('a redirect rechecks an alias proof stored under another topic before writi
   let removedProof = false, wroteRedirect = false
   c.sync.replace = async (file, before, after, vaultDir) => {
     const result = await replace(file, before, after, vaultDir)
-    if (!removedProof && file.includes('/阅读/主题/云同步-')) {
+    if (!removedProof && pageKeyFromFile(c.dir, file).startsWith('阅读/主题/云同步-')) {
       c.store.remove(proof.id, [{ scope: 'project', projectKey: 'project-alpha' }])
       removedProof = true
     }
@@ -116,7 +128,7 @@ test('a redirect rechecks an alias proof stored under another topic before writi
   await refreshReadingPages(c.sync, c.dir, c.config, result)
   assert.equal(removedProof, true)
   assert.equal(wroteRedirect, false)
-  assert.ok(result.errors.some(error => error.file === redirect.file.slice(c.dir.length + 1)))
+  assert.ok(result.errors.some(error => error.file === pageKeyFromFile(c.dir, redirect.file)))
 })
 
 test('unclassified entries stay unclassified instead of being inferred into a named theme', t => {
