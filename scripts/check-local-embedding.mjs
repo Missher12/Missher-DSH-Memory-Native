@@ -1,9 +1,19 @@
 /** Real local WASM check. Inputs are synthetic; downloads are pinned public model assets. */
 import assert from 'node:assert/strict'
-import {cpSync,mkdtempSync,mkdirSync,rmSync,writeFileSync} from 'node:fs'
+import {copyFileSync,existsSync,mkdtempSync,mkdirSync,readdirSync,rmSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join,resolve} from 'node:path'
-import {pathToFileURL} from 'node:url'
+import {fileURLToPath,pathToFileURL} from 'node:url'
+// Avoid older Node's native cpSync directory path conversion on Windows.
+function copyTree(source,target){
+ mkdirSync(target,{recursive:true})
+ for(const item of readdirSync(source,{withFileTypes:true})){
+  const from=join(source,item.name),to=join(target,item.name)
+  if(item.isDirectory())copyTree(from,to)
+  else if(item.isFile())copyFileSync(from,to)
+  else throw new Error('Unexpected non-regular package entry')
+ }
+}
 const root=mkdtempSync(join(tmpdir(),'memory-wasm-'))
 const at=process.argv.indexOf('--model-dir')
 const modelDir=at>=0?resolve(process.argv[at+1]):join(root,'中文模型 with spaces')
@@ -12,9 +22,10 @@ let engine
 try{
  const pluginDir=join(root,'中文插件 with spaces')
  mkdirSync(pluginDir)
- cpSync(new URL('../host/',import.meta.url),join(pluginDir,'host'),{recursive:true})
- cpSync(new URL('../vendor/',import.meta.url),join(pluginDir,'vendor'),{recursive:true})
+ copyTree(fileURLToPath(new URL('../host/',import.meta.url)),join(pluginDir,'host'))
+ copyTree(fileURLToPath(new URL('../vendor/',import.meta.url)),join(pluginDir,'vendor'))
  writeFileSync(join(pluginDir,'package.json'),'{"type":"module"}')
+ assert.ok(existsSync(join(pluginDir,'host','embedding.js')),'Copied worker entry must exist before module loading')
  const {LocalEmbedding}=await import(pathToFileURL(join(pluginDir,'host','embedding.js')).href)
  engine=new LocalEmbedding({modelDir,allowDownload:at<0})
  const start=performance.now()
