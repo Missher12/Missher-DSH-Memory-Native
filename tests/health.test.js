@@ -7,7 +7,7 @@ import test from 'node:test'
 import { apply } from '../index.js'
 import { prepareStorage } from '../host/storage-boundary.js'
 import { MemoryStore } from '../host/store.js'
-import { memoryHealth } from '../host/health.js'
+import { memoryHealth, probeStorage } from '../host/health.js'
 
 function harness(t, profile, config) {
   let route
@@ -33,6 +33,25 @@ test('diagnostic summary never serializes raw messages, paths, IDs or configurat
   assert.equal(JSON.stringify(report).includes(secret), false)
   assert.deepEqual(report.issues, ['settings-invalid', 'backup-failed', 'corrupt-lines', 'capture-incomplete', 'capture-unknown'])
   assert.equal(report.status, 'attention')
+})
+
+test('waiting, disabled and pending health components do not report attention, and storage probe removes its temporary file', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'memory-health-probe-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const probe = await probeStorage(root)
+  assert.deepEqual(probe, { state: 'ready' })
+  const report = memoryHealth({ isolation: 'profile', checks: {
+    storage: { state: 'pending' }, panel: { transport: 'available', selfTest: 'pending' },
+    hooks: { sessionEventRegistered: true, preStepRegistered: true, events: 0, preSteps: 0 },
+    capture: { enabled: false }, extraction: { enabled: false }, semantic: { state: 'idle' },
+    injection: { enabled: false }, obsidian: { enabled: false },
+  } })
+  assert.equal(report.status, 'ok')
+  assert.equal(report.components.storage.state, 'running')
+  assert.equal(report.components.panel.state, 'waiting')
+  assert.equal(report.components.hooks.state, 'waiting')
+  assert.equal(report.components.semantic.state, 'waiting')
+  assert.equal(report.components.obsidian.state, 'disabled')
 })
 
 test('two native-profile compositions recall only their own global records and ownership failure leaves a usable read-only diagnostic panel', async t => {

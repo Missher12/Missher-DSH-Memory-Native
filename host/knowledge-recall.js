@@ -123,20 +123,34 @@ export class KnowledgeRecallIndex {
   }
 
   validate(hit, projectKey, now = Date.now()) {
-    const file = hit?.record?.noteFile
-    const snapshot = this.#notes.get(file)
-    if (!snapshot || !this.#eligible(snapshot.note, projectKey, now)) return false
-    try {
-      const current = readKnowledgeNote(this.#root, file)
-      if (digest(current) !== hit.record.noteDigest) {
-        this.#refreshFile(file, true)
-        return false
+    return this.validateMany([hit], projectKey, now).length === 1
+  }
+
+  validateMany(hits, projectKey, now = Date.now()) {
+    const input = Array.isArray(hits) ? hits : []
+    const files = new Map(), valid = [], stale = new Set()
+    for (const hit of input) {
+      const file = hit?.record?.noteFile
+      if (typeof file !== 'string') continue
+      if (!files.has(file)) {
+        const snapshot = this.#notes.get(file)
+        if (!snapshot || !this.#eligible(snapshot.note, projectKey, now)) { files.set(file, null); continue }
+        try {
+          const current = readKnowledgeNote(this.#root, file)
+          files.set(file, this.#eligible(current, projectKey, now) ? { note: current, digest: digest(current) } : null)
+        } catch { files.set(file, null) }
       }
-      return this.#eligible(current, projectKey, now)
-    } catch {
-      this.#refreshFile(file, true)
-      return false
+      const current = files.get(file)
+      if (!current || current.digest !== hit.record.noteDigest) continue
+      valid.push(hit)
     }
+    for (const [file, current] of files) if (!current) stale.add(file)
+    for (const hit of input) {
+      const file = hit?.record?.noteFile, current = files.get(file)
+      if (current && current.digest !== hit.record.noteDigest) stale.add(file)
+    }
+    for (const file of stale) this.#refreshFile(file, true)
+    return valid
   }
 
   candidates(projectKey, options = {}) {

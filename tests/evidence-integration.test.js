@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -9,6 +9,15 @@ import { MemoryStore } from '../host/store.js'
 import { projectIdentity } from '../host/paths.js'
 import { saveSource, readSource } from '../host/capture-journal.js'
 import { grantSourceRecall } from '../host/source-passages.js'
+
+async function waitForStart(started, label, timeoutMs = 5000) {
+  let timer
+  try {
+    await Promise.race([started, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} did not start within ${timeoutMs}ms`)), timeoutMs)
+    })])
+  } finally { clearTimeout(timer) }
+}
 
 async function setup(t, records = [], llm, testOptions) {
   const root = mkdtempSync(join(tmpdir(), 'memory-evidence-integration-'))
@@ -43,7 +52,7 @@ async function setup(t, records = [], llm, testOptions) {
     }, async () => ({ kind: 'enter', messages }))
     return result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n')
   }
-  return { root, dataDir, key, panel, ask, warnings }
+  return { root, dataDir, key, panel, ask, store, warnings }
 }
 
 test('unextracted original evidence remains usable without another paid call, but is not reported as confirmed coverage', async t => {
@@ -74,6 +83,16 @@ test('a high vector score cannot inject unrelated global memories for a physical
   assert.equal((await panel('stats',{scope:'global'})).lastRecall.candidates.length,0)
 })
 
+test('an explicitly different project name blocks otherwise matching evidence while unnamed facts remain usable',async t=>{
+  const query='霁海项目的离线构建识别码是什么？'
+  const other=await setup(t,[{id:'mem_other_named_project',content:'夜航项目的离线构建识别码是云雀六号。'}])
+  assert.equal(await other.ask(query),'')
+  const same=await setup(t,[{id:'mem_same_named_project',content:'霁海工程的离线构建识别码是云雀六号。'}])
+  assert.match(await same.ask(query),/云雀六号/u)
+  const implicit=await setup(t,[{id:'mem_implicit_project',content:'离线构建识别码是云雀六号。'}])
+  assert.match(await implicit.ask(query),/云雀六号/u)
+})
+
 test('semantic fallback carries each attempt through candidate fusion without a provider call',async t=>{
   const engine={state:'ready',modes:[],async embed(texts,mode){this.modes.push(mode);return texts.map(()=>[1,...Array(383).fill(0)])},dispose(){}}
   const {ask,warnings}=await setup(t,[{id:'mem_semantic_fallback',content:'交接工具的登记名称是雨燕七号。'}],undefined,
@@ -98,6 +117,48 @@ test('direct lexical evidence without tags survives disabled and failed semantic
       assert.ok(!warnings.some(message=>message.includes('offline fixture')),warnings.join('\n'))
     }
   }
+})
+
+test('apply rechecks memory authority after passage embedding before persisting a vector', async t => {
+  let begin, release
+  const started = new Promise(resolve => { begin=resolve })
+  const engine={state:'ready',async embed(texts,mode){
+    if(mode==='passage') { begin();await new Promise(resolve=>{release=resolve}) }
+    return texts.map(()=>[1,...Array(383).fill(0)])
+  },dispose(){}}
+  const {dataDir,key,panel,ask}=await setup(t,[{id:'mem_revoked_during_embedding',content:'夜航项目的离线构建识别码是云雀六号。'}],undefined,
+    {semantic:{enabled:true,engine}})
+  const pending=ask('霁海系统的版本追踪编号是多少？')
+  try { await waitForStart(started, 'memory passage embedding') }
+  catch (error) { release?.(); await pending; throw error }
+  await panel('removeMemory',{id:'mem_revoked_during_embedding',scope:'project',projectKey:key})
+  release()
+  await pending
+  assert.equal(await ask('霁海系统的版本追踪编号是多少？'),'')
+  const report=await panel('stats',{scope:'project',projectKey:key})
+  assert.equal(report.semantic.total,0)
+  assert.equal(report.semantic.indexed,0)
+  assert.equal(existsSync(join(dataDir,'.cache','semantic','multilingual-e5-small-761b726-v1',key+'.jsonl')),false)
+})
+
+test('apply rechecks source grants after passage embedding before persisting a vector', async t => {
+  let begin, release
+  const started = new Promise(resolve => { begin=resolve })
+  const engine={state:'ready',async embed(texts,mode){
+    if(mode==='passage') { begin();await new Promise(resolve=>{release=resolve}) }
+    return texts.map(()=>[1,...Array(383).fill(0)])
+  },dispose(){}}
+  const {dataDir,key,ask}=await setup(t,[],undefined,{semantic:{enabled:true,engine}})
+  const source=readSource(dataDir,saveSource(dataDir,{sessionId:'grant-session',projectKey:key,role:'user',sourceKind:'user',text:'值守证书的备用联系编号是木槿三号。'}).id)
+  assert.equal(grantSourceRecall(dataDir,source,key),true,'the safe user fact must be granted before testing revocation')
+  const pending=ask('值守证书的备用联系编号是什么？')
+  try { await waitForStart(started, 'source passage embedding') }
+  catch (error) { release?.(); await pending; throw error }
+  unlinkSync(join(dataDir,'capture','recall-grants',key,source.id+'.json'))
+  release()
+  await pending
+  assert.equal(await ask('值守证书的临时口令是什么？'),'')
+  assert.equal(existsSync(join(dataDir,'.cache','semantic','multilingual-e5-small-761b726-v1',key+'.jsonl')),false)
 })
 
 test('a note imported through the activated panel is immediately recalled without a restart', async t => {

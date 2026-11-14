@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const NAMESPACE = 'dshMemory'
     const SERVICE_KEY = 'remote.' + NAMESPACE
     const NS = 'dsh-memory'
-    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'projectBrief']
+    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'semanticModel', 'projectBrief']
     const RESULT_TYPES = {
       list: 'MemoryList',
       stats: 'MemoryStats',
@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
       knowledgeSync: 'MemoryKnowledgeSync',
       captureStatus: 'MemoryCaptureStatus',
       captureRetry: 'MemoryCaptureRetry',
+      semanticModel: 'MemorySemanticModel',
       projectBrief: 'MemoryProjectBrief',
     }
     const KINDS = ['preference', 'fact', 'decision', 'episode']
@@ -189,6 +190,11 @@ window.__ModuleLoader__.load({
         "obsidian.now": "Sync now",
         "obsidian.syncStatus": "Last sync: {time} · sent {sent} · received {received} · conflicts {conflicts}",
         "obsidian.notYet": "Not synced yet",
+        "obsidian.fullScan": "Run full sync now",
+        "obsidian.pending": "Pending file checks: {count}",
+        "obsidian.fullPending": "A full reconciliation is pending",
+        "obsidian.mode.full": "Full scan",
+        "obsidian.mode.incremental": "Incremental",
         "obsidian.keepMemory": "Use Memory version (keep copies)",
         "obsidian.keepVault": "Use Obsidian version (keep copies)",
         "obsidian.deleted": "Deleted on this side",
@@ -328,6 +334,33 @@ window.__ModuleLoader__.load({
         "health.memories": "Current memories {memories} · deletion markers {deleted}",
         "health.jobs": "Queued {pending} · running {running} · incomplete {partial} · failed {failed} · unknown {unknown}",
         "health.corrupt": "Unreadable authority lines: {count}",
+        "health.storage-probe-failed": "Local read/write verification failed. Check permissions and free disk space.",
+        "health.panel-unavailable": "The settings panel gateway is unavailable. Reload the plugin after checking the host extension service.",
+        "health.panel-check-failed": "The settings panel could not complete its gateway check.",
+        "health.hooks-unavailable": "A required session or pre-step hook is unavailable. Reload the plugin after checking host compatibility.",
+        "health.extraction-route-unavailable": "The extraction route is unavailable. Select a working model in the host and retry the queued task.",
+        "health.lexical-failed": "Keyword search encountered an error. Reload the plugin and retry.",
+        "health.semantic-failed": "Local semantic search needs model preparation. Prepare or import the pinned model below.",
+        "health.injection-failed": "Context injection encountered an error. Review capture and injection settings, then retry.",
+        "health.obsidian-failed": "Some Obsidian files need attention. Open sync settings to review or retry.",
+        "health.component.storage": "Storage read/write",
+        "health.component.panel": "Panel gateway",
+        "health.component.hooks": "Host hooks",
+        "health.component.capture": "Capture",
+        "health.component.extraction": "Extraction route",
+        "health.component.lexical": "Keyword index",
+        "health.component.semantic": "Local semantic model",
+        "health.component.injection": "Pre-step injection",
+        "health.component.obsidian": "Obsidian sync",
+        "health.state.ready": "Ready",
+        "health.state.waiting": "Waiting for first use",
+        "health.state.disabled": "Disabled",
+        "health.state.running": "Working",
+        "health.state.attention": "Needs attention",
+        "health.state.unavailable": "Unavailable",
+        "health.action.capture": "Open capture settings",
+        "health.action.model": "Prepare model",
+        "health.action.obsidian": "Open sync settings",
         "health.profile-unavailable": "The host profile identity is unavailable. Update the host or configure an independent data directory, then reload the plugin.",
         "health.storage-owner-conflict": "This directory belongs to another host profile. Choose a separate directory, then reload the plugin.",
         "health.storage-owner-invalid": "Directory ownership could not be verified. Check file permissions or restore a complete backup to a new directory.",
@@ -378,12 +411,23 @@ window.__ModuleLoader__.load({
         'recall.semantic': 'Local semantic search',
         'recall.semanticProgress': '{indexed} of {total} passages indexed',
         'recall.semantic.idle': 'Starts when needed',
+        'recall.semantic.preparing': 'Preparing local model',
+        'recall.semantic.importing': 'Importing offline model',
         'recall.semantic.loading': 'Loading model',
         'recall.semantic.downloading': 'Downloading public model',
         'recall.semantic.indexing': 'Indexing in background',
         'recall.semantic.ready': 'Ready',
         'recall.semantic.disabled': 'Disabled',
         'recall.semantic.failed': 'Unavailable; using keyword search',
+        'recall.model.prepare': 'Prepare model',
+        'recall.model.retry': 'Retry preparation',
+        'recall.model.cancel': 'Cancel preparation',
+        'recall.model.import': 'Import offline model',
+        'recall.model.folder': 'Model folder',
+        'recall.model.folderHint': 'Choose the folder containing the three pinned model files.',
+        'recall.model.progress': '{file}: {done} / {total}',
+        'recall.model.preparing': 'Preparing local model',
+        'recall.model.importing': 'Importing local model',
         'recall.budgetOmitted': 'Found, but omitted by the context limit',
         'recall.local': 'Local evidence was sufficient',
         'recall.completed': 'Additional lookup completed',
@@ -518,6 +562,11 @@ window.__ModuleLoader__.load({
         "obsidian.now": "立即同步",
         "obsidian.syncStatus": "最近同步：{time} · 导出 {sent} · 导入 {received} · 冲突 {conflicts}",
         "obsidian.notYet": "尚未同步",
+        "obsidian.fullScan": "立即全量同步",
+        "obsidian.pending": "待检查文件：{count}",
+        "obsidian.fullPending": "等待全量对账",
+        "obsidian.mode.full": "全量扫描",
+        "obsidian.mode.incremental": "增量同步",
         "obsidian.keepMemory": "使用 Memory 版本（保留副本）",
         "obsidian.keepVault": "使用 Obsidian 版本（保留副本）",
         "obsidian.deleted": "这一侧已删除",
@@ -554,6 +603,33 @@ window.__ModuleLoader__.load({
         "health.memories": "当前记忆 {memories} · 删除标记 {deleted}",
         "health.jobs": "排队 {pending} · 处理中 {running} · 未完成 {partial} · 失败 {failed} · 待核实 {unknown}",
         "health.corrupt": "无法读取的原始记录行：{count}",
+        "health.storage-probe-failed": "本地读写核验失败，请检查目录权限和磁盘空间。",
+        "health.panel-unavailable": "设置面板网关不可用，请检查宿主扩展服务后重新加载插件。",
+        "health.panel-check-failed": "设置面板未能完成网关核验。",
+        "health.hooks-unavailable": "必要的会话或预处理钩子不可用，请检查宿主兼容性后重新加载插件。",
+        "health.extraction-route-unavailable": "提炼模型路由不可用，请在宿主选择可用模型后重试队列任务。",
+        "health.lexical-failed": "关键词检索遇到错误，请重新加载插件后重试。",
+        "health.semantic-failed": "本地语义检索需要准备模型，请在下方准备或导入固定模型。",
+        "health.injection-failed": "上下文注入遇到错误，请检查捕获和注入设置后重试。",
+        "health.obsidian-failed": "部分 Obsidian 文件需要处理，请打开同步设置查看或重试。",
+        "health.component.storage": "存储读写",
+        "health.component.panel": "面板网关",
+        "health.component.hooks": "宿主钩子",
+        "health.component.capture": "捕获",
+        "health.component.extraction": "提炼路由",
+        "health.component.lexical": "关键词索引",
+        "health.component.semantic": "本地语义模型",
+        "health.component.injection": "预处理注入",
+        "health.component.obsidian": "Obsidian 同步",
+        "health.state.ready": "可用",
+        "health.state.waiting": "等待首次使用",
+        "health.state.disabled": "已关闭",
+        "health.state.running": "处理中",
+        "health.state.attention": "需要处理",
+        "health.state.unavailable": "不可用",
+        "health.action.capture": "打开捕获设置",
+        "health.action.model": "准备模型",
+        "health.action.obsidian": "打开同步设置",
         "health.profile-unavailable": "无法确认宿主配置身份。请更新宿主或配置独立数据目录后重新加载插件。",
         "health.storage-owner-conflict": "目录属于其他宿主配置。请选择独立目录后重新加载插件。",
         "health.storage-owner-invalid": "无法确认数据目录归属。请检查文件权限或从完整备份恢复到新目录。",
@@ -707,12 +783,23 @@ window.__ModuleLoader__.load({
         'recall.semantic': '本地语义检索',
         'recall.semanticProgress': '已建立 {indexed} / {total} 段索引',
         'recall.semantic.idle': '需要时启动',
+        'recall.semantic.preparing': '正在准备本地模型',
+        'recall.semantic.importing': '正在导入离线模型',
         'recall.semantic.loading': '正在加载模型',
         'recall.semantic.downloading': '正在下载公开模型',
         'recall.semantic.indexing': '正在后台建立索引',
         'recall.semantic.ready': '已就绪',
         'recall.semantic.disabled': '已关闭',
         'recall.semantic.failed': '暂不可用，已使用关键词检索',
+        'recall.model.prepare': '准备模型',
+        'recall.model.retry': '重试准备',
+        'recall.model.cancel': '取消准备',
+        'recall.model.import': '导入离线模型',
+        'recall.model.folder': '模型文件夹',
+        'recall.model.folderHint': '选择包含三份固定模型文件的文件夹。',
+        'recall.model.progress': '{file}：{done} / {total}',
+        'recall.model.preparing': '正在准备本地模型',
+        'recall.model.importing': '正在导入本地模型',
         'recall.budgetOmitted': '已找到，但受上下文限额未放入本轮',
         'recall.local': '本地证据已覆盖问题',
         'recall.completed': '已完成补充查证',
@@ -1911,8 +1998,10 @@ window.__ModuleLoader__.load({
         catch(e){setError(messageOf(e))}finally{setBusy(false)}
       }
       return h('div',null,
-        h('p',{className:'dsh-memory-muted',role:'status'},status?.at?t('obsidian.syncStatus',{time:new Date(status.at).toLocaleTimeString(),sent:status.exported,received:status.imported,conflicts:status.conflicts.length}):t('obsidian.notYet')),
-        h('button',{type:'button',className:'dsh-memory-button',disabled:disabled||busy||!call,onClick:()=>action('obsidianSync')},t('obsidian.now')),
+        h('p',{className:'dsh-memory-muted',role:'status'},status?.at?t('obsidian.syncStatus',{time:new Date(status.at).toLocaleTimeString(),sent:status.exported,received:status.imported,conflicts:status.conflicts.length})+' · '+t('obsidian.mode.'+(status.mode==='full'?'full':'incremental')):t('obsidian.notYet')),
+        status?.pendingFiles?h('p',{className:'dsh-memory-muted'},t('obsidian.pending',{count:status.pendingFiles})):null,
+        status?.fullScanPending?h('p',{className:'dsh-memory-muted'},t('obsidian.fullPending')):null,
+        h('button',{type:'button',className:'dsh-memory-button',disabled:disabled||busy||!call,onClick:()=>action('obsidianSync',{fullScan:true})},t('obsidian.fullScan')),
         error?h('p',{className:'dsh-memory-error-text',role:'alert'},error):null,
         (status?.errors??[]).map((e,i)=>h('p',{key:i,className:'dsh-memory-error-text'},e.file+': '+e.message)),
         (status?.conflicts??[]).map(c=>h('details',{key:c.key,className:'dsh-memory-card'},
@@ -2537,7 +2626,7 @@ window.__ModuleLoader__.load({
       return { removed: before.slice(start, endBefore + 1), added: after.slice(start, endAfter + 1) }
     }
 
-    function HealthStatus({ health, t }) {
+    function HealthStatus({ health, t, onRepair }) {
       if (!health) return null
       const download = () => {
         const blob = new Blob([JSON.stringify(health, null, 2)], { type: 'application/json' })
@@ -2551,9 +2640,68 @@ window.__ModuleLoader__.load({
         health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.memories', health.counts)),
         health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.jobs', health.counts)),
         health.counts?.corruptLines ? h('p', { className: 'dsh-memory-error-text' }, t('health.corrupt', { count: health.counts.corruptLines })) : null,
+        h('div', { className: 'dsh-memory-settings-group' }, Object.entries(health.components ?? {}).map(([key, component]) =>
+          h('div', { key, className: 'dsh-memory-settings-row' },
+            h('span', { className: 'dsh-memory-settings-label' }, t('health.component.' + key)),
+            h('span', { className: component.state === 'attention' || component.state === 'unavailable' ? 'dsh-memory-error-text' : 'dsh-memory-muted', role: 'status' },
+              t('health.state.' + component.state)),
+            component.issue ? h('p', { className: 'dsh-memory-error-text' }, t('health.' + component.issue)) : null,
+            component.action !== 'none' && component.state !== 'disabled' && onRepair
+              ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onRepair(component.action) }, t('health.action.' + component.action)) : null))),
         health.issues.map(code => h('p', { key: code, className: 'dsh-memory-error-text', role: 'status' }, t('health.' + code))),
         h('div', { className: 'dsh-memory-settings-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', onClick: download }, t('health.download'))),
         h('p', { className: 'dsh-memory-muted' }, t('health.hint')))
+    }
+
+    function SemanticModelControls({ call, initial, t }) {
+      const [status, setStatus] = React.useState(initial)
+      const [folder, setFolder] = React.useState('')
+      const [busy, setBusy] = React.useState('')
+      const [error, setError] = React.useState('')
+      const operationVersion = React.useRef(0), statusVersion = React.useRef(0)
+      const active = ['preparing', 'downloading', 'importing', 'loading', 'indexing'].includes(status?.state)
+      React.useEffect(() => {
+        if (!call || (!busy && !active)) return undefined
+        let stopped = false
+        const read = () => {
+          const version = ++statusVersion.current
+          return call('semanticModel', { action: 'status' }).then(value => {
+            if (!stopped && version === statusVersion.current) { setStatus(value); setError('') }
+          }).catch(value => { if (!stopped && version === statusVersion.current) setError(messageOf(value)) })
+        }
+        void read()
+        const timer = setInterval(read, 1200)
+        return () => { stopped = true; clearInterval(timer) }
+      }, [call, busy, active])
+      const run = async (action) => {
+        const version = ++operationVersion.current
+        statusVersion.current++
+        setBusy(action);setError('')
+        try {
+          const result = await call('semanticModel', { action, ...(action === 'import' ? { sourceDir: folder } : {}) })
+          if (version === operationVersion.current) setStatus(result)
+        } catch (value) { if (version === operationVersion.current) setError(messageOf(value)) }
+        finally { if (version === operationVersion.current) setBusy('') }
+      }
+      if (!call || status?.state === 'disabled') return null
+      const progress = status?.progress
+      return h('div', { className: 'dsh-memory-settings-group' },
+        h('p', { className: 'dsh-memory-muted', role: 'status' }, progress?.total
+          ? t('recall.model.progress', { file: progress.asset ?? '', done: String(progress.downloaded ?? 0), total: String(progress.total) })
+          : t('recall.semantic.' + (status?.state ?? 'idle'))),
+        progress?.total ? h('progress', { max: progress.total, value: Math.min(progress.total, progress.downloaded ?? 0), 'aria-label': t('recall.semantic') }) : null,
+        status?.error ? h('p', { className: 'dsh-memory-error-text', role: 'status' }, t('recall.semantic.failed')) : null,
+        h('div', { className: 'dsh-memory-settings-row' },
+          h('span', { className: 'dsh-memory-settings-label' }, t('recall.model.folder')),
+          h('input', { className: 'dsh-memory-settings-input', type: 'text', value: folder, onChange: event => setFolder(event.target.value), 'aria-label': t('recall.model.folder') })),
+        h('p', { className: 'dsh-memory-muted' }, t('recall.model.folderHint')),
+        h('div', { className: 'dsh-memory-settings-buttons' },
+          active
+            ? h('button', { type: 'button', className: 'dsh-memory-button', disabled: !!busy, onClick: () => run('cancel') }, t('recall.model.cancel'))
+            : h('button', { type: 'button', className: 'dsh-memory-button', disabled: !!busy, onClick: () => run(status?.state === 'failed' ? 'retry' : 'prepare') },
+              t(status?.state === 'failed' ? 'recall.model.retry' : 'recall.model.prepare')),
+          h('button', { type: 'button', className: 'dsh-memory-button', disabled: !!busy || !folder.trim(), onClick: () => run('import') }, t('recall.model.import'))),
+        error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null)
     }
 
     function MemoryPanel(props) {
@@ -2903,8 +3051,16 @@ window.__ModuleLoader__.load({
       const viewTabs = h('div', { className: 'dsh-memory-navigation' },
         navButtons(sections.map(item => ({ value: item.views[0], label: t('section.' + item.key), active: item.key === section.key })), t('nav.sections')),
         section.views.length > 1 ? navButtons(section.views.map(value => ({ value, label: t('view.' + value), active: view === value })), t('section.' + section.key), true) : null)
+      const repairHealth = action => {
+        if (action === 'capture') setView('capture')
+        else if (action === 'obsidian') setView('obsidian')
+        else if (action === 'model' && call) {
+          setView('activity')
+          call('semanticModel', { action: 'prepare' }).then(() => load()).catch(value => setError(messageOf(value)))
+        }
+      }
 
-      if (stats?.health?.status === 'unavailable') return h('div', { className: 'dsh-memory-root' }, header, h(HealthStatus, { health: stats.health, t }))
+      if (stats?.health?.status === 'unavailable') return h('div', { className: 'dsh-memory-root' }, header, h(HealthStatus, { health: stats.health, t, onRepair: repairHealth }))
 
       if (view === 'brief') {
         return h('div', { className: 'dsh-memory-root' }, header, viewTabs,
@@ -2918,13 +3074,14 @@ window.__ModuleLoader__.load({
           h('section', { className: 'dsh-memory-hero-cards' },
             h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
             h('div', { className: 'dsh-memory-hero-side' }, h(HeroInsights, { activity: data?.activity, stats, t, locale }))),
-          h(HealthStatus, { health: stats?.health, t }),
+          h(HealthStatus, { health: stats?.health, t, onRepair: repairHealth }),
           h(ActivityHeatmap, { activity: data?.activity, stats, t, locale }),
           stats?.semantic ? h('section', { className: 'dsh-memory-recall-report' },
             h('h3', { className: 'dsh-memory-settings-title' }, t('recall.semantic')),
             h('p', { role: 'status' }, t('recall.semantic.' + stats.semantic.state)),
             stats.semantic.total ? h('p', { className: 'dsh-memory-muted' }, t('recall.semanticProgress', { indexed: String(stats.semantic.indexed), total: String(stats.semantic.total) })) : null,
-            stats.semantic.error ? h('p', { className: 'dsh-memory-error-text' }, stats.semantic.error) : null) : null,
+            stats.semantic.error ? h('p', { className: 'dsh-memory-error-text' }, t('recall.semantic.failed')) : null) : null,
+          stats?.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null,
           h(RecallReport, { report: stats?.lastRecall, t, locale, call, onSaved: load }),
           h(SettingsCard, { stats, call, t, locale, onSaved: load, group: 'activity' }))
       }

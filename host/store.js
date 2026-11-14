@@ -33,13 +33,26 @@ import { blockSourceRecall } from './capture-journal.js'
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { buildRecord, nextRevision } from './records.js'
 import { CACHE_FILE, hotRecord, rememberAuthority } from './cache-records.js'
-import { truncateFile, withFileLock, writeAll } from './persistence.js'
+import { atomicWritePrivate, truncateFile, withFileLock, writeAll } from './persistence.js'
 import { createCompleteBackup } from './backup.js'
 import { validateImport } from './import-validation.js'
 
 export const SCHEMA_VERSION = 2
+export const PURGED_IDS_FILE = 'obsidian-purged-ids.json'
 export const MAX_RECORDS_PER_FILE = 2000
 export const MAX_BYTES_PER_FILE = 4 * 1024 * 1024
+
+function readPurgedIds(root) {
+  const file = join(root, PURGED_IDS_FILE)
+  if (!existsSync(file)) return new Set()
+  let ids
+  try { ids = JSON.parse(readFileSync(file, 'utf8')) }
+  catch { throw new Error('memory store purge ledger is invalid; refusing to start safely') }
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || id === '')) {
+    throw new Error('memory store purge ledger is invalid; refusing to start safely')
+  }
+  return new Set(ids)
+}
 
 /** Detect appends, same-size rewrites, replacements and deletions. */
 export function fileStamp(file) {
@@ -101,7 +114,9 @@ export class MemoryStore {
   #meta
   #beforeWrite = null
   #onChange = null
+  #changeListeners = new Set()
   #backupInFlight = null
+  #purgedIds = new Set()
 
   /**
    * @param {{ root: string, clock?: () => number }} options
@@ -122,6 +137,19 @@ export class MemoryStore {
   setLifecycle({ beforeWrite = null, onChange = null } = {}) {
     this.#beforeWrite = beforeWrite
     this.#onChange = onChange
+  }
+
+  addChangeListener(listener) {
+    if (typeof listener !== 'function') throw new Error('change listener must be a function')
+    this.#changeListeners.add(listener)
+    return () => this.#changeListeners.delete(listener)
+  }
+
+  #notifyChange(event) {
+    this.#onChange?.(event)
+    for (const listener of this.#changeListeners) {
+      try { listener(event) } catch { /* Observers cannot interrupt a committed write. */ }
+    }
   }
 
   snapshot() { return this.#scopes }
@@ -147,6 +175,7 @@ export class MemoryStore {
   /** Create the root directory and load `meta.json`. */
   open() {
     mkdirSync(this.#root, { recursive: true, mode: 0o700 })
+    this.#purgedIds = readPurgedIds(this.#root)
     const metaFile = join(this.#root, 'meta.json')
     let previous = null
     if (existsSync(metaFile)) {
@@ -287,7 +316,7 @@ export class MemoryStore {
         redundant >= Math.max(100, Math.ceil(state.records.size / 4))
       return { record: next, previous: current, changed: true, compact }
     })
-    if (outcome.changed) this.#onChange?.({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
+    if (outcome.changed) this.#notifyChange({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
     if (outcome.compact) this.compact(record.scope, record.projectKey)
     return options.importOnly ? outcome : outcome.record
   }
@@ -368,7 +397,7 @@ export class MemoryStore {
       this.#touch()
       return { previous, record }
     })
-    this.#onChange?.({ type: 'upsert', records: [result.previous, result.record], previous: [result.previous], state })
+    this.#notifyChange({ type: 'upsert', records: [result.previous, result.record], previous: [result.previous], state })
     return result
   }
 
@@ -416,7 +445,7 @@ export class MemoryStore {
       this.#touch()
       return { count: latest.length, changed }
     })
-    this.#onChange?.({ type: 'rewrite', state, changed: outcome.changed })
+    this.#notifyChange({ type: 'rewrite', state, changed: outcome.changed })
     return outcome.count
   }
 
@@ -446,6 +475,10 @@ export class MemoryStore {
         this.#refreshState(state)
         if (!state.records.has(id)) return false
         previous = state.records.get(id)
+        const purgedIds = readPurgedIds(this.#root)
+        purgedIds.add(id)
+        atomicWritePrivate(join(this.#root, PURGED_IDS_FILE), `${JSON.stringify([...purgedIds].sort())}\n`)
+        this.#purgedIds = purgedIds
         blockSourceRecall(this.#root, previous)
         // A physical purge must also discard the derived copy of this record.
         try { unlinkSync(join(this.#root, CACHE_FILE)) } catch (error) {
@@ -476,7 +509,7 @@ export class MemoryStore {
         this.#touch()
         return true
       })
-      if (purged) this.#onChange?.({ type: 'remove', records: [previous], id, state })
+      if (purged) this.#notifyChange({ type: 'remove', records: [previous], id, state })
       return purged
     }
     return false
@@ -492,6 +525,12 @@ export class MemoryStore {
       global: this.list('global', null),
       projects,
     }
+  }
+
+  /** IDs physically purged from authority, retained only to prevent stale note imports. */
+  purgedIds() {
+    this.#purgedIds = readPurgedIds(this.#root)
+    return new Set(this.#purgedIds)
   }
 
   /** Snapshot all recoverable local data; unlike exportData, retain evidence/history. */
@@ -543,7 +582,7 @@ export class MemoryStore {
     state.corrupt = parsed.corrupt
     state.stamp = stamp
     if (parsed.corrupt > 0) this.#quarantine(state.file, parsed.corruptLines)
-    this.#onChange?.({ type: 'refresh', state })
+    this.#notifyChange({ type: 'refresh', state })
   }
 
   /** Keep the first copy of each corrupt line so compaction cannot erase it silently. */

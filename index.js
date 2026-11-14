@@ -22,8 +22,8 @@ import { CapturePipeline } from './host/capture.js'
 import { resolveConfig } from './host/config.js'
 import { projectIdentity } from './host/paths.js'
 import { prepareStorage } from './host/storage-boundary.js'
-import { memoryHealth, storageIssue } from './host/health.js'
-import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, hasContentMatch, isEffectiveAt, isFollowUpQuery, isHistoricalQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallSubjectTerms, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from './host/recall.js'
+import { memoryHealth, probeStorage, storageIssue } from './host/health.js'
+import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, conflictsRecallProject, hasContentMatch, isEffectiveAt, isFollowUpQuery, isHistoricalQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallNamedProjectTerms, recallSubjectTerms, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from './host/recall.js'
 import { analyzeUserMessageControls } from './host/user-controls.js'
 import { sourceResolver } from './host/source-recall.js'
 import { SourceCandidateIndex } from './host/source-index.js'
@@ -198,6 +198,7 @@ function slotEvidence(slot, hits, hasSubquestions) {
     const evidence = typeof hit.record.recallQuote === 'string'
       ? { ...hit, record: { ...hit.record, content: hit.record.recallQuote } }
       : hit
+    if (conflictsRecallProject(hit, recallNamedProjectTerms(slot.query))) return false
     if (slot.requiresRelationTrace) {
       if (!Array.isArray(slot.bridgeTerms) || slot.bridgeTerms.length === 0) return false
       const clauses = String(evidence.record.content ?? '').split(/[;；。！？!?\n]+/u)
@@ -238,6 +239,7 @@ function sameRelationScope(left, right, projectKey) {
 
 function selectionFitsSlot(slot, candidate, quote) {
   const hit = { record: { ...candidate.record, content: quote } }
+  if (conflictsRecallProject(candidate, recallNamedProjectTerms(slot.query))) return false
   if (slot.requiresRelationTrace) return slotEvidence(slot, [hit], true).length > 0
   // A verified model selection can connect paraphrases without shared words.
   // Specific value/property questions retain their stricter entity/unit checks.
@@ -295,6 +297,14 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   let lastInjection = null
   let lastExtraction = null
   let lastRecall = null
+  const panelHealth = { transport: 'pending', selfTest: 'pending' }
+  const storageHealth = { state: 'pending' }
+  const hookHealth = { sessionEventRegistered: false, preStepRegistered: false, events: 0, userMessages: 0, preSteps: 0 }
+  let recallAttempts = 0
+  let recallFailures = 0
+  let lexicalRuns = 0
+  let lexicalFailures = 0
+  let injectionCount = 0
   try {
     storage = prepareStorage(ctx, baseConfig)
     root = storage.root
@@ -319,12 +329,37 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     return
   }
   ctx.effect(() => () => runtime.dispose(), 'dsh-memory.startup-cache')
+  void probeStorage(root).then(result => { storageHealth.state = result.state; storageHealth.issue = result.issue ?? null })
 
   const knowledgeIndex = new KnowledgeRecallIndex(root, store)
   const sourceIndex = new SourceCandidateIndex(store)
   const passageIndex = new SourcePassageIndex(root)
-  const semanticIndex = new SemanticRecallIndex(root, testOptions?.semantic ?? {
-    enabled: storage.isolation === 'profile', allowDownload: true,
+  const semanticOptions = testOptions?.semantic ?? {}
+  const customSemanticLive = semanticOptions.isLive
+  const semanticLive = customSemanticLive ?? ((record, projectKey) => {
+    if (record.kind === 'knowledge') return knowledgeIndex.validate({ record }, projectKey, Date.now())
+    if (record.kind === 'source') return passageIndex.validate({ record }, projectKey)
+    const scopes = record.scope === 'global' ? [{ scope: 'global', projectKey: null }]
+      : [{ scope: 'project', projectKey }]
+    const current = store.find(record.id, scopes)
+    return !!current && current.revision === record.revision && current.contentHash === record.contentHash &&
+      current.status === record.status && current.scope === record.scope && current.projectKey === record.projectKey &&
+      current.quoted !== true && !looksSensitive(current.content)
+  })
+  const semanticIndex = new SemanticRecallIndex(root, {
+    enabled: storage.isolation === 'profile', allowDownload: true, ...semanticOptions,
+    isLive: semanticLive,
+    isLiveMany: semanticOptions.isLiveMany ?? ((hits, projectKey) => {
+      if (typeof customSemanticLive === 'function') return hits.filter(hit => semanticLive(hit.record, projectKey))
+      const valid = new Set()
+      const knowledge = hits.filter(hit => hit.record.kind === 'knowledge')
+      const passages = hits.filter(hit => hit.record.kind === 'source')
+      const memories = hits.filter(hit => hit.record.kind !== 'knowledge' && hit.record.kind !== 'source')
+      for (const hit of knowledgeIndex.validateMany(knowledge, projectKey, Date.now())) valid.add(hit)
+      for (const hit of passageIndex.validateMany(passages, projectKey)) valid.add(hit)
+      for (const hit of memories) if (semanticLive(hit.record, projectKey)) valid.add(hit)
+      return hits.filter(hit => valid.has(hit))
+    }),
   })
   ctx.effect(() => () => semanticIndex.dispose(), 'dsh-memory.semantic')
   const obsidianSync = new ObsidianSync({ root, store, index, getConfig: () => config.obsidian,
@@ -365,10 +400,17 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   })
 
   const applySettings = (patch) => {
+    const previousObsidian = config.obsidian
     const saved = settingsIssue?.code === 'settings-invalid' ? repairSettings(root, patch) : writeSettings(root, patch)
     config = resolveConfig(mergeConfigObjects(rawConfig, settingsToConfig(saved)))
     settingsIssue = null
     capture.setConfig(config)
+    if (previousObsidian?.autoSync !== config.obsidian?.autoSync || previousObsidian?.vaultPath !== config.obsidian?.vaultPath ||
+        previousObsidian?.folder !== config.obsidian?.folder) {
+      void obsidianSync.configurationChanged().catch((error) => {
+        ctx.logger?.warn?.(`[dsh-memory] Obsidian sync after settings change failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
     // Settings can unblock a previously exhausted budget; resume journaled
     // pending work through the normal lifecycle instead of waiting for a test flush.
     capture.resume().catch((error) => {
@@ -377,16 +419,25 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     return saved
   }
 
-  ctx.on('session/event', (session, event) => {
-    try {
-      capture.observe(session, event)
-    } catch (error) {
-      ctx.logger?.warn?.(`[dsh-memory] capture skipped: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
+  try {
+    ctx.on('session/event', (session, event) => {
+      hookHealth.events++
+      const source = event?.data?.source ?? event?.data?.message?.source
+      if (event?.type === 'user/message' && (source === undefined || source === null || source.kind === 'user')) hookHealth.userMessages++
+      try {
+        capture.observe(session, event)
+      } catch (error) {
+        ctx.logger?.warn?.(`[dsh-memory] capture skipped: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })
+    hookHealth.sessionEventRegistered = true
+  } catch { hookHealth.sessionEventRegistered = false }
 
-  ctx.on('agent/pre-step', async (payload, next) => {
-    const decision = await next()
+  try {
+    ctx.on('agent/pre-step', async (payload, next) => {
+    hookHealth.preSteps++
+    let decision
+    try { decision = await next() } catch (error) { recallFailures++; throw error }
     if (decision === null || typeof decision !== 'object' || decision.kind !== 'enter') return decision
 
     const payloadMessages = Array.isArray(payload?.messages) ? payload.messages : []
@@ -398,6 +449,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     try {
       if (payload?.signal?.aborted === true) return withoutPrevious
       if (!config.inject.enabled) return withoutPrevious
+      recallAttempts++
       runtime.synchronize()
 
       const session = sessionOf(ctx, payload?.agent)
@@ -423,6 +475,13 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
 
     const identity = projectIdentity(cwd)
     const now = Date.now()
+    const lexicalSearch = (...args) => {
+      try {
+        const result = index.search(...args)
+        lexicalRuns++
+        return result
+      } catch (error) { lexicalFailures++; throw error }
+    }
     const queryPlan = recallQueryPlan(query, previousQuery, followUp)
     const queryTimeIntent = recallTimeIntent(query, now)
     const historicalFollowUp = followUp && isHistoricalQuery(previousQuery)
@@ -462,7 +521,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       const timeIntent = planItem.timeIntent ?? (carriedTime.kind !== 'current' ? carriedTime : attemptTimeIntent)
       const attemptTimes = planItem.role === 'root' ? slotTimes : [timeIntent]
       const historical = attemptTimes.some(time => time.kind !== 'current')
-      let candidate = index.search(attempt, {
+      let candidate = lexicalSearch(attempt, {
         statuses: historical ? ['active', 'superseded'] : ['active'],
         includeExpired: historical,
         scopes: ['project', 'global'],
@@ -476,8 +535,10 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       candidate = candidate.filter(hit => attemptTimes.some(time => isSafeRecallRecord(hit.record, identity.key, time, now)))
       if (recallObserver !== null) traceRecall(recallObserver, { phase: 'search', query: attempt, ids: candidate.map((hit) => hit.record.id) })
       let scoped = candidate
-      if (planItem.role === 'root' && planItem.entityTerms.length > 0) {
-        scoped = candidate.filter(hit => matchesRecallAttribute(hit, attempt, planItem.detail, planItem.entityTerms))
+      const namedProjects = planItem.role === 'root' ? recallNamedProjectTerms(attempt) : []
+      if (planItem.role === 'root' && (planItem.entityTerms.length > 0 || namedProjects.length > 0)) {
+        scoped = candidate.filter(hit => !conflictsRecallProject(hit, namedProjects) &&
+          (planItem.entityTerms.length === 0 || matchesRecallAttribute(hit, attempt, planItem.detail, planItem.entityTerms)))
         if (recallObserver !== null) traceRecall(recallObserver, {
           phase: 'scope', query: attempt, entityTerms: planItem.entityTerms,
           ids: scoped.map((hit) => hit.record.id), excludedIds: candidate.filter((hit) => !scoped.includes(hit)).map((hit) => hit.record.id),
@@ -584,7 +645,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     }
     const relationSearch = (searchQuery, timeIntent) => {
       const historical = timeIntent.kind !== 'current'
-      const found = index.search(searchQuery, {
+      const found = lexicalSearch(searchQuery, {
         statuses: historical ? ['active', 'superseded'] : ['active'],
         includeExpired: historical,
         scopes: ['project', 'global'], projectKey: identity.key, now, limit: 40,
@@ -736,6 +797,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
           const sourceCandidates = [...sourceCandidatesById.values()]
           const evidence = readSupportingSource(entry.plan, sourceCandidates)
           if (!evidence) continue
+          if (conflictsRecallProject(evidence, recallNamedProjectTerms(entry.plan.query))) continue
           const hit = { ...evidence, score: Math.max(1, evidence.score ?? 0), matched: [], termScores: [] }
           const quotes = sourceHits.get(hit.record.id) ?? []
           if (!quotes.some(other => other.record.content === hit.record.content)) quotes.push(hit)
@@ -1066,12 +1128,16 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       if (recallObserver !== null) traceRecall(recallObserver, { phase: 'inject', status: 'injected', ids: block.ids, text: block.text, tokens: block.estimatedTokens, budget })
       lastInjection = { at: now, tokens: block.estimatedTokens, items: block.itemCount, budget, followUp, gate: { auto: hits.length, gray: grayById.size } }
       appendUsage(root, { at: now, kind: 'inject', tokens: block.estimatedTokens, items: block.itemCount, budget })
+      injectionCount++
       return { ...decision, messages: [...retained, makeMemoryMessage(block.text)] }
     } catch (error) {
+      recallFailures++
       ctx.logger?.warn?.(`[dsh-memory] recall skipped: ${error instanceof Error ? error.message : String(error)}`)
       return withoutPrevious
     }
   })
+    hookHealth.preStepRegistered = true
+  } catch { hookHealth.preStepRegistered = false }
 
   try {
     const systemPrompt = ctx.get('systemPrompt')
@@ -1151,6 +1217,27 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     getLastRecall: () => lastRecall,
     invalidateRecall: () => { lastRecall = null },
     getSemanticStatus: () => semanticIndex.status(),
+    prepareSemantic: (input) => semanticIndex.prepare(input),
+    getHealthChecks: (captureSnapshot) => {
+      const snapshot = captureSnapshot ?? capture.status()
+      const counts = snapshot.counts ?? {}
+      const routeUnavailable = snapshot.tasks?.filter(task => task.status === 'pending' && task.reason === '模型路由暂不可用').length ?? 0
+      const obsidian = obsidianSync.status()
+      return {
+        storage: storageHealth,
+        panel: panelHealth,
+        hooks: hookHealth,
+        capture: { enabled: config.capture.enabled, ...counts },
+        extraction: { enabled: config.capture.enabled, running: counts.running ?? 0, routeUnavailable,
+          lastStatus: ['done', 'failed', 'partial', 'unknown'].includes(lastExtraction?.status) ? lastExtraction.status : null },
+        lexical: { runs: lexicalRuns, failures: lexicalFailures },
+        semantic: { state: semanticIndex.status().state },
+        injection: { enabled: config.inject.enabled, attempts: recallAttempts, injected: injectionCount, failures: recallFailures },
+        obsidian: { enabled: obsidian.enabled, running: obsidian.running, lastAt: obsidian.at,
+          errors: (obsidian.errors?.length ?? 0) + (obsidian.watcherErrors ?? 0), watchersReady: obsidian.watchersReady },
+      }
+    },
+    onPanelRequest: () => { panelHealth.selfTest = 'ready' },
     getSettingsIssue: () => settingsIssue,
     isolation: storage.isolation,
     getCaptureStatus: () => capture.status(),
@@ -1159,7 +1246,9 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     applySettings,
   })
     .then(async (result) => {
-      const diagnostic = { ...result, at: Date.now(), selfTest: null }
+      panelHealth.transport = result.transport
+      panelHealth.selfTest = result.transport === 'unavailable' ? 'failed' : 'pending'
+      const diagnostic = { at: Date.now(), transport: result.transport, selfTest: 'pending' }
       try {
         const gateway = ctx.get('typertGateway')
         if (result.transport === 'typert' && typeof gateway?.invoke === 'function') {
@@ -1171,67 +1260,31 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
             interactions: 'none',
             dispose: async () => {},
           }
-          const value = await gateway.invoke({
+          await gateway.invoke({
             namespace: PANEL_NAMESPACE,
             method: 'stats',
             args: { input: {} },
             peer,
           })
-          const listed = await gateway.invoke({
-            namespace: PANEL_NAMESPACE,
-            method: 'list',
-            args: { input: { scope: 'project', limit: 1 } },
-            peer,
-          })
-          const profile = await gateway.invoke({
-            namespace: PANEL_NAMESPACE,
-            method: 'profile',
-            args: { input: { limit: 3 } },
-            peer,
-          })
-          const graph = await gateway.invoke({
-            namespace: PANEL_NAMESPACE,
-            method: 'knowledgeGraph',
-            args: { input: { scope: 'all' } },
-            peer,
-          })
-          const library = await gateway.invoke({
-            namespace: PANEL_NAMESPACE,
-            method: 'knowledgeList',
-            args: { input: {} },
-            peer,
-          })
-          diagnostic.selfTest = {
-            ok: true,
-            value,
-            list: { ok: true, total: listed?.total ?? null, items: Array.isArray(listed?.items) ? listed.items.length : 0 },
-            profile: {
-              ok: true,
-              traits: typeof profile?.total === 'number' ? profile.total : null,
-              top: Array.isArray(profile?.traits) && profile.traits.length > 0 ? profile.traits[0].statement : null,
-            },
-            knowledge: {
-              ok: true,
-              memories: typeof graph?.memoryCount === 'number' ? graph.memoryCount : null,
-              topics: typeof graph?.topicCount === 'number' ? graph.topicCount : null,
-              notes: typeof library?.total === 'number' ? library.total : null,
-            },
-          }
+          panelHealth.selfTest = 'ready'
+          diagnostic.selfTest = 'ready'
         } else {
-          diagnostic.selfTest = { ok: false, reason: `transport is ${result.transport}` }
+          diagnostic.selfTest = result.transport === 'unavailable' ? 'failed' : 'pending'
         }
-      } catch (error) {
-        diagnostic.selfTest = { ok: false, reason: error instanceof Error ? error.message : String(error) }
+      } catch {
+        panelHealth.selfTest = 'failed'
+        diagnostic.selfTest = 'failed'
       }
       try {
         writeFileSync(join(root, 'panel-transport.json'), `${JSON.stringify(diagnostic, null, 2)}\n`, { mode: 0o600 })
       } catch {
         // The diagnostic is advisory; never break activation over it.
       }
-      ctx.logger?.info?.(`[dsh-memory] panel transport: ${result.transport}${diagnostic.selfTest?.ok === true ? ' (gateway self-test ok)' : ''}`)
+      ctx.logger?.info?.(`[dsh-memory] panel transport: ${result.transport}${diagnostic.selfTest === 'ready' ? ' (gateway self-test ok)' : ''}`)
     })
-    .catch((error) => {
-      ctx.logger?.warn?.(`[dsh-memory] Settings panel wiring failed: ${error instanceof Error ? error.message : String(error)}`)
+    .catch(() => {
+      panelHealth.transport = 'unavailable'; panelHealth.selfTest = 'failed'
+      ctx.logger?.warn?.('[dsh-memory] Settings panel wiring failed')
     })
 
   ctx.logger?.info?.(`[dsh-memory] ready (root=${root}, memories=${index.size}, inject=${config.inject.enabled}, capture=${config.capture.enabled})`)

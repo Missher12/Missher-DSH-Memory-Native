@@ -53,6 +53,7 @@ import {
   knowledgeSync,
   captureRetry,
   captureStatus,
+  semanticModel,
   memoryHistory,
   mergeTopics,
   obsidianExport,
@@ -126,8 +127,11 @@ export function createPanelBackend(options) {
     getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
     getLastRecall: typeof options.getLastRecall === 'function' ? options.getLastRecall : null,
     getSemanticStatus: typeof options.getSemanticStatus === 'function' ? options.getSemanticStatus : null,
+    prepareSemantic: typeof options.prepareSemantic === 'function' ? options.prepareSemantic : null,
     getSettingsIssue: typeof options.getSettingsIssue === 'function' ? options.getSettingsIssue : null,
     getCaptureStatus: typeof options.getCaptureStatus === 'function' ? options.getCaptureStatus : null,
+    getHealthChecks: typeof options.getHealthChecks === 'function' ? options.getHealthChecks : null,
+    onPanelRequest: typeof options.onPanelRequest === 'function' ? options.onPanelRequest : null,
     retryCapture: typeof options.retryCapture === 'function' ? options.retryCapture : null,
     refreshKnowledge: typeof options.refreshKnowledge === 'function' ? options.refreshKnowledge : null,
     get config() {
@@ -161,7 +165,7 @@ export function createPanelBackend(options) {
   backend.obsidianExport = (input) => obsidianExport(backend, input)
   backend.obsidianImport = (input) => obsidianImport(backend, input)
   backend.obsidianStatus = () => obsidianStatus(backend)
-  backend.obsidianSync = () => syncObsidian(backend)
+  backend.obsidianSync = (input) => syncObsidian(backend, input)
   backend.obsidianResolve = input => resolveObsidianConflict(backend, input)
   backend.knowledgeGraph = (input) => knowledgeGraph(backend, input)
   backend.knowledgePromote = (input) => knowledgePromote(backend, input)
@@ -171,11 +175,13 @@ export function createPanelBackend(options) {
   backend.knowledgeSync = (input) => knowledgeSync(backend, input)
   backend.captureStatus = () => captureStatus(backend)
   backend.captureRetry = (input) => captureRetry(backend, input)
+  backend.semanticModel = (input) => semanticModel(backend, input)
   const logCall = makePanelCallLogger(backend.root)
   for (const method of PANEL_METHODS) {
     const operation = backend[method]
     backend[method] = (input) => {
       const at = Date.now()
+      backend.onPanelRequest?.(method)
       const refreshKnowledge = (resolved) => {
         const shouldRefresh = method === 'knowledgePromote' || method === 'knowledgeSave' && resolved?.saved !== false ||
           method === 'knowledgeSync' && backend.config?.obsidian?.autoSync !== true
@@ -353,6 +359,10 @@ export async function bindTypertRemote(ctx, backend) {
 
     async captureRetry(input) {
       return this.delegate.captureRetry(input)
+    }
+
+    async semanticModel(input) {
+      return this.delegate.semanticModel(input)
     }
   }
 

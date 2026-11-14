@@ -274,11 +274,11 @@ export function buildReadingPages({ records, notes, files, folder, now = Date.no
   return { pages, sources, aliasProofs }
 }
 
-export async function refreshReadingPages(sync, dir, config, result) {
+export async function refreshReadingPages(sync, dir, config, result, { force = false } = {}) {
   const records = sync.store.listAll({ includeDeleted: true })
   const now = Date.now()
   const signature = digest(JSON.stringify([sync.state.entries, records.map(r => [r.id, r.revision, r.status, r.validFrom > now, Number.isFinite(r.validTo) && r.validTo <= now])]))
-  if (signature === sync.readingSignature) return
+  if (!force && signature === sync.readingSignature) return
   for (const path of ['阅读', '阅读/项目', '阅读/主题', '阅读/手动修改', '阅读/决策', '阅读/知识库', '阅读/偏好', '阅读/经历']) {
     const target = join(dir, path)
     await mkdir(target, { recursive: true, mode: 0o700 })

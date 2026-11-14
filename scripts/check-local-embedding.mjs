@@ -33,5 +33,7 @@ try{
  assert.equal(engine.state,'ready');assert.equal(vectors.length,2)
  for(const v of vectors){assert.equal(v.length,384);assert.ok(v.every(Number.isFinite));const n=Math.hypot(...v);assert.ok(n>.99&&n<1.01)}
  assert.notDeepEqual(vectors[0],vectors[1])
- console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,state:engine.state,vectors:vectors.length,dimensions:384,elapsedMs:Math.round(performance.now()-start)}))
+ const repeated=await engine.embed(['澄岚服务日志保留37天。','相机镜头使用35毫米胶片。'],'passage')
+ assert.deepEqual(repeated,vectors,'A ready WASM worker must serve a second probe with the same model output')
+ console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,state:engine.state,probes:2,vectors:vectors.length,dimensions:384,elapsedMs:Math.round(performance.now()-start)}))
 }finally{engine?.dispose();rmSync(root,{recursive:true,force:true})}

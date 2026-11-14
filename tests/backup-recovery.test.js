@@ -54,6 +54,20 @@ test('complete backup restores history, deletion, source barriers, unknown calls
   assert.equal(readCaptureTasks(restored)[0].callState, 'unknown')
 })
 
+test('complete backup preserves the ID-only Obsidian purge ledger', async t => {
+  const { parent, root, store } = setup(t)
+  const row = store.write({ kind: 'fact', scope: 'global', content: '这条记忆用于验证清除记录备份。', confidence: .9 }).record
+  store.remove(row.id, [{ scope: 'global' }])
+  store.purge(row.id, [{ scope: 'global' }])
+  const backup = await store.backup()
+  const { restoreBackup } = await import('../host/backup.js')
+  const restored = join(parent, 'restored-purge-ledger')
+  await restoreBackup(backup, restored)
+  const fresh = new MemoryStore({ root: restored }).open()
+  assert.deepEqual(fresh.purgedIds(), new Set([row.id]))
+  assert.deepEqual(JSON.parse(fs.readFileSync(join(restored, 'obsidian-purged-ids.json'), 'utf8')), [row.id])
+})
+
 test('same-clock backups remain distinct and an existing target is never replaced', async t => {
   const { parent, store } = setup(t)
   const first = await store.backup(), second = await store.backup()

@@ -7,7 +7,7 @@ import { atomicWritePrivate, syncDirectory, writeAll } from './persistence.js'
 
 const FORMAT = 'dsh-memory-backup'
 const DIRECTORIES = new Set(['global', 'projects', 'capture', 'knowledge', 'recall'])
-const FILES = new Set(['meta.json', 'settings.json', 'usage.jsonl', 'obsidian-sync.json', 'corrupt-lines.jsonl', 'data-owner.json'])
+const FILES = new Set(['meta.json', 'settings.json', 'usage.jsonl', 'obsidian-sync.json', 'obsidian-purged-ids.json', 'corrupt-lines.jsonl', 'data-owner.json'])
 const MAX_FILES = 200_000, MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 const stamp = s => [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs].join(':')
 const allowedFile = name => FILES.has(name) || /^obsidian-state-[a-f0-9]+\.json$/u.test(name) || /^settings\.invalid-[a-f0-9-]+\.json$/u.test(name)

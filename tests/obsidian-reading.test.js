@@ -145,6 +145,7 @@ test('renamed source files still resolve and unchanged sync does not rewrite rea
 test('personal additions survive refresh and restart; edits inside generated text get a visible preserved copy', async t => {
   const c = setup(t), record = c.write({ content: '原始的备份约定' })
   await c.sync.run()
+  c.sync.dispose()
   const page = topicPages(c.dir)[0]
   writeFileSync(page.file, page.text.replace('原始的备份约定', '我的区内修改') + '\n我自己的补充不能丢。\n')
   c.store.update(record.id, {content:'更新后的备份约定'}, [{scope:'project',projectKey:'project-alpha'}])

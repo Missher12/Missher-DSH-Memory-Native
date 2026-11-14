@@ -46,7 +46,7 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'projectBrief', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'projectBrief', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'semanticModel'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */
@@ -335,8 +335,9 @@ export function computeStats(backend, raw) {
   const maintenance = backend.root ? readMaintenance(backend.root) : null
   const settingsIssue = backend.getSettingsIssue?.() ?? null
   const captureState = backend.getCaptureStatus?.()
+  const healthChecks = backend.getHealthChecks?.(captureState) ?? {}
   return {
-    health: memoryHealth({ isolation: backend.isolation, settingsIssue, maintenance, capture: captureState?.counts, store: backend.store, total, deleted }),
+    health: memoryHealth({ isolation: backend.isolation, settingsIssue, maintenance, capture: captureState?.counts, store: backend.store, total, deleted, checks: healthChecks }),
     active: counts.active,
     candidate: counts.candidate,
     archived: counts.archived,
@@ -793,9 +794,27 @@ export function obsidianStatus(backend) {
   }
 }
 
-export function syncObsidian(backend) {
+export function syncObsidian(backend, raw) {
   if (!backend.syncService) throw new PanelInputError('自动同步服务不可用')
-  return backend.syncService.run()
+  const input = asObject(raw)
+  return backend.syncService.run(input.fullScan === true ? { fullScan: true, manual: true } : null)
+}
+
+export async function semanticModel(backend, raw) {
+  const input = asObject(raw), action = input.action ?? 'status'
+  const valid = ['status', 'prepare', 'retry', 'cancel', 'import']
+  if (!valid.includes(action)) throw new PanelInputError('无效的本地语义模型操作')
+  if (action === 'status') return backend.getSemanticStatus?.() ?? { state: 'unavailable' }
+  if (action === 'import' && (typeof input.sourceDir !== 'string' || input.sourceDir.trim() === '' || input.sourceDir.length > 4096)) {
+    throw new PanelInputError('请输入模型文件夹路径')
+  }
+  if (typeof backend.prepareSemantic !== 'function') throw new PanelInputError('本地语义模型不可用')
+  try {
+    return await backend.prepareSemantic({ action, ...(action === 'import' ? { sourceDir: input.sourceDir.trim() } : {}) })
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new PanelInputError('模型准备已取消')
+    throw new PanelInputError('本地语义模型准备失败；请检查网络或离线模型文件后重试')
+  }
 }
 
 export function resolveObsidianConflict(backend, raw) {

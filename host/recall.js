@@ -325,6 +325,26 @@ export function matchesRecallEntity(hit, entityTerms) {
 const EXPLICIT_OBJECT_PATTERN = /[\p{L}\p{N}]+(?:设备|服务|任务|组件|快照|系统|作业|主机|模块|数据库|缓存|路由器|容器|集群|接口)/u
 const PROJECT_OBJECT_REFERENCE_PATTERN = /([\p{Script=Han}]{1,6})(?:项目|工程)(\s*的\s*|[^,，;；。!?？\n:：]{0,40}[：:]\s*)(路由器|快照|设备|服务|任务|组件|系统|作业|主机|模块|数据库|缓存|日志|队列|容器|集群|接口|账号)/gu
 
+const genericProjectNames = new Set(['本', '当前', '这个', '那个', '该', '此', '我们', '我的', '本次', '不同', '其他', '另一个', '所有'])
+function namedProjectPhrases(text) {
+  return [...String(text ?? '').normalize('NFKC').matchAll(/([\p{Script=Han}]{1,10})(?:项目|工程)/gu)]
+    .map(match => match[1].toLowerCase())
+    .filter(name => !genericProjectNames.has(name))
+}
+
+/** Explicitly named projects in the question, when the text mentions them. */
+export function recallNamedProjectTerms(text) {
+  return [...new Set(namedProjectPhrases(text))]
+}
+
+/** A bare fact may belong to the current project; an explicitly different project may not. */
+export function conflictsRecallProject(hit, projectTerms) {
+  if (!Array.isArray(projectTerms) || projectTerms.length === 0) return false
+  const named = namedProjectPhrases(hit?.record?.content)
+  if (named.length === 0) return false
+  return !named.some(name => projectTerms.some(term => name.includes(term.toLowerCase()) || term.toLowerCase().includes(name)))
+}
+
 function clausesWithEntityContext(content, entityTerms) {
   const pieces = String(content ?? '').split(/([,，;；。!?？\n]+)/u)
   const clauses = []

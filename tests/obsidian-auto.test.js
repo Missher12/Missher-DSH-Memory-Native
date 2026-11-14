@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,10 +16,15 @@ function setup(t) {
   const record=store.write({kind:'fact',scope:'global',content:'原始事实 12345',confidence:.9}).record
   index.upsert(record)
   const config={vaultPath:vault,folder:'DSH Memory',autoSync:true}
-  const make=()=>new ObsidianSync({root:store.root,store,index,getConfig:()=>config})
+  const make=(extra={})=>new ObsidianSync({root:store.root,store,index,getConfig:()=>config,...extra})
   const sync=make(), file=join(vault,config.folder,record.id+'.md')
   t.after(()=>{sync.dispose();rmSync(root,{recursive:true,force:true})})
   return {root,vault,store,index,record,config,sync,file,make}
+}
+async function waitFor(predicate, timeoutMs=4000) {
+ const deadline=Date.now()+timeoutMs
+ while(Date.now()<deadline){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,25))}
+ assert.ok(predicate(),'condition did not become true before timeout')
 }
 
 test('automatic reconciliation imports and exports only changed content, including renamed notes',async t=>{
@@ -133,4 +139,151 @@ test('knowledge deletion remains absent after choosing the deleted side',async t
  await c.sync.resolve({...conflict,side:'vault'})
  assert.equal(existsSync(local),false)
  await c.sync.run();assert.equal(existsSync(external),false)
+})
+
+test('host record creation, edits and forgetting trigger incremental export without a scheduled full scan',async t=>{
+ const c=setup(t);c.sync.dispose()
+ const sync=c.make({watcherFactory:()=>{const watcher=new EventEmitter();watcher.close=()=>{};return watcher}})
+ t.after(()=>sync.dispose());await sync.run()
+ const created=c.store.write({kind:'fact',scope:'global',content:'宿主新建的自动导出事实 65432'}).record
+ c.index.upsert(created)
+ const createdFile=join(c.vault,c.config.folder,created.id+'.md')
+ await waitFor(()=>existsSync(createdFile)&&readFileSync(createdFile,'utf8').includes('宿主新建的自动导出事实 65432'))
+ await waitFor(()=>sync.status().mode==='incremental')
+ assert.equal(sync.status().mode,'incremental')
+ c.store.update(created.id,{content:'由宿主自动导出的新版本'})
+ await waitFor(()=>readFileSync(createdFile,'utf8').includes('由宿主自动导出的新版本'))
+ c.store.remove(created.id)
+ await waitFor(()=>!existsSync(createdFile))
+ assert.equal(c.store.find(created.id).status,'deleted')
+})
+
+test('real watcher events from generated memory and reading files do not upgrade a normal update to full scan',async t=>{
+ const c=setup(t);await c.sync.run()
+ const lastFullScanAt=c.sync.status().lastFullScanAt
+ c.store.update(c.record.id,{content:'需要由真实文件监听器同步的更新'})
+ await waitFor(()=>readFileSync(c.file,'utf8').includes('需要由真实文件监听器同步的更新'))
+ await waitFor(()=>c.sync.status().mode==='incremental'&&!c.sync.status().running)
+ await new Promise(resolve=>setTimeout(resolve,700))
+ assert.equal(c.sync.status().mode,'incremental')
+ assert.equal(c.sync.status().lastFullScanAt,lastFullScanAt)
+ assert.equal(c.sync.status().fullScanPending,false)
+})
+
+test('configuration changes immediately reconcile and rebind automatic sync',async t=>{
+ const c=setup(t);await c.sync.run()
+ c.config.folder='Renamed Memory'
+ await c.sync.configurationChanged()
+ const renamed=join(c.vault,c.config.folder,c.record.id+'.md')
+ assert.ok(readFileSync(renamed,'utf8').includes('原始事实 12345'))
+ c.config.autoSync=false;await c.sync.configurationChanged()
+ c.store.update(c.record.id,{content:'暂停期间的新版本'})
+ c.config.autoSync=true;await c.sync.configurationChanged()
+ assert.ok(readFileSync(renamed,'utf8').includes('暂停期间的新版本'))
+ assert.equal(c.sync.status().watchersReady,true)
+})
+
+test('restart full reconciliation catches host authority changes missed while the watcher was offline',async t=>{
+ const c=setup(t);await c.sync.run();c.sync.dispose()
+ c.store.update(c.record.id,{content:'停机期间由宿主修改的事实'})
+ const restarted=c.make();t.after(()=>restarted.dispose())
+ const result=await restarted.run({fullScan:true})
+ assert.equal(result.exported,1)
+ assert.ok(readFileSync(c.file,'utf8').includes('停机期间由宿主修改的事实'))
+})
+
+test('physical purge survives an immediate full sync and cannot be revived from an old note after restart',async t=>{
+ const c=setup(t);await c.sync.run()
+ const oldNote=readFileSync(c.file,'utf8'),scopes=[{scope:'global',projectKey:null}]
+ c.config.autoSync=false
+ c.store.remove(c.record.id,scopes)
+ assert.equal(c.store.purge(c.record.id,scopes),true)
+ c.config.autoSync=true
+ const purged=await c.sync.run({fullScan:true})
+ assert.deepEqual(purged.conflicts,[]);assert.deepEqual(purged.errors,[]);assert.equal(existsSync(c.file),false)
+ const stateName=readdirSync(c.store.root).find(name=>name.startsWith('obsidian-state-'))
+ assert.equal(JSON.parse(readFileSync(join(c.store.root,stateName),'utf8')).purged[c.record.id],true)
+ c.sync.dispose();writeFileSync(c.file,oldNote)
+ const restarted=c.make();t.after(()=>restarted.dispose())
+ const recovered=await restarted.run({fullScan:true})
+ assert.deepEqual(recovered.conflicts,[]);assert.deepEqual(recovered.errors,[]);assert.equal(recovered.imported,0)
+ assert.equal(existsSync(c.file),false);assert.equal(c.store.find(c.record.id,scopes),undefined)
+})
+
+test('purge ledger survives exit before auto-sync and follows the data root across folder changes',async t=>{
+ const c=setup(t);await c.sync.run()
+ const oldNote=readFileSync(c.file,'utf8'),scopes=[{scope:'global',projectKey:null}]
+ const observer=new MemoryStore({root:c.store.root}).open()
+ c.config.autoSync=false
+ c.store.remove(c.record.id,scopes)
+ assert.equal(c.store.purge(c.record.id,scopes),true)
+ assert.ok(readFileSync(join(c.store.root,'obsidian-purged-ids.json'),'utf8').includes(c.record.id))
+ assert.deepEqual(observer.purgedIds(),new Set([c.record.id]))
+ c.sync.dispose()
+
+ const reopened=new MemoryStore({root:c.store.root}).open(), index=new MemoryIndex()
+ assert.deepEqual(reopened.purgedIds(),new Set([c.record.id]))
+ c.config.folder='Renamed Memory'
+ const renamed=join(c.vault,c.config.folder)
+ mkdirSync(renamed,{recursive:true});writeFileSync(join(renamed,c.record.id+'.md'),oldNote)
+ const restarted=new ObsidianSync({root:reopened.root,store:reopened,index,getConfig:()=>c.config})
+ t.after(()=>restarted.dispose())
+ c.config.autoSync=true
+ const result=await restarted.run({fullScan:true})
+ assert.deepEqual(result.conflicts,[]);assert.deepEqual(result.errors,[])
+ assert.equal(result.imported,0);assert.equal(existsSync(join(renamed,c.record.id+'.md')),false)
+ assert.equal(reopened.find(c.record.id,scopes),undefined)
+})
+
+test('reading watcher repairs an edited generated page and a full scan restores a missing page',async t=>{
+ const c=setup(t);await c.sync.run()
+ const home=join(c.vault,c.config.folder,'阅读','首页.md')
+ writeFileSync(home,readFileSync(home,'utf8').replace('先按用途阅读','手动改过的首页标题'))
+ await waitFor(()=>readFileSync(home,'utf8').includes('先按用途阅读'))
+ const copies=readdirSync(join(c.vault,c.config.folder,'阅读','手动修改'))
+ assert.equal(copies.length,1)
+ assert.ok(readFileSync(join(c.vault,c.config.folder,'阅读','手动修改',copies[0]),'utf8').includes('手动改过的首页标题'))
+ rmSync(home)
+ await c.sync.run({fullScan:true})
+ assert.ok(existsSync(home))
+})
+
+test('two conflict resolutions queued during a busy sync run serially and return their own results',async t=>{
+ const c=setup(t), second=c.store.write({kind:'fact',scope:'global',content:'第二条基线事实 98765'}).record
+ c.index.upsert(second);c.config.autoSync=false
+ await c.sync.run()
+ c.store.update(c.record.id,{content:'宿主第一条版本'})
+ c.store.update(second.id,{content:'宿主第二条版本'})
+ const firstFile=c.file, secondFile=join(c.vault,c.config.folder,second.id+'.md')
+ writeFileSync(firstFile,readFileSync(firstFile,'utf8').replace('原始事实 12345','外部第一条版本'))
+ writeFileSync(secondFile,readFileSync(secondFile,'utf8').replace('第二条基线事实 98765','外部第二条版本'))
+ const conflicts=(await c.sync.run({fullScan:true})).conflicts
+ assert.equal(conflicts.length,2)
+ const blockedFile=join(c.vault,c.config.folder,conflicts[0].file)
+ const original=c.sync.cachedText.bind(c.sync)
+ let entered;const enteredPromise=new Promise(resolve=>{entered=resolve})
+ let release;const gate=new Promise(resolve=>{release=resolve})
+ c.sync.cachedText=async file=>{if(file===blockedFile){entered();await gate}return original(file)}
+ const active=c.sync.run({fullScan:true})
+ await enteredPromise
+ const first=c.sync.resolve({...conflicts[0],side:'vault'})
+ const secondResolution=c.sync.resolve({...conflicts[1],side:'vault'})
+ release();await active
+ const [firstResult,secondResult]=await Promise.all([first,secondResolution])
+ assert.equal(firstResult.conflicts.length,1)
+ assert.equal(secondResult.conflicts.length,0)
+ assert.equal(c.store.find(c.record.id).content,'外部第一条版本')
+ assert.equal(c.store.find(second.id).content,'外部第二条版本')
+})
+
+test('a failed filesystem watcher is recreated on the next reconciliation',async t=>{
+ const c=setup(t), opened=[]
+ const sync=c.make({watcherFactory:(...args)=>{const watcher=new EventEmitter();watcher.close=()=>{};opened.push(watcher);return watcher}})
+ t.after(()=>sync.dispose())
+ await sync.run()
+ assert.equal(sync.status().watchersReady,true)
+ const before=opened.length
+ opened[0].emit('error',new Error('watch lost'))
+ await waitFor(()=>opened.length>before&&sync.status().watchersReady)
+ assert.equal(sync.status().watcherErrors,0)
 })
