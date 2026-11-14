@@ -145,9 +145,14 @@ export async function restoreBackup(backup, target) {
       if (copied.bytes !== file.bytes || copied.sha256 !== file.sha256) throw new Error('恢复期间备份校验发生变化，未应用。')
     }
     await syncTreeDirectories(stage)
-    // Reserve a previously absent path; rename can only replace our empty dir.
-    mkdirSync(destination, { mode: 0o700 }); reserved = true
-    renameSync(stage, destination); reserved = false
+    if (process.platform === 'win32') {
+      // Windows directory rename requires an absent destination and rejects a race winner.
+      renameSync(stage, destination)
+    } else {
+      // POSIX rename can atomically replace the empty reservation, preserving no-overwrite behavior.
+      mkdirSync(destination, { mode: 0o700 }); reserved = true
+      renameSync(stage, destination); reserved = false
+    }
     syncDirectory(parent)
     return { files: manifest.files.length, bytes: manifest.files.reduce((n, f) => n + f.bytes, 0) }
   } catch (error) {

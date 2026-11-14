@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { CapturePipeline } from '../host/capture.js'
 import { MemoryIndex } from '../host/search.js'
 import { resolveConfig } from '../host/config.js'
@@ -62,6 +64,56 @@ test('same-clock backups remain distinct and an existing target is never replace
   assert.equal(fs.readFileSync(join(target, 'mine'), 'utf8'), 'keep')
 })
 
+test('Windows restore publishes to an absent target and preserves a target that wins the race', async t => {
+  const { parent, store } = setup(t)
+  const backup = await store.backup()
+  const { restoreBackup } = await import('../host/backup.js')
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform'), originalRename = fs.renameSync
+  Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' })
+  const restored = join(parent, 'windows-restored')
+  let published = 0
+  fs.renameSync = (source, destination, ...args) => {
+    if (destination === restored) {
+      published += 1
+      assert.equal(fs.existsSync(destination), false, 'Windows rename must receive a destination that is still absent')
+    }
+    return originalRename(source, destination, ...args)
+  }
+  syncBuiltinESMExports()
+  try { await restoreBackup(backup, restored) }
+  finally {
+    fs.renameSync = originalRename
+    syncBuiltinESMExports()
+    Object.defineProperty(process, 'platform', originalPlatform)
+  }
+  assert.equal(published, 1)
+  assert.ok(fs.statSync(restored).isDirectory())
+
+  const raceTarget = join(parent, 'windows-race-target'), ownerFile = join(raceTarget, 'owner.txt')
+  const racePlatform = Object.getOwnPropertyDescriptor(process, 'platform'), raceRename = fs.renameSync
+  Object.defineProperty(process, 'platform', { ...racePlatform, value: 'win32' })
+  let raced = false
+  fs.renameSync = (source, destination, ...args) => {
+    if (destination === raceTarget) {
+      raced = true
+      assert.equal(fs.existsSync(destination), false, 'restore must not reserve the target before publishing')
+      fs.mkdirSync(destination)
+      fs.writeFileSync(ownerFile, 'created by another process')
+      throw Object.assign(new Error('destination appeared during rename'), { code: 'EPERM' })
+    }
+    return raceRename(source, destination, ...args)
+  }
+  syncBuiltinESMExports()
+  try { await assert.rejects(restoreBackup(backup, raceTarget), error => error.code === 'EPERM') }
+  finally {
+    fs.renameSync = raceRename
+    syncBuiltinESMExports()
+    Object.defineProperty(process, 'platform', racePlatform)
+  }
+  assert.equal(raced, true)
+  assert.equal(fs.readFileSync(ownerFile, 'utf8'), 'created by another process')
+})
+
 test('corrupt snapshots and linked authority files cannot be restored', async t => {
   const { parent, root, store } = setup(t)
   store.write({ kind: 'fact', scope: 'global', content: '校验失败不能写入恢复目录。' })
@@ -94,7 +146,7 @@ test('the packaged recovery CLI restores a verified snapshot and rejects a trave
   const { parent, store } = setup(t)
   store.write({ kind: 'fact', scope: 'global', content: '离线恢复工具必须实际可运行。' })
   const backup = await store.backup(), target = join(parent, 'cli-restored')
-  const cli = new URL('../host/recovery-cli.js', import.meta.url).pathname
+  const cli = fileURLToPath(new URL('../host/recovery-cli.js', import.meta.url))
   for (const args of [['verify', backup], ['restore', backup, target]]) {
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)

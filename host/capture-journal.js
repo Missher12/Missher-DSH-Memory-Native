@@ -16,7 +16,6 @@ import {
   existsSync,
   fsyncSync,
   fstatSync,
-  ftruncateSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -30,6 +29,7 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 import { dirname, join } from 'node:path'
 
 import { nextRevision } from './records.js'
+import { truncateFile } from './persistence.js'
 
 export const CAPTURE_DIR = 'capture'
 export const SOURCE_DIR = 'sources'
@@ -105,12 +105,8 @@ function appendDurable(file, value) {
   } catch (error) {
     // Never leave a partial journal line that could be mistaken for a task
     // identity; roll back to the pre-append byte offset.
-    try {
-      ftruncateSync(fd, start)
-      fsyncSync(fd)
-    } catch {
-      // The caller still gets the write error.
-    }
+    try { truncateFile(file, start) }
+    catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
     throw error
   } finally {
     closeSync(fd)

@@ -1,12 +1,14 @@
 /** Pure WASM in a worker: no unsigned native addons and no conversation network I/O. */
 import { parentPort, workerData } from 'node:worker_threads'
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import * as ort from '../vendor/embedding/ort.wasm.min.mjs'
 
 ort.env.wasm.numThreads = 1
-ort.env.wasm.wasmPaths = fileURLToPath(new URL('../vendor/embedding/', import.meta.url))
+ort.env.wasm.wasmPaths = {
+  mjs: new URL('../vendor/embedding/ort-wasm-simd-threaded.mjs', import.meta.url),
+  wasm: new URL('../vendor/embedding/ort-wasm-simd-threaded.wasm', import.meta.url),
+}
 globalThis[Symbol.for('onnxruntime')] = ort
 const { XLMRobertaTokenizer } = await import('../vendor/embedding/transformers.min.mjs')
 const tokenizer = new XLMRobertaTokenizer(JSON.parse(readFileSync(join(workerData.modelDir, 'tokenizer.json'))),

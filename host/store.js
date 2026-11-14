@@ -16,7 +16,6 @@ import {
   existsSync,
   fsyncSync,
   fstatSync,
-  ftruncateSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -34,7 +33,7 @@ import { blockSourceRecall } from './capture-journal.js'
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { buildRecord, nextRevision } from './records.js'
 import { CACHE_FILE, hotRecord, rememberAuthority } from './cache-records.js'
-import { withFileLock, writeAll } from './persistence.js'
+import { truncateFile, withFileLock, writeAll } from './persistence.js'
 import { createCompleteBackup } from './backup.js'
 import { validateImport } from './import-validation.js'
 
@@ -269,7 +268,7 @@ export class MemoryStore {
         fsyncSync(fd)
       } catch (error) {
         // We hold the writer lock: roll back only this uncommitted append.
-        try { ftruncateSync(fd, originalSize); fsyncSync(fd) }
+        try { truncateFile(state.file, originalSize) }
         catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
         throw error
       } finally {

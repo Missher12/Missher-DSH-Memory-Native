@@ -1,6 +1,6 @@
 /** Small local persistence primitives shared by settings, authority and backups. */
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, fstatSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, ftruncateSync, fsyncSync, fstatSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export function writeAll(fd, value) {
@@ -10,6 +10,13 @@ export function writeAll(fd, value) {
     if (!Number.isInteger(size) || size <= 0 || size > bytes.length - offset) throw new Error('file write made no progress')
     offset += size
   }
+}
+
+/** Roll back a partial append through a random-access handle, never an append-only fd. */
+export function truncateFile(file, size) {
+  const fd = openSync(file, 'r+')
+  try { ftruncateSync(fd, size); fsyncSync(fd) }
+  finally { closeSync(fd) }
 }
 
 export function syncDirectory(dir) {

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemoryStore } from '../host/store.js'
+import { readCaptureTasks, writeCaptureTask } from '../host/capture-journal.js'
 
 function setup(t) {
   const root = fs.mkdtempSync(join(tmpdir(), 'memory-persistence-'))
@@ -53,8 +54,19 @@ test('short OS writes still commit a complete authority record', t => {
 test('a failed append preserves prior bytes and a later write remains readable', t => {
   const { root, store } = setup(t)
   store.write(fact)
-  const file = join(root, 'global', 'memories.jsonl'), before = fs.readFileSync(file), original = fs.writeSync
+  const file = join(root, 'global', 'memories.jsonl'), before = fs.readFileSync(file)
+  const original = fs.writeSync, originalOpen = fs.openSync, originalTruncate = fs.ftruncateSync
+  const modes = new Map()
   let authorityWrites = 0
+  fs.openSync = (path, flags, ...args) => {
+    const fd = originalOpen(path, flags, ...args)
+    modes.set(fd, flags)
+    return fd
+  }
+  fs.ftruncateSync = (fd, size) => {
+    if (modes.get(fd) === 'a+') throw Object.assign(new Error('Windows append handles cannot truncate'), { code: 'EPERM' })
+    return originalTruncate(fd, size)
+  }
   fs.writeSync = (fd, data, ...args) => {
     if (fs.fstatSync(fd).ino !== fs.statSync(file).ino) return original(fd, data, ...args)
     if (++authorityWrites === 2) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
@@ -62,11 +74,60 @@ test('a failed append preserves prior bytes and a later write remains readable',
     return original(fd, data, args[0] ?? 0, 7)
   }
   syncBuiltinESMExports()
-  try { assert.throws(() => store.write({ ...fact, content: '这条未完成写入的记录不应出现。' }), /disk full/u) }
-  finally { fs.writeSync = original; syncBuiltinESMExports() }
+  try {
+    let failure
+    try { store.write({ ...fact, content: '这条未完成写入的记录不应出现。' }) } catch (error) { failure = error }
+    assert.match(failure?.message ?? '', /disk full/u)
+    assert.equal(failure.rollbackFailed, undefined, 'rollback must use a non-append descriptor')
+  } finally {
+    fs.writeSync = original
+    fs.openSync = originalOpen
+    fs.ftruncateSync = originalTruncate
+    syncBuiltinESMExports()
+  }
   assert.deepEqual(fs.readFileSync(file), before)
   store.write({ ...fact, content: '磁盘恢复后写入的新记录仍然完整可读。' })
   assert.equal(new MemoryStore({ root }).open().listAll().length, 2)
+})
+
+test('a failed capture-journal append preserves its prior bytes on Windows append handles', t => {
+  const { root } = setup(t)
+  const task = { id: 'cap_0123456789abcdef01234567', status: 'pending', callState: 'not-sent', sourceIds: [] }
+  writeCaptureTask(root, task)
+  const file = join(root, 'capture', 'capture-tasks.jsonl'), before = fs.readFileSync(file)
+  const original = fs.writeSync, originalOpen = fs.openSync, originalTruncate = fs.ftruncateSync
+  const modes = new Map()
+  let journalWrites = 0
+  fs.openSync = (path, flags, ...args) => {
+    const fd = originalOpen(path, flags, ...args)
+    modes.set(fd, flags)
+    return fd
+  }
+  fs.ftruncateSync = (fd, size) => {
+    if (modes.get(fd) === 'a') throw Object.assign(new Error('Windows append handles cannot truncate'), { code: 'EPERM' })
+    return originalTruncate(fd, size)
+  }
+  fs.writeSync = (fd, data, ...args) => {
+    if (fs.fstatSync(fd).ino !== fs.statSync(file).ino) return original(fd, data, ...args)
+    if (++journalWrites === 2) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+    return original(fd, data, args[0] ?? 0, 7)
+  }
+  syncBuiltinESMExports()
+  try {
+    let failure
+    try { writeCaptureTask(root, { ...task, status: 'done' }) } catch (error) { failure = error }
+    assert.match(failure?.message ?? '', /disk full/u)
+    assert.equal(failure.rollbackFailed, undefined)
+    assert.deepEqual(fs.readFileSync(file), before)
+    assert.equal(readCaptureTasks(root)[0].status, 'pending')
+  } finally {
+    fs.writeSync = original
+    fs.openSync = originalOpen
+    fs.ftruncateSync = originalTruncate
+    syncBuiltinESMExports()
+  }
+  writeCaptureTask(root, { ...task, status: 'done' })
+  assert.equal(readCaptureTasks(root)[0].status, 'done')
 })
 
 test('an interrupted tail cannot swallow the next valid record', t => {
