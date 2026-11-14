@@ -7,7 +7,7 @@
 <p>把值得记住的内容留在本地，在需要时带回对话。</p>
 
 <p>
-  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.0-native.20261110.0"><img src="https://img.shields.io/badge/%E9%A2%84%E5%8F%91%E8%A1%8C-1.5.0--native.20261110.0-4D6BFE?style=flat-square" alt="原生预发行版: 1.5.0-native.20261110.0"></a>
+  <a href="https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.1-native.20261114.0"><img src="https://img.shields.io/badge/%E9%A2%84%E5%8F%91%E8%A1%8C-1.5.1--native.20261114.0-4D6BFE?style=flat-square" alt="原生预发行版: 1.5.1-native.20261114.0"></a>
   <a href="https://github.com/Missher12/Missher-DSH-Memory-Native"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-%E4%B8%AD%E6%96%87-4D6BFE?style=flat-square" alt="文档: 中文"></a>
 </p>
 
@@ -18,7 +18,7 @@
 ---
 
 <!-- current-source -->
-当前开发源码：**1.5.0-native.20261110.0** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。[同版预发行安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.0-native.20261110.0)。
+当前开发源码：**1.5.1-native.20261114.0** · [分支 `codex/memory-evidence-navigation`](https://github.com/Missher12/Missher-DSH-Memory-Native/tree/codex/memory-evidence-navigation)。[同版预发行安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.1-native.20261114.0)。
 <!-- /current-source -->
 
 ## 功能一览
@@ -32,7 +32,7 @@
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.0-native.20261110.0) 下载对应版本的 `.tgz` 安装包。
+1. 从 [Releases](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.1-native.20261114.0) 下载对应版本的 `.tgz` 安装包。
 2. 在 DSH **插件 → 添加插件** 中选择下载的文件，安装并启用；按宿主提示重新加载或正常重启。
 3. 打开 **设置 → 记忆**，检查自动捕获与注入设置，再浏览已有记忆。
 
@@ -139,7 +139,7 @@ Memory 侧重事实、偏好、决定、来源和知识；MSE 侧重长期纠正
 
 ## 升级与数据
 
-当前原生预发行版为 1.5.0-native.20261110.0，维护源码位于 codex/memory-evidence-navigation；main 保留稳定版本源码及首页说明。JSONL 是权威记录，派生索引可重建；升级不能通过删除记忆库来替代迁移。
+当前原生预发行版为 1.5.1-native.20261114.0，维护源码位于 codex/memory-evidence-navigation；main 保留稳定版本源码及首页说明。JSONL 是权威记录，派生索引可重建；升级不能通过删除记忆库来替代迁移。
 <!-- /readme-expansion -->
 
 ## 详细文档

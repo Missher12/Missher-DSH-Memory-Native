@@ -2,7 +2,7 @@
 
 ![Memory Native · 长期记忆（品牌插画）](docs/images/cover-v2.png)
 
-当前原生预发行版 **1.5.0-native.20261110.0** · [下载同版安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.0-native.20261110.0)
+当前原生预发行版 **1.5.1-native.20261114.0** · [下载同版安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.5.1-native.20261114.0)
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
 [仓库](https://github.com/Missher12/Missher-DSH-Memory-Native) · [Releases 下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases) · [设计文档](docs/design.md) · [验证记录](docs/verification.md)
@@ -191,7 +191,7 @@ node host/recovery-cli.js restore '/完整备份目录' '/尚不存在的新数�
 
 可下载并作为独立仓库打开的 [Obsidian Demo](docs/demo/obsidian-vault/README.md)，参考按用途组织的目录，使用完全虚构的内容演示场景、方案、工作流和来源双链。
 
-后续优先级见 [当前升级路线图](docs/roadmap.md#2026-11-10按当前代码重新盘点)：关系追查 → 主题质量 → 混合容量 → 独立质量评估。
+后续优先级见 [当前升级路线图](docs/roadmap.md#2026-11-14兼容性优先)：安装后链路诊断 → 离线模型准备 → 增量索引与同步 → 小库和复杂问答质量。
 
 ## 当前边界
 
