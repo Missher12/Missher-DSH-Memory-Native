@@ -117,6 +117,7 @@ export class MemoryStore {
   #changeListeners = new Set()
   #backupInFlight = null
   #purgedIds = new Set()
+  #purgedIdsStamp
 
   /**
    * @param {{ root: string, clock?: () => number }} options
@@ -175,7 +176,7 @@ export class MemoryStore {
   /** Create the root directory and load `meta.json`. */
   open() {
     mkdirSync(this.#root, { recursive: true, mode: 0o700 })
-    this.#purgedIds = readPurgedIds(this.#root)
+    this.#currentPurgedIds()
     const metaFile = join(this.#root, 'meta.json')
     let previous = null
     if (existsSync(metaFile)) {
@@ -268,8 +269,11 @@ export class MemoryStore {
     const outcome = this.#withLock(() => {
       this.#refreshState(state)
       const current = state.records.get(record.id)
-      if (options.importOnly && current && (current.revision >= record.revision || current.status === 'deleted' && record.status !== 'deleted')) {
-        return { record: current, changed: false, compact: false, protectedDeleted: current.status === 'deleted' && record.status !== 'deleted' }
+      if (options.importOnly) {
+        const protectedDeleted = this.#currentPurgedIds().has(record.id) || current?.status === 'deleted' && record.status !== 'deleted'
+        if (protectedDeleted || current && current.revision >= record.revision) {
+          return { record: current, changed: false, compact: false, protectedDeleted }
+        }
       }
       let next = record
       if (current !== undefined) {
@@ -475,10 +479,9 @@ export class MemoryStore {
         this.#refreshState(state)
         if (!state.records.has(id)) return false
         previous = state.records.get(id)
-        const purgedIds = readPurgedIds(this.#root)
+        const purgedIds = new Set(this.#currentPurgedIds())
         purgedIds.add(id)
         atomicWritePrivate(join(this.#root, PURGED_IDS_FILE), `${JSON.stringify([...purgedIds].sort())}\n`)
-        this.#purgedIds = purgedIds
         blockSourceRecall(this.#root, previous)
         // A physical purge must also discard the derived copy of this record.
         try { unlinkSync(join(this.#root, CACHE_FILE)) } catch (error) {
@@ -527,10 +530,18 @@ export class MemoryStore {
     }
   }
 
-  /** IDs physically purged from authority, retained only to prevent stale note imports. */
+  /** IDs physically purged from authority, retained to block stale imports. */
   purgedIds() {
-    this.#purgedIds = readPurgedIds(this.#root)
-    return new Set(this.#purgedIds)
+    return new Set(this.#currentPurgedIds())
+  }
+
+  #currentPurgedIds() {
+    const stamp = fileStamp(join(this.#root, PURGED_IDS_FILE))
+    if (stamp !== this.#purgedIdsStamp) {
+      this.#purgedIds = readPurgedIds(this.#root)
+      this.#purgedIdsStamp = stamp
+    }
+    return this.#purgedIds
   }
 
   /** Snapshot all recoverable local data; unlike exportData, retain evidence/history. */
@@ -549,6 +560,7 @@ export class MemoryStore {
     const records = validateImport(payload, SCHEMA_VERSION, this.#clock())
     if (options.dryRun !== true) this.#beforeWrite?.()
     const dryRun = options.dryRun === true
+    const purged = dryRun ? this.#currentPurgedIds() : null
     const existing = new Map(this.listAll({ includeDeleted: true }).map(record => [record.id, record]))
     for (const record of records) {
       const previous = existing.get(record.id)
@@ -559,7 +571,7 @@ export class MemoryStore {
       const state = this.#state(record.scope, record.projectKey)
       const current = state.records.get(record.id)
       if (dryRun) {
-        if (current?.status === 'deleted' && record.status !== 'deleted') { skipped++; protectedDeleted++ }
+        if (purged.has(record.id) || current?.status === 'deleted' && record.status !== 'deleted') { skipped++; protectedDeleted++ }
         else if (current && record.revision <= current.revision) skipped++
         else imported++
       } else {

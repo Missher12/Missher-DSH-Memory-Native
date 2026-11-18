@@ -1,9 +1,8 @@
 /** Validate a whole migration payload before touching the destination store. */
-import { buildRecord, MEMORY_STATUSES, contentHashOf } from './records.js'
+import { buildRecord, MEMORY_STATUSES, contentHashOf, isValidMemoryId } from './records.js'
 import { isValidProjectKey } from './paths.js'
 
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value)
-const safeId = value => typeof value === 'string' && /^[\p{L}\p{N}_.-]{1,160}$/u.test(value) && !['.', '..', '__proto__'].includes(value)
 
 export function validateImport(payload, supportedVersion, now) {
   if (!plain(payload) || (!Object.hasOwn(payload, 'global') && !Object.hasOwn(payload, 'projects'))) throw new Error('导入文件必须是记忆导出对象。')
@@ -15,7 +14,7 @@ export function validateImport(payload, supportedVersion, now) {
   const records = [], ids = new Set()
   const add = (record, scope, projectKey) => {
     const invalid = reason => { throw new Error(`导入记录 ${records.length + 1} 无效：${reason}`) }
-    if (!plain(record) || !safeId(record.id)) invalid('记录标识不合法')
+    if (!plain(record) || !isValidMemoryId(record.id)) invalid('记录标识不合法')
     if (ids.has(record.id)) invalid('记录标识重复')
     if (record.scope !== scope || (record.projectKey ?? null) !== projectKey) invalid('记录与所在范围不一致')
     if (!Number.isSafeInteger(record.revision) || record.revision < 1) invalid('修订号不合法')

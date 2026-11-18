@@ -7,6 +7,7 @@ import test from 'node:test'
 import { apply } from '../index.js'
 import { MemoryStore } from '../host/store.js'
 import { projectIdentity } from '../host/paths.js'
+import { estimateTokens } from '../host/recall.js'
 import { saveSource, readSource } from '../host/capture-journal.js'
 import { grantSourceRecall } from '../host/source-passages.js'
 
@@ -44,16 +45,39 @@ async function setup(t, records = [], llm, testOptions) {
     return response.value
   }
   let turn = 0
-  const ask = async content => {
+  const ask = async (content, sessionId = 'session-integration') => {
     const messages = [{ id: `query-${++turn}`, role: 'user', source: { kind: 'user' }, content }]
     const result = await handlers['agent/pre-step']({
-      agent: { session: { id: 'session-integration', header: { cwd } } }, messages,
+      agent: { session: { id: sessionId, header: { cwd } } }, messages,
       modelSelection: { provider: 'host-provider', model: 'host-model' },
     }, async () => ({ kind: 'enter', messages }))
     return result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n')
   }
   return { root, dataDir, key, panel, ask, store, warnings }
 }
+
+test('context usage reports the final memory block and clears on a miss in the same session', async t => {
+  const { ask, panel } = await setup(t, [
+    { id: 'mem_snapshot_retention', content: '青岚快照每天 04:20 执行，保留 47 天。' },
+  ])
+  const usageOf = async sessionId => (await panel('stats', { sessionId })).contextUsage
+  assert.equal(await usageOf('session-a'), null)
+  const block = await ask('青岚快照每天几点执行，保留多久？', 'session-a')
+  assert.match(block, /04:20/u)
+  const used = await usageOf('session-a')
+  assert.equal(used.tokens, estimateTokens(block))
+  assert.equal(used.budget, 360)
+  assert.equal(used.items, 1)
+  assert.equal(await usageOf('session-b'), null)
+  assert.equal(await ask('火星的公转周期是多少？', 'session-b'), '')
+  assert.equal((await usageOf('session-b')).tokens, 0)
+  assert.deepEqual(await usageOf('session-a'), used)
+  assert.equal(await ask('月球的直径是多少？', 'session-a'), '')
+  const missed = await usageOf('session-a')
+  assert.equal(missed.tokens, 0)
+  assert.equal(missed.items, 0)
+  assert.equal(await usageOf(undefined), null)
+})
 
 test('unextracted original evidence remains usable without another paid call, but is not reported as confirmed coverage', async t => {
   const {dataDir,key,panel,ask}=await setup(t)
@@ -81,6 +105,32 @@ test('a high vector score cannot inject unrelated global memories for a physical
     {id:'mem_unrelated_global',scope:'global',projectKey:null,kind:'fact',content:'用户今天要整理 Git 仓库。'}],undefined,{semantic:{enabled:true,engine}})
   assert.equal(await ask('雪松交接的备用物料盒放在哪里？'),'')
   assert.equal((await panel('stats',{scope:'global'})).lastRecall.candidates.length,0)
+})
+
+test('answering a global preference cannot inject an unrelated or foreign project preference via the profile',async t=>{
+  const {ask,panel}=await setup(t,[
+    {id:'mem_unit_preference',kind:'preference',scope:'global',content:'我在所有项目都偏好用公制单位。',confidence:.90},
+    {id:'mem_color_preference',kind:'preference',scope:'global',content:'我偏好用浅色背景。',confidence:.98},
+    {id:'mem_foreign_preference',kind:'preference',projectKey:'other-project',content:'本项目的外发报告标题要用玉竹四号。',confidence:.99},
+  ])
+  const block=await ask('我的单位偏好是什么？')
+  assert.match(block,/公制单位/u)
+  assert.doesNotMatch(block,/玉竹四号|浅色背景/u)
+  const report=(await panel('stats',{scope:'global'})).lastRecall
+  assert.deepEqual(report.covered.flatMap(item=>item.evidence.map(e=>e.id)),['mem_unit_preference'])
+})
+
+test('a preference question matches its requested category instead of the common wording around it',async t=>{
+  const {ask,panel}=await setup(t,[
+    {id:'mem_metric',kind:'preference',scope:'global',content:'我在所有项目都偏好用公制单位。'},
+    {id:'mem_light_theme',kind:'preference',scope:'global',content:'我偏好用浅色背景。'},
+  ])
+  const block=await ask('我偏好用什么计量单位？请只给单位。不要保存或提炼本轮问答。')
+  assert.match(block,/公制单位/u)
+  assert.doesNotMatch(block,/浅色背景/u)
+  const report=(await panel('stats',{scope:'global'})).lastRecall
+  assert.equal(report.total,1)
+  assert.equal(report.covered.length,1)
 })
 
 test('an explicitly different project name blocks otherwise matching evidence while unnamed facts remain usable',async t=>{

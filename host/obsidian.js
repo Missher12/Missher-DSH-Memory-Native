@@ -24,7 +24,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { parseFrontmatter } from './frontmatter.js'
 import { KNOWLEDGE_DIR, extractWikiLinks, isKnowledgeFile, knowledgeScope, parseKnowledgeNote, splitNoteBody } from './knowledge.js'
 import { isValidProjectKey } from './paths.js'
-import { MEMORY_KINDS, MEMORY_STATUSES, nextRevision } from './records.js'
+import { buildRecord, isValidMemoryId, MEMORY_KINDS, MEMORY_STATUSES, nextRevision } from './records.js'
 
 export const DEFAULT_FOLDER = 'DSH Memory'
 export const INDEX_FILE = '_index.md'
@@ -56,7 +56,7 @@ export function serializeMemory(record) {
   const lines = [
     '---',
     'dsh_memory: true',
-    `id: ${record.id}`,
+    `id: ${record.id.startsWith('mem_') ? record.id : frontmatterValue(record.id)}`,
     `kind: ${record.kind}`,
     `scope: ${record.scope}`,
     `projectKey: ${record.projectKey === null || record.projectKey === undefined ? 'null' : record.projectKey}`,
@@ -124,6 +124,8 @@ export function importFromObsidian(options) {
   if (!existsSync(dir)) throw new Error('Obsidian folder does not exist; export first')
   const dryRun = options.dryRun === true
   const files = readdirSync(dir).filter((name) => name.endsWith('.md') && !name.startsWith('_'))
+  const authority = new Map(store.listAll({ includeDeleted: true }).map(record => [record.id, record]))
+  const purged = store.purgedIds()
   let imported = 0
   let updated = 0
   let skipped = 0
@@ -142,7 +144,7 @@ export function importFromObsidian(options) {
     }
     const data = parsed.data
     const content = parsed.body
-    if (typeof data.id !== 'string' || !/^mem_[A-Za-z0-9]+$/u.test(data.id) || content === '') {
+    if (!isValidMemoryId(data.id) || purged.has(data.id) || content === '') {
       skipped += 1
       continue
     }
@@ -160,8 +162,11 @@ export function importFromObsidian(options) {
       skipped += 1
       continue
     }
-    const scopes = [{ scope, projectKey }]
-    const existing = store.find(data.id, scopes)
+    const existing = authority.get(data.id)
+    if (existing && (existing.status === 'deleted' || existing.scope !== scope || (existing.projectKey ?? null) !== projectKey)) {
+      skipped += 1
+      continue
+    }
     const status = MEMORY_STATUSES.includes(data.status) && data.status !== 'deleted' ? data.status : 'active'
     const patch = {
       kind: data.kind,
@@ -172,13 +177,13 @@ export function importFromObsidian(options) {
       confidence: typeof data.confidence === 'number' ? data.confidence : 0.5,
       status,
     }
+    let next
     if (existing !== undefined) {
-      let normalized
-      try { normalized = nextRevision(existing, patch) } catch {
+      try { next = nextRevision(existing, patch) } catch {
         skipped += 1
         continue
       }
-      if (Object.keys(patch).every((key) => isDeepStrictEqual(existing[key], normalized[key]))) {
+      if (Object.keys(patch).every((key) => isDeepStrictEqual(existing[key], next[key]))) {
         skipped += 1
         continue
       }
@@ -187,33 +192,17 @@ export function importFromObsidian(options) {
       preview.push({ file: name, id: data.id, action: existing === undefined ? 'create' : 'update', content: content.slice(0, 80) })
       continue
     }
-    if (existing !== undefined) {
-      const next = store.update(data.id, patch, scopes)
-      if (next !== undefined) {
-        index.upsert(next)
-        updated += 1
-      } else {
-        skipped += 1
-      }
-    } else {
-      const built = store.write({
-        kind: data.kind,
-        scope,
-        projectKey,
-        content,
-        topic: patch.topic,
-        tags: patch.tags,
-        confidence: patch.confidence,
-        importance: patch.importance,
-        status: patch.status,
-      }, { id: data.id })
-      if (built.ok === true) {
-        index.upsert(built.record)
-        imported += 1
-      } else {
-        skipped += 1
-      }
+    if (!next) {
+      const built = buildRecord({ ...patch, scope, projectKey }, { id: data.id })
+      if (!built.ok) { skipped += 1; continue }
+      next = built.record
     }
+    const result = store.append(next, { importOnly: true })
+    if (!result.changed) { skipped += 1; continue }
+    authority.set(data.id, result.record)
+    index.upsert(result.record)
+    if (existing) updated += 1
+    else imported += 1
   }
   return { dir, scanned: files.length, imported, updated, skipped, preview }
 }

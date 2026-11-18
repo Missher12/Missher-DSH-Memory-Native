@@ -23,8 +23,12 @@ function setup(t) {
 }
 async function waitFor(predicate, timeoutMs=4000) {
  const deadline=Date.now()+timeoutMs
- while(Date.now()<deadline){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,25))}
- assert.ok(predicate(),'condition did not become true before timeout')
+ do {
+  // Sync can move the previous file into history before publishing its replacement.
+  try { if(predicate())return } catch(error) { if(error.code!=='ENOENT')throw error }
+  await new Promise(resolve=>setTimeout(resolve,25))
+ } while(Date.now()<deadline)
+ assert.fail('condition did not become true before timeout')
 }
 
 test('automatic reconciliation imports and exports only changed content, including renamed notes',async t=>{
@@ -42,6 +46,19 @@ test('automatic reconciliation imports and exports only changed content, includi
  assert.equal((await c.sync.run()).exported,1)
  assert.ok(readFileSync(renamed,'utf8').includes('宿主改动 35791'))
  assert.equal(existsSync(c.file),false)
+})
+
+test('a legacy memory imported from JSON still syncs with its original ID',async t=>{
+ const c=setup(t), id='mem_legacy_v1'
+ const old={...c.record,id,content:'迁移前的记忆正文。'}
+ assert.equal(c.store.importData({schemaVersion:1,global:[old]}).imported,1)
+ assert.equal((await c.sync.run()).errors.length,0)
+ const file=join(c.vault,c.config.folder,`${id}.md`)
+ writeFileSync(file,readFileSync(file,'utf8').replace(old.content,'迁移后从笔记编辑的正文。'))
+ const result=await c.sync.run({fullScan:false,files:[`${id}.md`]})
+ assert.deepEqual(result.errors,[])
+ assert.equal(result.imported,1)
+ assert.equal(c.store.find(id).content,'迁移后从笔记编辑的正文。')
 })
 
 test('both sides changed retain both originals and survive restart; stale resolution is rejected',async t=>{

@@ -50,3 +50,17 @@ test('ordinary import cannot resurrect a locally deleted memory even with a high
   assert.equal(result.imported, 0); assert.equal(result.protectedDeleted, 1)
   assert.equal(store.find(row.id).status, 'deleted')
 })
+
+test('an old export cannot reimport a purged memory, including into a store open before the purge', t => {
+  const {root,store,row}=setup(t)
+  const observer=new MemoryStore({root}).open()
+  const incoming=payload([{...row,revision:999},{...row,id:'mem_new_after_purge',content:'一条独立的有效新记录。'}])
+  store.remove(row.id,[{scope:'global',projectKey:null}])
+  assert.equal(store.purge(row.id,[{scope:'global',projectKey:null}]),true)
+  const expected={imported:1,skipped:1,protectedDeleted:1}
+  assert.deepEqual(observer.importData(incoming,{dryRun:true}),{...expected,dryRun:true})
+  assert.deepEqual(observer.importData(incoming),{...expected,dryRun:false})
+  const reopened=new MemoryStore({root}).open()
+  assert.equal(reopened.find(row.id),undefined)
+  assert.ok(reopened.find('mem_new_after_purge'))
+})

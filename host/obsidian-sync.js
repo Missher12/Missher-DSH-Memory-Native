@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { parseMemoryNote, resolveObsidianTarget, serializeMemory } from './obsidian.js'
 import { isKnowledgeFile, parseKnowledgeNote } from './knowledge.js'
-import { buildRecord, nextRevision, MEMORY_KINDS, MEMORY_STATUSES } from './records.js'
+import { buildRecord, nextRevision, MEMORY_KINDS, MEMORY_STATUSES, isValidMemoryId } from './records.js'
 import { isValidProjectKey } from './paths.js'
 import { refreshReadingPages } from './obsidian-reading.js'
 
@@ -25,7 +25,7 @@ async function names(path) {
 function memoryInput(text, parsed = parseMemoryNote(text)) {
   if (parsed?.data.dsh_memory !== true) throw new Error('不是 DSH 记忆笔记')
   const d = parsed.data
-  if (typeof d.id !== 'string' || !/^mem_[A-Za-z0-9]+$/u.test(d.id) || !MEMORY_KINDS.includes(d.kind)) throw new Error('记忆 id 或类型无效')
+  if (!isValidMemoryId(d.id) || !MEMORY_KINDS.includes(d.kind)) throw new Error('记忆 id 或类型无效')
   if (!['global', 'project'].includes(d.scope) || (d.scope === 'project' && !isValidProjectKey(d.projectKey))) throw new Error('记忆范围无效')
   if (!MEMORY_STATUSES.includes(d.status) || d.status === 'deleted') throw new Error('请在 Memory 中操作遗忘，不要修改笔记状态为 deleted')
   const input = { ...d, projectKey: d.scope === 'global' ? null : d.projectKey, content: parsed.body }

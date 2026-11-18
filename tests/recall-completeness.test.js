@@ -58,6 +58,11 @@ test('answer style modifiers in either order are controls, not extra factual que
   assert.ok(recallQueryPlan('用户希望什么风格的回答？','',false).some(part=>part.query.includes('风格')))
 })
 
+test('a request to give only the unit does not add a recall question',()=>{
+  const plan=recallQueryPlan('我偏好用什么计量单位？请只给单位。不要保存或提炼本轮问答。','',false)
+  assert.deepEqual(plan.map(part=>part.query),['我偏好用什么计量单位'])
+})
+
 test('an elliptical floor question retains the object from its preceding location question',()=>{
   const slots=recallQueryPlan('雪松交接的备用物料盒放在哪里，哪一层？','',false).filter(p=>p.role==='subquestion')
   assert.equal(slots.length,2)

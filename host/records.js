@@ -55,6 +55,11 @@ export function newMemoryId() {
   return `mem_${randomUUID().replace(/-/gu, '').slice(0, 24)}`
 }
 
+/** Accept the durable IDs used by current and migrated memory records. */
+export function isValidMemoryId(value) {
+  return typeof value === 'string' && /^[\p{L}\p{N}_.-]{1,160}$/u.test(value) && !['.', '..', '__proto__'].includes(value)
+}
+
 function clamp01(value, fallback) {
   const number = typeof value === 'number' && Number.isFinite(value) ? value : fallback
   return Math.min(1, Math.max(0, number))

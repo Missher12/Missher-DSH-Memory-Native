@@ -439,8 +439,11 @@ function requestedDetail(part) {
 }
 
 function entityResidueForPart(part) {
-  return String(part ?? '')
-    .normalize('NFKC')
+  const text = String(part ?? '').normalize('NFKC')
+  const category = text.replace(/^(?:我|用户)(?:通常|更)?(?:偏好|喜欢|习惯|倾向)(?:使用|采用|用)?(?:什么|哪[个种])\s*(?=\S)/u, '')
+  // A preference question must match its category. Match the unit named in
+  // the evidence, without treating conversational words as entity anchors.
+  return (category === text ? text : category.replace(/计量单位/gu, '单位'))
     .replace(/^(?:我们(?:的)?|这个|那个|本)?(?:项目|工程)(?:的)?\s*/u, ' ')
     .replace(/\d{4}(?:年\d{1,2}月\d{1,2}日|[-/]\d{1,2}[-/]\d{1,2})/gu, ' ')
     .replace(/[\d一二两三四五六七八九十半]+\s*(?:个)?(?:小时|天|日|周|星期|个月|月|年)前/gu, ' ')

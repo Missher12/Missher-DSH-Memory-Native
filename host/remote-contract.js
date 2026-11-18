@@ -305,6 +305,7 @@ export function captureRetry(backend, raw) {
 export function computeStats(backend, raw) {
   const input = asObject(raw)
   const { scope, projectKey } = normalizeScope(input)
+  const sessionId = optionalText(input.sessionId, 'sessionId', 180)
   const allRecords = backend.store.listAll({ includeDeleted: true })
   let total = 0
   let deleted = 0
@@ -355,6 +356,7 @@ export function computeStats(backend, raw) {
     maintenance,
     settingsIssue,
     lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
+    contextUsage: sessionId === undefined ? null : (backend.getContextUsage?.(sessionId) ?? null),
     lastExtraction: typeof backend.getLastExtraction === 'function' ? backend.getLastExtraction() : null,
     lastRecall: typeof backend.getLastRecall === 'function' ? backend.getLastRecall() : null,
     semantic: backend.getSemanticStatus?.() ?? null,

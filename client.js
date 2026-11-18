@@ -230,8 +230,14 @@ window.__ModuleLoader__.load({
         'settings.failed': 'Save failed: {reason}',
         'settings.maintenance.none': 'Self-maintenance has not run yet',
         'settings.maintenance.summary': 'Last maintenance: archived {archived} · pruned {pruned} backups',
-        'settings.inject.usage': 'Last injection {tokens}/{budget} tokens',
         'settings.extract.usage': 'extraction ~{tokens} tokens (estimated)',
+        'contextUsage.title': 'Memory context usage',
+        'contextUsage.amount': '{tokens} / {budget} tokens',
+        'contextUsage.detail': 'Current chat, last model step · {items} memories · estimated tokens',
+        'contextUsage.detailZero': 'Current chat, last model step · No memory added',
+        'contextUsage.noSession': 'Open a chat to see its memory usage.',
+        'contextUsage.empty': 'Usage appears after the next model step in this chat.',
+        'contextUsage.disabled': 'Memory injection is off.',
         'usage.title': 'Token usage · last 7 days',
         'usage.total': '{tokens} tokens',
         'usage.inject': 'Injection',
@@ -651,8 +657,14 @@ window.__ModuleLoader__.load({
         'settings.failed': '\u4fdd\u5b58\u5931\u8d25\uff1a{reason}',
         'settings.maintenance.none': '\u5c1a\u672a\u6267\u884c\u81ea\u7ef4\u62a4',
         'settings.maintenance.summary': '\u4e0a\u6b21\u81ea\u7ef4\u62a4\uff1a\u5f52\u6863 {archived} \u6761 \u00b7 \u6e05\u7406\u5907\u4efd {pruned} \u4efd',
-        'settings.inject.usage': '\u4e0a\u6b21\u6ce8\u5165 {tokens}/{budget} token',
         'settings.extract.usage': '\u62bd\u53d6\u7ea6 {tokens} token\uff08\u4f30\u7b97\uff09',
+        'contextUsage.title': '记忆上下文用量',
+        'contextUsage.amount': '{tokens} / {budget} Token',
+        'contextUsage.detail': '当前会话最近一轮 · {items} 条记忆 · Token 为估算',
+        'contextUsage.detailZero': '当前会话最近一轮 · 未注入记忆',
+        'contextUsage.noSession': '打开一个会话即可查看用量。',
+        'contextUsage.empty': '当前会话下次请求模型后显示用量。',
+        'contextUsage.disabled': '已关闭记忆注入。',
         'usage.title': 'Token 用量 · 近 7 天',
         'usage.total': '共 {tokens} token',
         'usage.inject': '注入',
@@ -1032,6 +1044,12 @@ window.__ModuleLoader__.load({
       '.dsh-memory-recall-report{margin:24px 0;min-width:0;overflow-wrap:anywhere}',
       '.dsh-memory-recall-report ul{margin:8px 0;padding-left:20px}',
       '.dsh-memory-recall-report li{margin:6px 0}',
+      '.dsh-memory-context-usage{display:grid;gap:6px;min-width:0;margin:8px 0 20px}',
+      '.dsh-memory-context-usage-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}',
+      '.dsh-memory-context-usage-amount{font-size:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}',
+      '.dsh-memory-context-usage-track{height:6px;border-radius:3px;overflow:hidden;background:var(--dsh-memory-card-border)}',
+      '.dsh-memory-context-usage-track>span{display:block;height:100%;border-radius:inherit;background:var(--dsw-alias-label-primary)}',
+      '.dsh-memory-context-usage .dsh-memory-muted{margin:0}',
       '.dsh-memory-brief-meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.dsh-memory-brief-sources{margin-top:8px;font-size:12px;overflow-wrap:anywhere}',
       '.dsh-memory-brief-sources summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}',
@@ -1762,6 +1780,29 @@ window.__ModuleLoader__.load({
         counts.size < 7 ? h('p', { className: 'dsh-memory-activity-hint' }, t('activity.sparseHint')) : null)
     }
 
+    function ContextUsage({ sessionId, sample, enabled, t, locale }) {
+      const title = t('contextUsage.title')
+      const usage = sample?.sessionId === sessionId ? sample?.usage : null
+      const hasUsage = enabled && Number.isInteger(usage?.tokens) && Number.isInteger(usage?.budget) && usage.budget > 0
+      const amount = hasUsage ? t('contextUsage.amount', {
+        tokens: usage.tokens.toLocaleString(locale || undefined),
+        budget: usage.budget.toLocaleString(locale || undefined),
+      }) : null
+      const value = hasUsage ? Math.min(usage.tokens, usage.budget) : 0
+      const detail = hasUsage
+        ? t(usage.tokens === 0 ? 'contextUsage.detailZero' : 'contextUsage.detail', { items: String(usage.items) })
+        : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' : 'contextUsage.empty')
+      return h('section', { className: 'dsh-memory-context-usage' },
+        h('div', { className: 'dsh-memory-context-usage-head' },
+          h('h3', { className: 'dsh-memory-settings-title' }, title),
+          amount === null ? null : h('span', { className: 'dsh-memory-context-usage-amount', title: formatTime(usage.at, locale) }, amount)),
+        !hasUsage ? null : h('div', {
+          className: 'dsh-memory-context-usage-track', role: 'meter', 'aria-label': title,
+          'aria-valuemin': 0, 'aria-valuemax': usage.budget, 'aria-valuenow': value, 'aria-valuetext': amount,
+        }, h('span', { style: { width: (100 * value / usage.budget) + '%' } })),
+        h('p', { className: 'dsh-memory-muted' }, detail))
+    }
+
     function RecallReport({ report, t, locale, call, onSaved }) {
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
@@ -2064,14 +2105,10 @@ window.__ModuleLoader__.load({
         obsidianFolder !== baseline.obsidianFolder
       )
       const last = stats === null ? null : stats.maintenance
-      const injection = stats === null || stats.lastInjection === null || stats.lastInjection === undefined ? null : stats.lastInjection
       const extraction = stats === null || stats.lastExtraction === null || stats.lastExtraction === undefined ? null : stats.lastExtraction
       const captureQueue = stats === null || stats.capture === null || stats.capture === undefined ? null : stats.capture
       const captureStorage = stats === null || stats.captureStorage === null || stats.captureStorage === undefined ? null : stats.captureStorage
-      const usage = (injection === null
-        ? ''
-        : ' · ' + t('settings.inject.usage', { tokens: String(injection.tokens ?? 0), budget: String(injection.budget ?? 360) })) +
-        (extraction === null ? '' : ' · ' + t('settings.extract.usage', { tokens: String(extraction.promptTokens ?? 0) }))
+      const usage = extraction === null ? '' : ' · ' + t('settings.extract.usage', { tokens: String(extraction.promptTokens ?? 0) })
       const summary = (maintenance
         ? (last === null || last === undefined
           ? t('settings.maintenance.none')
@@ -2704,11 +2741,15 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null)
     }
 
+    const EMPTY_SESSION_SOURCE = { subscribe: () => () => {}, getSnapshot: () => null }
+
     function MemoryPanel(props) {
-      const { t, store } = props
+      const { t, store, sessionSource } = props
       const locale = props.locale
       const transport = React.useSyncExternalStore(store.subscribe, store.getState, store.getState)
       const call = transport.status === 'ready' ? transport.call : null
+      const session = React.useSyncExternalStore(sessionSource.subscribe, sessionSource.getSnapshot, sessionSource.getSnapshot)
+      const sessionId = typeof session?.key === 'string' ? session.key : undefined
 
       const [scope, setScope] = React.useState('project')
       const [status, setStatus] = React.useState('')
@@ -2724,6 +2765,7 @@ window.__ModuleLoader__.load({
       const [libraryError, setLibraryError] = React.useState('')
       const [libraryRefresh, setLibraryRefresh] = React.useState(0)
       const [data, setData] = React.useState(null)
+      const [contextUsage, setContextUsage] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [notice, setNotice] = React.useState('')
@@ -2809,13 +2851,15 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (view !== 'activity' || !call) return undefined
         let cancelled = false
-        const refresh = () => call('stats', { scope }).then(stats => {
-          if (!cancelled) setData(previous => previous ? { ...previous, stats } : previous)
+        const refresh = () => call('stats', { scope, sessionId }).then(stats => {
+          if (cancelled) return
+          setContextUsage({ sessionId, usage: stats?.contextUsage })
+          setData(previous => previous ? { ...previous, stats } : previous)
         }).catch(failure => { if (!cancelled) setError(messageOf(failure)) })
         void refresh()
         const timer = setInterval(refresh, 5000)
         return () => { cancelled = true; clearInterval(timer) }
-      }, [view, call, scope])
+      }, [view, call, scope, sessionId])
 
       React.useEffect(() => {
         if (view !== 'library' || call === null) return undefined
@@ -3071,6 +3115,7 @@ window.__ModuleLoader__.load({
       if (view === 'activity') {
         return h('div', { className: 'dsh-memory-root' }, header, viewTabs,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
+          stats ? h(ContextUsage, { sessionId, sample: contextUsage, enabled: stats.injectEnabled, t, locale }) : null,
           h('section', { className: 'dsh-memory-hero-cards' },
             h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
             h('div', { className: 'dsh-memory-hero-side' }, h(HeroInsights, { activity: data?.activity, stats, t, locale }))),
@@ -3516,6 +3561,7 @@ window.__ModuleLoader__.load({
           t: ctx.locale.bind(NS),
           store: transport,
           locale: ctx.locale.snapshot?.active,
+          sessionSource: ctx.get('uiSession')?.adapter?.current ?? EMPTY_SESSION_SOURCE,
         }),
       }, MemoryPanel))
       return () => {

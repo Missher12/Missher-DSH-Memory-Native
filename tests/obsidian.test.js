@@ -86,6 +86,33 @@ test('import updates existing notes by id and creates new ones', (t) => {
   assert.equal(store.find('mem_newobsidian01', [{ scope: 'project', projectKey: KEY }]).content, '从 Obsidian 新建的一条记忆')
 })
 
+test('manual import does not revive forgotten or purged notes when automatic sync is off', (t) => {
+  const {vault,store,index,seed}=setup(t), record=seed()
+  const scopes=[{scope:'project',projectKey:KEY}]
+  exportToObsidian({store,vaultPath:vault})
+  const importNotes=(dryRun=false)=>importFromObsidian({store,index,vaultPath:vault,dryRun})
+  store.remove(record.id,scopes)
+  assert.deepEqual(importNotes(true).preview,[])
+  assert.equal(importNotes().updated,0)
+  assert.equal(store.find(record.id,scopes).status,'deleted')
+  assert.equal(store.purge(record.id,scopes),true)
+  assert.deepEqual(importNotes(true).preview,[])
+  assert.equal(importNotes().imported,0)
+  assert.equal(store.find(record.id,scopes),undefined)
+})
+
+test('manual import cannot promote a project note to global by changing its scope', (t) => {
+  const {vault,store,index,seed}=setup(t), record=seed()
+  const {dir}=exportToObsidian({store,vaultPath:vault})
+  const file=join(dir,`${record.id}.md`)
+  writeFileSync(file,serializeMemory({...record,scope:'global',projectKey:null}))
+  const input={store,index,vaultPath:vault}
+  assert.deepEqual(importFromObsidian({...input,dryRun:true}).preview,[])
+  assert.equal(importFromObsidian(input).imported,0)
+  assert.equal(store.find(record.id),undefined)
+  assert.deepEqual(store.find(record.id,[{scope:'project',projectKey:KEY}]),record)
+})
+
 test('import skips non-DSH notes and path escapes are rejected', (t) => {
   const { vault, store, index } = setup(t)
   const dir = join(vault, 'DSH Memory')

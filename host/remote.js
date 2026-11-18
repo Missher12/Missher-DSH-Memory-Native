@@ -124,6 +124,7 @@ export function createPanelBackend(options) {
     root: options.root ?? null,
     syncService: options.obsidianSync ?? null,
     getLastInjection: typeof options.getLastInjection === 'function' ? options.getLastInjection : null,
+    getContextUsage: options.getContextUsage,
     getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
     getLastRecall: typeof options.getLastRecall === 'function' ? options.getLastRecall : null,
     getSemanticStatus: typeof options.getSemanticStatus === 'function' ? options.getSemanticStatus : null,
