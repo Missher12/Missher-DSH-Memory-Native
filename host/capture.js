@@ -17,6 +17,7 @@
 
 import { MAX_MEMORIES_PER_PASS, buildExtractionPrompt, parseExtraction } from './extract.js'
 import {
+  blockSourceRecall,
   captureJournalHealth,
   captureStorageStatus,
   compressCaptureSources,
@@ -40,7 +41,7 @@ import { projectIdentity } from './paths.js'
 import { estimateTokens } from './recall.js'
 import { buildRecord, contentHashOf, mergeSourceRefs } from './records.js'
 import { tokenize } from './tokenize.js'
-import { analyzeUserMessageControls } from './user-controls.js'
+import { analyzeUserMessageControls, explicitRememberText } from './user-controls.js'
 import { grantSourceRecall } from './source-passages.js'
 import { readRecallSelection, readRecallSelections, recallSelectionId, writeRecallSelection } from './recall-journal.js'
 import { buildRecallSelectionPrompt } from './recall-selection.js'
@@ -548,6 +549,15 @@ export class CapturePipeline {
     if (this.#disposed || session === undefined || event === undefined) return
     const sessionId = typeof session.id === 'string' ? session.id : undefined
     if (sessionId === undefined) return
+    if (event.type === 'agent/inbox/spliced') {
+      if (!this.#config.capture.enabled) return
+      for (const message of event.data?.inserted ?? []) {
+        if (message?.role !== 'user' || message.source?.kind !== 'user' || typeof message.id !== 'string') continue
+        const text = textOfContent(message.content)
+        if (explicitRememberText(text) !== null) this.#saveMessage(session, { data: message }, 'user', text)
+      }
+      return
+    }
     if (event.type === 'user/message') {
       const text = textOfContent(event.data?.content)
       if (text !== '') this.#push(session, event, 'user', text)
@@ -830,8 +840,7 @@ export class CapturePipeline {
     return touched
   }
 
-  #push(session, event, role, text) {
-    if (!this.#config.capture.enabled) return
+  #saveMessage(session, event, role, text) {
     const root = this.#store?.root
     if (typeof root !== 'string') return
     const now = this.#clock()
@@ -839,12 +848,13 @@ export class CapturePipeline {
     const messageId = typeof message?.id === 'string' ? message.id : null
     const sourceKind = typeof message?.source?.kind === 'string' ? message.source.kind : 'unknown'
     const sourceForm = typeof message?.source?.form === 'string' ? message.source.form : undefined
+    const projectKey = typeof session.header?.cwd === 'string' ? projectIdentity(session.header.cwd).key : null
     let source
     try {
       source = saveSource(root, {
         sessionId: session.id,
         messageId,
-        projectKey: typeof session.header?.cwd === 'string' ? projectIdentity(session.header.cwd).key : null,
+        projectKey,
         sourceKind,
         sourceForm,
         eventSeq: event.seq,
@@ -857,6 +867,17 @@ export class CapturePipeline {
       this.#logger?.warn?.(`[dsh-memory] source not persisted: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
+    if (role === 'user' && sourceKind === 'user' && explicitRememberText(text) !== null) {
+      try { grantSourceRecall(root, { ...source, text, projectKey }, projectKey) }
+      catch (error) { this.#logger?.warn?.(`[dsh-memory] explicit memory could not be enabled: ${error.message}`) }
+    }
+    return source
+  }
+
+  #push(session, event, role, text) {
+    if (!this.#config.capture.enabled) return
+    const source = this.#saveMessage(session, event, role, text)
+    if (!source) return
     let buffer = this.#buffers.get(session.id)
     if (buffer === undefined) {
       buffer = { sources: [] }
@@ -877,6 +898,11 @@ export class CapturePipeline {
     const explicit = sourceRecords.some((source) => source.role === 'user' && source.sourceKind === 'user' && EXPLICIT_MEMORY_PATTERN.test(source.text))
     const noSave = sourceRecords.some((source) =>
       source.role === 'user' && source.sourceKind === 'user' && analyzeUserMessageControls(source.text).noSaveDirective)
+    if (noSave) {
+      blockSourceRecall(root, { sourceRefs: sourceRecords
+        .filter(source => source.role === 'user' && source.sourceKind === 'user' && explicitRememberText(source.text) !== null)
+        .map(source => ({ sourceId: source.id })) })
+    }
     const identity = projectIdentity(cwd)
     const id = turnIdOf({ sessionId: session.id, sourceIds: sourceRecords.map((source) => source.id) })
     const existing = readTurnIntakes(root).intakes.find((intake) => intake.id === id && intake.status !== 'failed')

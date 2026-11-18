@@ -150,6 +150,22 @@ test('compileMemoryContext emits a compact bounded block', () => {
   assert.ok(block.estimatedTokens <= 600)
 })
 
+test('coverage reserves a compact answer for every slot before longer hits consume the budget', () => {
+  const time = '银帆快照每天 04:20 执行。'
+  const retention = '银帆快照保留 47 天。'
+  const reason = '银帆快照改期是为了避开磁盘峰值。'
+  const record = (id, content) => ({ record: { id, kind: 'fact', content }, score: 1 })
+  const block = compileMemoryContext([
+    record('verbose-time', time + '以及'.repeat(32)),
+    record('compact-time', time), record('retention', retention), record('reason', reason),
+  ], {
+    maxTokens: 125, maxItems: 3,
+    evidenceSlots: [['verbose-time', 'compact-time'], ['retention'], ['reason']],
+  })
+  assert.deepEqual(new Set(block?.ids), new Set(['compact-time', 'retention', 'reason']))
+  assert.ok(block.estimatedTokens <= 125)
+})
+
 test('compileMemoryContext dedupes profile lines and keeps complete memory statements', () => {
   const record = make({ content: '用户偏好简洁直接的表达方式' })
   const block = compileMemoryContext([{ record, score: 1 }], {

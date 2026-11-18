@@ -235,6 +235,7 @@ window.__ModuleLoader__.load({
         'contextUsage.amount': '{tokens} / {budget} tokens',
         'contextUsage.detail': 'Current chat, last model step · {items} memories · estimated tokens',
         'contextUsage.detailZero': 'Current chat, last model step · No memory added',
+        'contextUsage.noRoom': 'The last model step had no room for memories.',
         'contextUsage.noSession': 'Open a chat to see its memory usage.',
         'contextUsage.empty': 'Usage appears after the next model step in this chat.',
         'contextUsage.disabled': 'Memory injection is off.',
@@ -410,6 +411,7 @@ window.__ModuleLoader__.load({
         'recall.empty': 'Evidence will appear here after a recall question.',
         'recall.found': 'Evidence included in this answer',
         'recall.missing': 'Still missing evidence',
+        'recall.localDeepUsage': 'Local deep search · {count} gaps · {tokens} / {limit} tokens',
         'recall.coverage': 'Included {covered} of {total} questions',
         'recall.candidates': 'Candidate passages included; answers not yet confirmed',
         'recall.forgetSource': 'Forget this original message',
@@ -662,6 +664,7 @@ window.__ModuleLoader__.load({
         'contextUsage.amount': '{tokens} / {budget} Token',
         'contextUsage.detail': '当前会话最近一轮 · {items} 条记忆 · Token 为估算',
         'contextUsage.detailZero': '当前会话最近一轮 · 未注入记忆',
+        'contextUsage.noRoom': '最近一轮没有可用于记忆的上下文空间。',
         'contextUsage.noSession': '打开一个会话即可查看用量。',
         'contextUsage.empty': '当前会话下次请求模型后显示用量。',
         'contextUsage.disabled': '已关闭记忆注入。',
@@ -788,6 +791,7 @@ window.__ModuleLoader__.load({
         'recall.empty': '询问记忆后，这里会显示查证结果。',
         'recall.found': '已放入本轮回答的证据',
         'recall.missing': '仍缺少证据',
+        'recall.localDeepUsage': '本地深查 · {count} 项缺口 · {tokens} / {limit} Token',
         'recall.coverage': '本轮已覆盖 {covered} / {total} 项问题',
         'recall.candidates': '已送入候选原文，答案尚未确认',
         'recall.forgetSource': '忘记这条原始消息',
@@ -1783,20 +1787,20 @@ window.__ModuleLoader__.load({
     function ContextUsage({ sessionId, sample, enabled, t, locale }) {
       const title = t('contextUsage.title')
       const usage = sample?.sessionId === sessionId ? sample?.usage : null
-      const hasUsage = enabled && Number.isInteger(usage?.tokens) && Number.isInteger(usage?.budget) && usage.budget > 0
+      const hasUsage = enabled && Number.isInteger(usage?.tokens) && Number.isInteger(usage?.budget) && usage.budget >= 0
       const amount = hasUsage ? t('contextUsage.amount', {
         tokens: usage.tokens.toLocaleString(locale || undefined),
         budget: usage.budget.toLocaleString(locale || undefined),
       }) : null
       const value = hasUsage ? Math.min(usage.tokens, usage.budget) : 0
       const detail = hasUsage
-        ? t(usage.tokens === 0 ? 'contextUsage.detailZero' : 'contextUsage.detail', { items: String(usage.items) })
+        ? t(usage.budget === 0 ? 'contextUsage.noRoom' : usage.tokens === 0 ? 'contextUsage.detailZero' : 'contextUsage.detail', { items: String(usage.items) })
         : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' : 'contextUsage.empty')
       return h('section', { className: 'dsh-memory-context-usage' },
         h('div', { className: 'dsh-memory-context-usage-head' },
           h('h3', { className: 'dsh-memory-settings-title' }, title),
           amount === null ? null : h('span', { className: 'dsh-memory-context-usage-amount', title: formatTime(usage.at, locale) }, amount)),
-        !hasUsage ? null : h('div', {
+        !hasUsage || usage.budget === 0 ? null : h('div', {
           className: 'dsh-memory-context-usage-track', role: 'meter', 'aria-label': title,
           'aria-valuemin': 0, 'aria-valuemax': usage.budget, 'aria-valuenow': value, 'aria-valuetext': amount,
         }, h('span', { style: { width: (100 * value / usage.budget) + '%' } })),
@@ -1843,6 +1847,11 @@ window.__ModuleLoader__.load({
           sent ? h('span', null, Number.isFinite(tokens) ? t('recall.usage', { tokens: String(tokens) }) : t('recall.usageUnknown')) : null),
         error ? h('p', { role: 'alert', className: 'dsh-memory-error-text' }, error) : null,
         report.reason ? h('p', { className: 'dsh-memory-muted' }, report.reason) : null,
+        report.localDeepRecall ? h('p', { className: 'dsh-memory-muted' }, t('recall.localDeepUsage', {
+          count: String(report.localDeepRecall.queries.length),
+          tokens: report.localDeepRecall.tokens.toLocaleString(locale || undefined),
+          limit: report.localDeepRecall.limit.toLocaleString(locale || undefined),
+        })) : null,
         Number.isInteger(report.total) ? h('p', null, t('recall.coverage', { covered: String(found.length), total: String(report.total) })) : null,
         found.length ? h('div', null, h('strong', null, t('recall.found')), h('ul', null, found)) : null,
         candidates.length ? h('div', null, h('strong', null, t('recall.candidates')), h('ul', null, candidates)) : null,

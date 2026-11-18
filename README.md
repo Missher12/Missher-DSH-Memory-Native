@@ -2,13 +2,16 @@
 
 ![Memory Native · 长期记忆（品牌插画）](docs/images/cover-v2.png)
 
-当前原生版本 **1.6.2-native.20261118.1** · [下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases)
+当前原生版本 **1.7.0-native.20261118.1** · [下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases)
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
 [仓库](https://github.com/Missher12/Missher-DSH-Memory-Native) · [Releases 下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases) · [设计文档](docs/design.md) · [验证记录](docs/verification.md)
 
 ## 能做什么
 
+- **动态召回预算**：使用当前模型窗口、宿主会话用量和回复预留空间限制注入。在预算允许时，先为每个子问题选证据，再加入补充记录。
+- **缺项深查**：只为缺少证据的当前问题检查已经授权的本项目原文。一轮最多检查 50,000 估算 Token，引用仍受该轮注入预算约束。活动页显示深查用量。
+- **立即记住**：发送「记住：具体内容」即可先保存本项目的用户原文，后续会话能直接引用。结构化提炼继续在后台执行，采集开关、不保存指令和来源遗忘规则继续生效。
 - **记忆上下文用量**：活动页顶部显示当前会话最近一次模型步骤实际选用的记忆条数、估算 Token 与当轮记忆预算。新会话独立统计，未注入时显示 0。
 - **安装后链路自检**：活动页分别检查存储读写、面板网关、宿主事件、捕获、提炼路由、词法与语义检索、注入及 Obsidian 同步；尚未观察到的链路显示等待，不以插件安装成功代替实际运行。诊断下载仅含状态和计数，不包含记忆正文、用户路径或认证信息。
 - **离线模型准备**：活动页可提前准备、重试、取消或从文件夹导入模型，刷新后继续查看进度。下载按已校验的分片续传；离线包需包含 `tokenizer.json`、`tokenizer_config.json` 和 `model_quantized.onnx` 三个固定版本文件。资产按插件内的大小和摘要核验，已有文件可离线使用；同一个 worker 处理后续请求。

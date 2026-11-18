@@ -6,21 +6,25 @@ import { canReadSource, readSource, blockSourceRecall, readCaptureTasks, updateC
 import { atomicWritePrivate } from './persistence.js'
 import { isValidProjectKey } from './paths.js'
 import { looksSensitive } from './records.js'
+import { estimateTokens } from './recall.js'
 import { MemoryIndex } from './search.js'
-import { analyzeUserMessageControls } from './user-controls.js'
+import { analyzeUserMessageControls, explicitRememberText } from './user-controls.js'
 
 const sourcePattern = /^src_[a-f0-9]{24}$/u
+export const DEEP_RECALL_TOKEN_LIMIT = 50000
 const hash = text => createHash('sha256').update(text).digest('hex')
 const directory = (root, projectKey) => join(root, 'capture', 'recall-grants', projectKey)
-const hasStatement = text => (text.match(/[^。！？!?\n]+[。！？!?]?/gu) ?? []).some(clause => {
-  const value = clause.trim()
-  return value.length > 3 && !/[？?]$/u.test(value) &&
+export function isRecallSourceStatement(text) {
+  const value = (explicitRememberText(text) ?? text).trim()
+  return value.length > 3 && !/[？?]/u.test(value) &&
+    !/^(?:>|\x60\x60\x60|引用|举例|例如|比方|假设|虚构)/u.test(value) &&
     !/^(?:请|帮我|麻烦|能不能|是不是|是否|what\b|which\b|who\b|when\b|where\b|why\b|how\b)/iu.test(value) &&
     !/(?:是什么|是多少|为什么|多少|多久|吗|呢)[。\s]*$/u.test(value)
-})
+}
+const hasStatement = text => (text.match(/[^。！？!?\n]+[。！？!?]?/gu) ?? []).some(isRecallSourceStatement)
 const permitted = source => source?.role === 'user' && source.sourceKind === 'user' &&
   typeof source.text === 'string' && !looksSensitive(source.text) &&
-  hasStatement(source.text) &&
+  hasStatement(explicitRememberText(source.text) ?? source.text) &&
   !analyzeUserMessageControls(source.text).noSaveDirective &&
   !/^\s*(?:>|```|引用(?:示例|内容)?[:：]|虚构(?:测试|验收)?(?:材料|资料))/u.test(source.text)
 
@@ -30,8 +34,14 @@ export function grantSourceRecall(root, source, projectKey) {
       !sourcePattern.test(source?.id ?? '') || !permitted(source) || !canReadSource(root, source.id)) return false
   const dir = directory(root, projectKey)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  atomicWritePrivate(join(dir, source.id + '.json'), JSON.stringify({
-    version: 1, sourceId: source.id, projectKey, textHash: hash(source.text), grantedAt: Date.now(),
+  const file = join(dir, source.id + '.json')
+  const textHash = hash(source.text)
+  try {
+    const existing = JSON.parse(readFileSync(file, 'utf8'))
+    if (existing.version === 1 && existing.sourceId === source.id && existing.projectKey === projectKey && existing.textHash === textHash) return true
+  } catch {}
+  atomicWritePrivate(file, JSON.stringify({
+    version: 1, sourceId: source.id, projectKey, textHash, grantedAt: Date.now(),
   }) + '\n')
   return true
 }
@@ -48,6 +58,7 @@ function authorized(root, sourceId, projectKey, allowBlocked = false) {
 
 function passages(source) {
   const records = [], text = source.text, contentHash = hash(text)
+  const remembered = explicitRememberText(text) !== null
   for (let from = 0; from < text.length;) {
     let to = Math.min(text.length, from + 420)
     if (to < text.length) {
@@ -59,7 +70,7 @@ function passages(source) {
     records.push({ id, kind: 'source', scope: 'project', projectKey: source.projectKey, status: 'active',
       content, contentHash: hash(content), sourceHash: contentHash, revision: 1, confidence: 1, importance: .5,
       tags: [], observedAt: source.at, updatedAt: source.at, validFrom: null, validTo: null,
-      evidenceRole: 'user', sourceRefs: [{ sourceId: source.id, sessionId: source.sessionId,
+      evidenceRole: 'user', remembered, sourceRefs: [{ sourceId: source.id, sessionId: source.sessionId,
         messageId: source.messageId, role: 'user', sourceKind: 'user', from, to, at: source.at, excerpt: content }] })
     if (to === text.length) break
     from = Math.max(from + 1, to - 64)
@@ -134,6 +145,37 @@ export class SourcePassageIndex {
     return cached ? this.validateMany(cached.index.search(query, {
       projectKey, scopes: ['project'], statuses: ['active'], now, limit,
     }), projectKey) : []
+  }
+
+  /** Inspect ranked passages round by round for unresolved questions only. */
+  findEvidence(queries, { projectKey, now = Date.now(), maxTokens = DEEP_RECALL_TOKEN_LIMIT, match }) {
+    const cached = this.#refresh(projectKey)
+    const budget = Math.min(DEEP_RECALL_TOKEN_LIMIT, Math.max(0, Math.floor(maxTokens)))
+    if (!cached || !budget || queries.length === 0) return { matches: [], tokens: 0 }
+    const limit = Math.min(1024, budget)
+    const lanes = queries.map(query => ({ query, hits: cached.index.search(query, {
+      projectKey, scopes: ['project'], statuses: ['active'], now, limit,
+    }), found: null }))
+    const matched = new Map()
+    let tokens = 0
+    for (let rank = 0; rank < limit && tokens < budget; rank++) {
+      let pending = false
+      for (const lane of lanes) {
+        const hit = lane.hits[rank]
+        if (!hit || lane.found) continue
+        pending = true
+        if (!canReadSource(this.#root, hit.record.sourceRefs[0].sourceId)) continue
+        const cost = estimateTokens(hit.record.content)
+        if (tokens + cost > budget) continue
+        tokens += cost
+        const evidence = match(lane.query, hit)
+        if (!evidence) continue
+        if (!matched.has(hit.record.id)) matched.set(hit.record.id, this.validate(hit, projectKey))
+        if (matched.get(hit.record.id)) lane.found = evidence
+      }
+      if (!pending) break
+    }
+    return { matches: lanes.filter(lane => lane.found).map(lane => ({ query: lane.query, hit: lane.found })), tokens }
   }
 }
 

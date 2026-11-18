@@ -31,7 +31,7 @@ async function setup(t, records = [], llm, testOptions) {
   let onRoute
   const routeReady = new Promise(resolve => { onRoute = resolve })
   const webServer = { register(route) { onRoute(route); return () => {} } }
-  apply({ get: name => name === 'webServer' ? webServer : name === 'llm' ? llm : undefined,
+  apply({ get: name => name === 'webServer' ? webServer : name === 'llm' ? llm : testOptions?.host?.[name],
     on: (name, fn) => { handlers[name] = fn; return () => {} },
     effect: factory => { effects.push(factory); return () => {} }, logger: { warn(...args) { warnings.push(args.join(' ')) }, info() {} },
   }, { dataDir, capture: { enabled: false }, maintenance: { enabled: false }, obsidian: { autoSync: false } }, testOptions)
@@ -45,16 +45,42 @@ async function setup(t, records = [], llm, testOptions) {
     return response.value
   }
   let turn = 0
-  const ask = async (content, sessionId = 'session-integration') => {
+  const ask = async (content, sessionId = 'session-integration', sessionState = {}) => {
     const messages = [{ id: `query-${++turn}`, role: 'user', source: { kind: 'user' }, content }]
     const result = await handlers['agent/pre-step']({
-      agent: { session: { id: sessionId, header: { cwd } } }, messages,
+      agent: { session: { id: sessionId, header: { cwd }, ...sessionState } }, messages,
       modelSelection: { provider: 'host-provider', model: 'host-model' },
     }, async () => ({ kind: 'enter', messages }))
     return result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n')
   }
   return { root, dataDir, key, panel, ask, store, warnings }
 }
+
+test('the routed model capacity and the host measurement shrink the real injection budget to zero', async t => {
+  let occupied = 850
+  let route = 'host-model'
+  const meter = { measure: () => ({ totalTokens: occupied }), estimateMessage: () => 20 }
+  const ctxWindow = 1500
+  const { ask, panel } = await setup(t, [
+    { id: 'mem_silver_snapshot', content: '银帆快照每天 04:20 执行，保留 47 天。' },
+  ], { async resolveModelInfo(provider, model) {
+    assert.equal(provider, 'host-provider')
+    assert.equal(model, 'host-model')
+    return { context: { contextWindow: ctxWindow } }
+  } }, { host: { tokenMeter: meter } })
+  const state = { requestContext: () => ({ provider: 'host-provider', model: route, contextWindow: ctxWindow }),
+    requestHeader: () => ({ config: { provider: 'host-provider', model: 'host-model', maxTokens: 300 } }) }
+  const question = '银帆快照每天几点执行，保留多久？'
+  assert.match(await ask(question, 'session-budget', state), /04:20/u)
+  const first = (await panel('stats', { sessionId: 'session-budget' })).contextUsage
+  assert.ok(first.budget < 360 && first.budget >= first.tokens && first.tokens > 0)
+  route = 'previous-model'
+  occupied = 1490
+  assert.equal(await ask(question, 'session-budget', state), '')
+  const second = (await panel('stats', { sessionId: 'session-budget' })).contextUsage
+  assert.equal(second.budget, 0)
+  assert.equal(second.tokens, 0)
+})
 
 test('context usage reports the final memory block and clears on a miss in the same session', async t => {
   const { ask, panel } = await setup(t, [
@@ -77,6 +103,34 @@ test('context usage reports the final memory block and clears on a miss in the s
   assert.equal(missed.tokens, 0)
   assert.equal(missed.items, 0)
   assert.equal(await usageOf(undefined), null)
+})
+
+test('deep recall searches only the missing snapshot reason and never treats a saved question as evidence', async t => {
+  const { ask, panel, dataDir, key } = await setup(t, [
+    { id: 'mem_quartz_clock', content: '灰晶快照每天在 03:42 执行。' },
+    { id: 'mem_quartz_retention', content: '灰晶快照保留 61 天。' },
+  ], {
+    async *stream() { assert.fail('Exact original evidence does not need a provider selection call') },
+  })
+  const grant = (messageId, text) => {
+    const source = readSource(dataDir, saveSource(dataDir, { sessionId: 'remember-source', messageId,
+      projectKey: key, role: 'user', sourceKind: 'user', text }).id)
+    assert.ok(grantSourceRecall(dataDir, source, key))
+  }
+  grant('real-reason', '记住：灰晶快照改到 03:42，因为要避开每日导入的磁盘峰值。')
+  grant('unconfirmed-question', '记住：关机单统一晚班发出。灰晶快照改期是因为审核流程吗？')
+  const answer = await ask('灰晶快照每天几点执行、保留多久、为什么改时间？')
+  for (const text of ['03:42', '61 天', '避开每日导入的磁盘峰值']) assert.ok(answer.includes(text))
+  assert.doesNotMatch(answer, /审核流程/u)
+  const report = (await panel('stats')).lastRecall
+  assert.equal(report.covered.length, 3)
+  assert.deepEqual(report.localDeepRecall.queries, ['灰晶快照 为什么改时间'])
+  assert.equal(report.localDeepRecall.limit, 50000)
+  assert.ok(report.localDeepRecall.tokens > 0 && report.localDeepRecall.tokens <= 50000)
+  const original = report.covered.flatMap(row => row.evidence).find(item => item.kind === 'source')
+  assert.ok(original)
+  await panel('removeMemory', { id: original.id, scope: 'project', projectKey: key })
+  assert.doesNotMatch(await ask('灰晶快照为什么改时间？', 'another-session'), /磁盘峰值|审核流程/u)
 })
 
 test('unextracted original evidence remains usable without another paid call, but is not reported as confirmed coverage', async t => {

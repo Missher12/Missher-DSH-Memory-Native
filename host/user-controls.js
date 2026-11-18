@@ -83,3 +83,17 @@ export function analyzeUserMessageControls(value) {
       containsUnquotedDirective(text, GENERAL_NO_SAVE_PATTERN),
   }
 }
+
+const REMEMBER_COMMAND = /^(?:(?:请(?:你)?|帮我|麻烦(?:你)?)\s*)?(?:记住|记下|记一下|别忘(?:了)?)\s*|^(?:please\s+)?remember(?:\s+(?:this|that))?(?=\s|[:：,，])\s*/iu
+
+/** A direct command with explicit content, rather than a mention of the command. */
+export function explicitRememberText(value) {
+  const text = String(value ?? '').trim()
+  const command = REMEMBER_COMMAND.exec(text)
+  if (!command) return null
+  const rest = text.slice(command[0].length).replace(/^(?:这(?:个|些|点|件事|条))?(?=\s*[:：,，])/u, '')
+  const content = rest.replace(/^[\s:：,，]+/u, '').trim()
+  if (content.length < 4 || /^(?:这个功能|这个词|这句话|的|意味着|代表|好了?|刚才|上面|前面|what\b)/iu.test(content) ||
+      !/[^?？!！。\s]/u.test(content) || analyzeUserMessageControls(text).noSaveDirective) return null
+  return content
+}

@@ -69,6 +69,35 @@ const REPLY = JSON.stringify({ memories: [
   { op: 'ADD', kind: 'fact', scope: 'project', content: '该仓库使用 pnpm 并要求 Node 22 以上', tags: ['pnpm'], confidence: 0.9, importance: 0.7 },
 ] })
 
+test('a queued, explicit remember command grants the original immediately and cannot revive a forgotten message', t => {
+  const { root, capture, session, llm, store, index } = setup(t, { reply: REPLY, config: { capture: { maxCallsPerDay: 0 } } })
+  t.after(() => capture.dispose())
+  const key = projectIdentity(session.header.cwd).key
+  const passageIndex = new SourcePassageIndex(root)
+  const enqueue = (id, content, source = 'user') => capture.observe(session, {
+    type: 'agent/inbox/spliced',
+    data: { target: 'next-turn', start: 0, inserted: [{ id, role: 'user', source: { kind: source }, content }] },
+  })
+  const command = '请记住：银帆快照每天 04:20 执行，保留 47 天。'
+  enqueue('explicit', command)
+  const hits = passageIndex.search('银帆快照', { projectKey: key })
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0].record.content, command)
+  assert.equal(hits[0].record.remembered, true)
+  assert.equal(llm.calls(), 0)
+  assert.deepEqual(passageIndex.search('银帆快照', { projectKey: projectIdentity('/tmp/other-project').key }), [])
+
+  enqueue('opt-out', '记住：石榴作业使用现役节点。不要保存本轮对话。')
+  enqueue('example', '例子：「记住：橡木快照保留两天。」')
+  enqueue('internal', '记住：雪松快照凌晨执行。', 'memory')
+  enqueue('discussion', '记住这个功能应该如何解释？')
+  for (const query of ['石榴', '橡木', '雪松', '功能']) assert.deepEqual(passageIndex.search(query, { projectKey: key }), [])
+
+  assert.ok(forgetSourcePassage(root, hits[0].record.id, key, store, index))
+  enqueue('explicit', command)
+  assert.deepEqual(new SourcePassageIndex(root).search('银帆快照', { projectKey: key }), [])
+})
+
 test('original user passages stay available when extraction waits for budget, without granting opt-outs or assistant replies', async t => {
   const {root,capture,session,llm}=setup(t,{reply:'{"memories":[]}',config:{capture:{maxCallsPerDay:0,minTurnChars:1000}}})
   t.after(()=>capture.dispose())

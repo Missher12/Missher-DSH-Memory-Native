@@ -45,6 +45,29 @@ test('old ungranted, opt-out, quoted and non-user sources never acquire automati
   assert.deepEqual(new SourcePassageIndex(root).candidates(projectKey),[])
 })
 
+test('deep passage lookup spends its shared budget only on the supplied questions', t => {
+  const { root, projectKey, save } = fixture(t)
+  for (const text of ['银帆快照保留 47 天。', '银帆快照改期是为避开夜间磁盘峰值。', '银帆快照每天 04:20 执行。']) {
+    assert.ok(grantSourceRecall(root, save(text), projectKey))
+  }
+  const index = new SourcePassageIndex(root)
+  const inspected = []
+  const queries = ['银帆快照 保留', '银帆快照 改期']
+  const result = index.findEvidence(queries, {
+    projectKey, maxTokens: 90,
+    match(query, hit) {
+      inspected.push(query)
+      return hit.record.content.includes(query.split(' ').at(-1)) ? hit : null
+    },
+  })
+  assert.deepEqual(result.matches.map(({ query }) => query), queries)
+  assert.ok(result.tokens > 0 && result.tokens <= 90)
+  assert.deepEqual([...new Set(inspected)], queries)
+  const exhausted = index.findEvidence(queries, { projectKey, maxTokens: 3, match: (_, hit) => hit })
+  assert.deepEqual(exhausted.matches, [])
+  assert.ok(exhausted.tokens <= 3)
+})
+
 test('project/root boundaries and permanent forgetting invalidate cached and restarted passages',t=>{
   const {root,projectKey,save}=fixture(t),source=save('琉璃交接的备用号码是橡果七号。')
   grantSourceRecall(root,source,projectKey)

@@ -305,7 +305,12 @@ export function matchesRecallEntity(hit, entityTerms) {
   if (!Array.isArray(entityTerms) || entityTerms.length === 0) return false
   const content = String(hit?.record?.content ?? '').toLowerCase()
   const terms = new Set(tokenize(content))
-  const directlyMatches = term => terms.has(term) || content.includes(term.toLowerCase())
+  const directlyMatches = term => {
+    const value = term.normalize('NFKC').toLowerCase()
+    if (terms.has(value)) return true
+    // ASCII identifiers must match whole tokens: Vite and Vitest are different.
+    return !/^[a-z0-9_]+$/u.test(value) && content.includes(value)
+  }
   if (entityTerms.every(directlyMatches)) return true
   // A single known object boundary can be written with 的: “方案快照” and
   // “方案的快照”. Reconstruct only contiguous Han anchors and require the
@@ -815,6 +820,40 @@ export function compileMemoryContext(ranked, options = {}) {
   const profileIds = []
   const profileKeys = new Set()
   let tokens = estimateTokens(header) + estimateTokens(footer)
+  const items = Array.isArray(ranked) ? ranked : []
+  const slots = Array.isArray(options.evidenceSlots) ? options.evidenceSlots : []
+  const costs = new Map(items.map(item => {
+    const line = formatMemoryLine(item.record)
+    return [item.record.id, { item, line, tokens: estimateTokens(line) + 1 }]
+  }))
+  const append = (row) => {
+    lines.push(row.line)
+    ids.push(row.item.record.id)
+    tokens += row.tokens
+  }
+
+  // Reserve an evidence bundle for each answerable slot before optional context.
+  // A relation only buys coverage when its supporting fact fits in the same block.
+  const uncovered = new Set(slots.map((slot, index) => slot.length ? index : null).filter(index => index !== null))
+  while (uncovered.size > 0) {
+    let best = null
+    for (const row of costs.values()) {
+      const { record, relationFromId } = row.item
+      if (ids.includes(record.id)) continue
+      const support = costs.get(relationFromId)
+      if (relationFromId && !ids.includes(relationFromId) &&
+          (!support || (support.item.relationFromId && !ids.includes(support.item.relationFromId)))) continue
+      const bundle = support && !ids.includes(relationFromId) ? [support, row] : [row]
+      const bundleIds = bundle.map(entry => entry.item.record.id)
+      const covered = [...uncovered].filter(index => slots[index].some(id => bundleIds.includes(id)))
+      const cost = bundle.reduce((total, entry) => total + entry.tokens, 0)
+      if (covered.length === 0 || ids.length + bundle.length > maxItems || tokens + cost > maxTokens) continue
+      if (best === null || cost / covered.length < best.cost / best.covered.length) best = { bundle, covered, cost }
+    }
+    if (best === null) break
+    for (const row of best.bundle) append(row)
+    for (const slot of best.covered) uncovered.delete(slot)
+  }
 
   const useProfile = profileLines.slice(0, profileLimit)
   if (useProfile.length > 0) {
@@ -830,23 +869,18 @@ export function compileMemoryContext(ranked, options = {}) {
     }
   }
 
-  for (const item of (Array.isArray(ranked) ? ranked : [])) {
+  for (const item of items) {
     if (ids.length >= maxItems) break
     const record = item.record
+    if (ids.includes(record.id)) continue
     if (item.relationFromId && !ids.includes(item.relationFromId)) continue
     const recordKey = normalizeForDedupe(record.content)
     if (recordKey.length >= 6 && [...profileKeys].some((key) => key.startsWith(recordKey))) {
       profileIds.push(record.id)
       continue
     }
-    const line = formatMemoryLine(record)
-    const lineTokens = estimateTokens(line)
-    if (tokens + lineTokens > maxTokens) {
-      continue
-    }
-    lines.push(line)
-    ids.push(record.id)
-    tokens += lineTokens
+    const row = costs.get(record.id)
+    if (tokens + row.tokens <= maxTokens) append(row)
   }
   if (lines.length === 0) return null
   const text = [header, ...lines, footer].join('\n')

@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import { ObsidianSync } from './host/obsidian-sync.js'
 import { CapturePipeline } from './host/capture.js'
 import { resolveConfig } from './host/config.js'
+import { memoryBudgetFor } from './host/context-budget.js'
 import { projectIdentity } from './host/paths.js'
 import { prepareStorage } from './host/storage-boundary.js'
 import { memoryHealth, probeStorage, storageIssue } from './host/health.js'
@@ -27,7 +28,7 @@ import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, conf
 import { analyzeUserMessageControls } from './host/user-controls.js'
 import { sourceResolver } from './host/source-recall.js'
 import { SourceCandidateIndex } from './host/source-index.js'
-import { SourcePassageIndex } from './host/source-passages.js'
+import { DEEP_RECALL_TOKEN_LIMIT, isRecallSourceStatement, SourcePassageIndex } from './host/source-passages.js'
 import { SemanticRecallIndex } from './host/semantic-index.js'
 import { KnowledgeRecallIndex } from './host/knowledge-recall.js'
 import { writeGateLog } from './host/gate-log.js'
@@ -252,13 +253,26 @@ function selectionFitsSlot(slot, candidate, quote) {
   return matchesRecallAttribute(hit, slot.query, slot.detail, [])
 }
 
-function originalCandidateQuote(record, plan) {
-  if (record.kind !== 'source') return record.recallContent ?? record.content
-  const terms = [...new Set([...recallAnchorTerms(plan.query), ...recallSubjectTerms(plan.query)])]
-  const sentences = record.content.split(/\r?\n+|(?<=[。！？!?])\s*|(?<!\d)\.(?=\s|$)/u)
-    .map(text => ({ text, score: terms.reduce((n, term) => n + Number(text.toLowerCase().includes(term.toLowerCase())), 0) }))
-    .sort((a,b) => b.score-a.score)
-  return sentences[0]?.score > 0 ? sentences[0].text : record.recallContent ?? record.content
+function directPassageEvidence(plan, hit, hasSubquestions) {
+  const whole = hit.record.content
+  const matches = text => slotEvidence(plan, [{ ...hit, record: { ...hit.record, recallQuote: text } }], hasSubquestions).length > 0
+  const sentences = whole.split(/(?<=[。！？!?])\s*|(?<!\d)\.(?=\s|$)/u)
+    .map(text => text.trim()).filter(Boolean)
+  const quote = sentences.filter(isRecallSourceStatement).sort((a, b) => a.length - b.length).find(matches)
+    ?? (sentences.every(isRecallSourceStatement) && matches(whole) ? whole : null)
+  return quote === null ? null : { ...hit, record: { ...hit.record, recallQuote: quote } }
+}
+
+function appendPassageEvidence(hitsById, hit, plan) {
+  const previous = hitsById.get(hit.record.id)
+  const precedingQuote = previous?.record.recallQuote
+  const quotes = [...new Set([...(previous?.passageQuotes ?? (precedingQuote ? [precedingQuote] : [])), hit.record.recallQuote])]
+  const field = hit.record.remembered ? 'selectedSlots' : 'candidateSlots'
+  const saved = { ...hit, ...previous, passageQuotes: quotes,
+    record: { ...hit.record, unverifiedRecall: !hit.record.remembered, recallQuote: quotes.join('；') },
+    [field]: [...new Set([...(previous?.[field] ?? []), plan.query])] }
+  hitsById.set(hit.record.id, saved)
+  return saved
 }
 
 function recallEvidenceReport(hit) {
@@ -475,6 +489,12 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     }
     const query = userTexts[0] ?? ''
     if (query === '') return withoutPrevious
+    const availableMemoryTokens = await memoryBudgetFor(ctx, {
+      agent: payload.agent, session, selection: payload.modelSelection, messages: retained,
+      maxTokens: config.inject.maxTokens, signal: payload.signal,
+    })
+    contextBudget = availableMemoryTokens
+    if (availableMemoryTokens === 0 || payload.signal?.aborted) return withoutPrevious
     const previousQuery = userTexts[1]
     const turnKey = turnKeyOf(latestUserMessage, payloadMessages, query, previousQuery)
     const followUp = previousQuery !== undefined && isFollowUpQuery(analyzeUserMessageControls(query).retrievalQuery)
@@ -769,11 +789,31 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     let missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
     let completionReceipt = null
     let candidatePool = []
+    const localPassages = new Map()
+    let localDeepRecall = null
+    if (missingSlots.length > 0 && isRecallQuestion(query)) {
+      const plans = new Map(missingSlots.slice(0, MAX_RECALL_LOOKUPS)
+        .filter(({ plan }) => plan.timeIntent.kind === 'current' && !plan.requiresRelationTrace)
+        .map(({ plan }) => [plan.query, plan]))
+      if (plans.size > 0) {
+        const scan = passageIndex.findEvidence([...plans.keys()], {
+          projectKey: identity.key, now,
+          match: (question, hit) => directPassageEvidence(plans.get(question), hit, hasSubquestions),
+        })
+        localDeepRecall = { queries: [...plans.keys()], tokens: scan.tokens, limit: DEEP_RECALL_TOKEN_LIMIT }
+        for (const { query: question, hit } of scan.matches) {
+          if (!hit.record.remembered) { localPassages.set(question, hit); continue }
+          const saved = appendPassageEvidence(hitsById, hit, plans.get(question))
+          if (!hasSubquestions) rootAcceptedById.set(saved.record.id, saved)
+        }
+        coverage = slotPlans.map(plan => slotEvidence(plan, [...hitsById.values()], hasSubquestions))
+        missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
+      }
+    }
     if (missingSlots.length > 0) {
-      const validPassages = passageIndex.validateMany(passageIndex.candidates(identity.key), identity.key)
       const semanticCorpus = [...store.list('project', identity.key), ...store.list('global', null),
         ...knowledgeIndex.candidates(identity.key, { now, limit: Number.MAX_SAFE_INTEGER }).map(hit => hit.record),
-        ...validPassages.map(hit => hit.record)]
+        ...passageIndex.candidates(identity.key).map(hit => hit.record)]
         .filter(record => !record.quoted && !looksSensitive(record.content))
       let semanticLists = []
       try {
@@ -817,8 +857,9 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         coverage = slotPlans.map(plan => slotEvidence(plan, [...hitsById.values()], hasSubquestions))
         missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
       }
-      if (missingSlots.length > 0 && isRecallQuestion(query)) {
-        const missingPlans = missingSlots.slice(0, MAX_RECALL_LOOKUPS).map(entry => entry.plan)
+      const selectionSlots = missingSlots.slice(0, MAX_RECALL_LOOKUPS).filter(entry => !localPassages.has(entry.plan.query))
+      if (selectionSlots.length > 0 && isRecallQuestion(query)) {
+        const missingPlans = selectionSlots.map(entry => entry.plan)
         completionReceipt = await capture.selectRecall({
           session,
           turnKey,
@@ -838,7 +879,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         const byId = new Map(sentCandidates.map(hit => [hit.record.id, hit]))
         const quoteListById = new Map()
         for (const selection of selections) {
-          const missingSlot = missingSlots[selection.slot]
+          const missingSlot = selectionSlots[selection.slot]
           const candidate = byId.get(selection.id)
           if (!missingSlot || !candidate) continue
           const quote = contextualRecallQuote(candidate.record.content, selection.quote, candidate.record.kind === 'source')
@@ -903,35 +944,52 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         coverage = slotPlans.map(plan => slotEvidence(plan, [...hitsById.values()], hasSubquestions))
         missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
       }
-      // No extra paid request is needed just to present local evidence. These
-      // are explicitly unconfirmed candidates, never counted as answered slots.
-      // A completed/unknown model selection is not overridden or sent again.
-      if (completionReceipt?.callState === 'not-sent') {
-        for (const { plan } of missingSlots.slice(0, MAX_RECALL_LOOKUPS)) {
-          const semanticQuery = plan.searchQuery ?? plan.query
-          const directSource = hit => hit.record.kind === 'source' && slotEvidence(plan, [hit], hasSubquestions).length > 0
-          const candidate = candidatePool.filter(hit => matchesRecallTime(hit.record, plan.timeIntent, now) &&
-            (hit.record.kind !== 'preference' || isPreferenceQuery(plan.query)) &&
-            // A vector alone cannot tie a global record to this project's
-            // question when the model has not verified that association.
-            (hit.record.scope === 'project' || isPreferenceQuery(plan.query) || slotEvidence(plan, [hit], hasSubquestions).length > 0) &&
-            (directSource(hit) || ((hit.semanticQueries?.[semanticQuery] ?? 0) >= .8 &&
-              selectionFitsSlot(plan, hit, hit.record.recallContent ?? hit.record.content))))
-            .sort((a,b) => (directSource(b) ? 2 + b.score : b.semanticQueries[semanticQuery]) -
-              (directSource(a) ? 2 + a.score : a.semanticQueries[semanticQuery]))[0]
-          if (!candidate) continue
-          const old = hitsById.get(candidate.record.id)
-          const quote = originalCandidateQuote(candidate.record, plan)
-          const quotes = [...new Set([...(old?.candidateQuotes ?? (old?.record.recallQuote ? [old.record.recallQuote] : [])), quote])]
-          const hit = { ...candidate, ...old,
-            record: { ...(old?.record ?? { ...candidate.record, unverifiedRecall: true }), recallQuote: quotes.join('；') },
-            candidateQuotes: quotes,
-            candidateSlots: [...new Set([...(old?.candidateSlots ?? []), plan.query])] }
-          hitsById.set(hit.record.id, hit)
-          if (hasSubquestions) {
-            if (!subquestionPrimaryIds.includes(hit.record.id)) subquestionPrimaryIds.push(hit.record.id)
-          } else rootAcceptedById.set(hit.record.id, hit)
+      // An exact local passage can fill its own slot without a selection request.
+      // Semantic-only candidates still use the existing no-send fallback.
+      for (const { plan } of missingSlots.slice(0, MAX_RECALL_LOOKUPS)) {
+        const localPassage = localPassages.get(plan.query)
+        if (localPassage) {
+          const saved = appendPassageEvidence(hitsById, localPassage, plan)
+          if (!hasSubquestions) rootAcceptedById.set(saved.record.id, saved)
+          continue
         }
+        if (completionReceipt?.callState !== 'not-sent') continue
+        const semanticQuery = plan.searchQuery ?? plan.query
+        const rankedCandidates = []
+        for (const hit of candidatePool) {
+          if (!matchesRecallTime(hit.record, plan.timeIntent, now)) continue
+          if (hit.record.kind === 'source') {
+            const evidence = directPassageEvidence(plan, hit, hasSubquestions)
+            if (evidence) rankedCandidates.push({ hit: evidence, score: 2 + hit.score })
+            continue
+          }
+          if (hit.record.kind === 'preference' && !isPreferenceQuery(plan.query)) continue
+          // A vector alone cannot tie a global record to this project's question.
+          if (hit.record.scope === 'global' && !isPreferenceQuery(plan.query) &&
+              !slotEvidence(plan, [hit], hasSubquestions).length) continue
+          const score = hit.semanticQueries?.[semanticQuery] ?? 0
+          if (score >= .8 && selectionFitsSlot(plan, hit, hit.record.recallContent ?? hit.record.content)) {
+            rankedCandidates.push({ hit, score })
+          }
+        }
+        const candidate = rankedCandidates.sort((a, b) => b.score - a.score)[0]?.hit
+        if (!candidate) continue
+        if (candidate.record.kind === 'source') {
+          const saved = appendPassageEvidence(hitsById, candidate, plan)
+          if (!hasSubquestions) rootAcceptedById.set(saved.record.id, saved)
+          continue
+        }
+        const old = hitsById.get(candidate.record.id)
+        const quote = candidate.record.recallContent ?? candidate.record.content
+        const quotes = [...new Set([...(old?.candidateQuotes ?? (old?.record.recallQuote ? [old.record.recallQuote] : [])), quote])]
+        const hit = { ...candidate, ...old,
+          record: { ...(old?.record ?? { ...candidate.record, unverifiedRecall: true }), recallQuote: quotes.join('；') },
+          candidateQuotes: quotes,
+          candidateSlots: [...new Set([...(old?.candidateSlots ?? []), plan.query])] }
+        hitsById.set(hit.record.id, hit)
+        if (hasSubquestions) {
+          if (!subquestionPrimaryIds.includes(hit.record.id)) subquestionPrimaryIds.push(hit.record.id)
+        } else rootAcceptedById.set(hit.record.id, hit)
       }
     }
     const updateLastRecall = (injectedIds = []) => {
@@ -963,6 +1021,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         estimatedPromptTokens: completionReceipt?.promptTokens ?? null,
         reason: completionReceipt?.reason ?? null,
         semantic: semanticIndex.status(),
+        localDeepRecall,
       }
     }
     updateLastRecall()
@@ -1086,7 +1145,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     updateLastRecall()
     if (hitsById.size === 0) return withoutPrevious
     const hits = [...hitsById.values()]
-    const budget = hasSubquestions ? config.inject.maxTokens : adaptiveInjectionBudget(config.inject.maxTokens, hits.length, followUp)
+    const budget = hasSubquestions ? availableMemoryTokens : adaptiveInjectionBudget(availableMemoryTokens, hits.length, followUp)
     contextBudget = budget
     const maxItems = followUp && !hasSubquestions ? Math.min(4, config.inject.maxItems) : config.inject.maxItems
     const topicCounts = new Map()
@@ -1120,9 +1179,14 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     const profile = preferenceIntent ? deriveProfile(hits.map(hit => hit.record).filter(record =>
       record.kind === 'preference' && record.unverifiedRecall !== true), { limit: 2, now }) : null
     const profileLines = profile === null ? [] : formatProfileLines(profile.traits, { limit: 2, maxChars: 300, compact: true })
+    const evidenceSlots = hasSubquestions ? slotPlans.map(plan => {
+      const confirmed = slotEvidence(plan, ranked.map(hit => hitsById.get(hit.record.id) ?? hit), true)
+      return (confirmed.length ? confirmed : hits.filter(hit => hit.candidateSlots?.includes(plan.query))).map(hit => hit.record.id)
+    }) : []
     const block = compileMemoryContext(ranked, {
       maxTokens: budget,
       maxItems,
+      evidenceSlots,
       profileLimit: 2,
       profileLines,
       skipCapture: analyzeUserMessageControls(query).noSaveDirective,
