@@ -73,15 +73,12 @@ window.__ModuleLoader__.load({
         'stats.candidate': 'Candidates',
         'stats.total': 'Total',
         'stats.projects': 'Projects',
-        'activity.activeDays': 'Active days',
-        'activity.avgConfidence': 'Avg confidence',
         'activity.blueColor': 'Lake blue',
         'activity.cell': '{date} · {count} memories',
         'activity.colorMenu': 'Colour',
         'activity.cumulativeTooltip': 'Through {end}: {count} memories',
         'activity.customColor': 'Custom colour…',
         'activity.amberColor': 'Warm gold',
-        'activity.last7': 'Last 7 days',
         'activity.less': 'Less',
         'activity.mode.cumulative': 'Cumulative',
         'activity.mode.daily': 'Daily',
@@ -89,7 +86,6 @@ window.__ModuleLoader__.load({
         'activity.more': 'More',
         'activity.roseColor': 'Dusty rose',
         'activity.sparseHint': 'The heatmap fills in as memories accumulate.',
-        'activity.streak': 'Current streak',
         'activity.summary': '{total} memories · {days} active days',
         'activity.tealColor': 'Teal',
         'activity.themeColor': 'Follow theme',
@@ -164,10 +160,9 @@ window.__ModuleLoader__.load({
         'library.exportResult': 'Exported {written} notes · skipped {skipped}.',
         'library.importResult': 'Imported {imported} · skipped {skipped} · conflicts {conflicts}.',
         'library.syncFailed': 'Sync failed: {reason}',
-        'settings.captureQueue': 'Capture tasks: {pending} pending · {partial} partial · {unknown} unknown · {failed} failed · {done} done',
         'settings.captureAllowance': 'Automatic calls today: {used}/{limit} · shared by extraction and deeper recall',
-        'settings.captureResume': '{count} waiting · resumes automatically at {time} (local time). Manual recovery uses additional calls.',
-        'settings.capturePaused': '{count} waiting · automatic capture is disabled or its daily allowance is zero.',
+        'settings.captureResume': '{count} waiting · resumes {time} local. Manual recovery uses extra calls.',
+        'settings.capturePaused': '{count} waiting · automatic capture or its allowance is off.',
         'settings.captureStorage': 'Capture storage: {sources} sources · {size} · {tasks} tasks',
         'settings.captureRetry': 'Recover next task',
         'settings.captureUnknownConfirm': 'The previous request has no confirmed result. Retrying may charge again. Send a new request?',
@@ -185,8 +180,7 @@ window.__ModuleLoader__.load({
         'settings.group.data': 'Data',
         'settings.group.obsidian': 'Obsidian',
         "obsidian.auto": "Automatic two-way sync",
-        "obsidian.autoHint": "Syncs while DSH is running, about every 5 seconds after the previous pass. Save settings first. Conflicts keep both copies in _conflicts; replaced files are retained in _history.",
-        'obsidian.readingHint': 'Open 阅读/首页 in the sync folder for project and topic pages, with links to complete source notes. Personal additions below the generated section are kept.',
+        'obsidian.autoHint': 'Conflicts keep both copies. Open 阅读/首页 to browse source notes.',
         "obsidian.now": "Sync now",
         "obsidian.syncStatus": "Last sync: {time} · sent {sent} · received {received} · conflicts {conflicts}",
         "obsidian.notYet": "Not synced yet",
@@ -212,16 +206,12 @@ window.__ModuleLoader__.load({
         'settings.saving': 'Saving…',
         'settings.saved': 'Settings saved',
         'settings.state.dirty': 'Unsaved changes',
-        'settings.state.saved': 'Saved',
-        'settings.state.savedAt': 'Saved · {time}',
-        'settings.badge.on': 'Self-maintenance on',
-        'settings.badge.off': 'Self-maintenance off',
         'settings.maintenance.off': 'Self-maintenance is off · existing backups stay local',
         'settings.data.label': 'Export, import & backup',
         'data.export': 'Export',
         'data.import': 'Import',
         'data.backup': 'Complete backup',
-        'data.backupHint': 'Export/import merges current records. Complete backups also retain history, source evidence, settings and request receipts; restore them to a new directory with the recovery tool.',
+        'data.backupHint': 'Export saves current records. Full backups also retain sources, history, settings and receipts.',
         'data.exported': 'Exported',
         'data.imported': 'Imported {imported}, skipped {skipped}',
         'data.protectedDeleted': 'Kept {count} locally forgotten records deleted.',
@@ -230,15 +220,14 @@ window.__ModuleLoader__.load({
         'settings.failed': 'Save failed: {reason}',
         'settings.maintenance.none': 'Self-maintenance has not run yet',
         'settings.maintenance.summary': 'Last maintenance: archived {archived} · pruned {pruned} backups',
-        'settings.extract.usage': 'extraction ~{tokens} tokens (estimated)',
-        'contextUsage.title': 'Memory context usage',
+        'contextUsage.title': 'Memory in this chat',
         'contextUsage.amount': '{tokens} / {budget} tokens',
-        'contextUsage.detail': 'Current chat, last model step · {items} memories · estimated tokens',
-        'contextUsage.detailZero': 'Current chat, last model step · No memory added',
-        'contextUsage.noRoom': 'The last model step had no room for memories.',
-        'contextUsage.noSession': 'Open a chat to see its memory usage.',
-        'contextUsage.empty': 'Usage appears after the next model step in this chat.',
-        'contextUsage.disabled': 'Memory injection is off.',
+        'contextUsage.detail': 'Last step: {items} items · estimate',
+        'contextUsage.detailZero': 'No memory added last step',
+        'contextUsage.noRoom': 'No room in the last step',
+        'contextUsage.noSession': 'No chat selected',
+        'contextUsage.empty': 'Waiting for a model step',
+        'contextUsage.disabled': 'Memory injection off',
         'usage.title': 'Token usage · last 7 days',
         'usage.total': '{tokens} tokens',
         'usage.inject': 'Injection',
@@ -330,16 +319,15 @@ window.__ModuleLoader__.load({
         'error.missingProject': 'No current project is known yet.',
         'section.memory': "Memories",
         'section.brief': "Project brief",
-        "health.title": "Storage health",
+        'health.title': 'Health',
         "health.ok": "Available",
-        "health.attention": "Needs attention",
+        'health.attention': 'Needs attention',
         "health.unavailable": "Paused",
         "health.download": "Export diagnostic summary",
         "health.hint": "Contains only version, status codes and counts. Memory text, file paths and session identifiers are excluded.",
         "health.profile": "Isolated by host profile",
         "health.explicit": "Explicit standalone directory",
         "health.memories": "Current memories {memories} · deletion markers {deleted}",
-        "health.jobs": "Queued {pending} · running {running} · incomplete {partial} · failed {failed} · unknown {unknown}",
         "health.corrupt": "Unreadable authority lines: {count}",
         "health.storage-probe-failed": "Local read/write verification failed. Check permissions and free disk space.",
         "health.panel-unavailable": "The settings panel gateway is unavailable. Reload the plugin after checking the host extension service.",
@@ -347,7 +335,7 @@ window.__ModuleLoader__.load({
         "health.hooks-unavailable": "A required session or pre-step hook is unavailable. Reload the plugin after checking host compatibility.",
         "health.extraction-route-unavailable": "The extraction route is unavailable. Select a working model in the host and retry the queued task.",
         "health.lexical-failed": "Keyword search encountered an error. Reload the plugin and retry.",
-        "health.semantic-failed": "Local semantic search needs model preparation. Prepare or import the pinned model below.",
+        'health.semantic-failed': 'Semantic search is using keyword fallback. Prepare the local model.',
         "health.injection-failed": "Context injection encountered an error. Review capture and injection settings, then retry.",
         "health.obsidian-failed": "Some Obsidian files need attention. Open sync settings to review or retry.",
         "health.component.storage": "Storage read/write",
@@ -376,13 +364,22 @@ window.__ModuleLoader__.load({
         "health.settings-unreadable": "Settings cannot be read. Check file permissions before reloading the plugin.",
         "health.profile-explicit": "This standalone directory was explicitly configured; native profile isolation is not verified.",
         "health.backup-failed": "The complete backup did not finish. Existing backups were retained; check storage or retry later.",
-        "health.corrupt-lines": "Unreadable authority lines were skipped. Check the local quarantine or restore a verified backup before relying on the record count.",
-        "health.capture-incomplete": "Some extraction tasks are incomplete or failed. Inspect them in the task list below.",
-        "health.capture-unknown": "Some request outcomes are unknown. They are not automatically resubmitted to avoid duplicate billing.",
+        'health.corrupt-lines': 'Unreadable records were skipped. Check quarantine or restore a backup.',
+        'health.capture-incomplete': 'Some extraction tasks need a retry.',
+        'health.capture-unknown': 'Unknown requests are held to avoid duplicate charges.',
         'section.activity': "Activity",
         'section.settings': "Settings",
         'nav.sections': "Memory sections",
-        'view.activity': "Processing & usage",
+        'view.activity': 'Activity',
+        'activity.trends': 'Trends',
+        'activity.extraction': 'Extraction',
+        'activity.idle': 'Idle',
+        'activity.off': 'Off',
+        'activity.queue.pending': 'Queued {count}',
+        'activity.queue.running': 'Running {count}',
+        'activity.queue.partial': 'Incomplete {count}',
+        'activity.queue.failed': 'Failed {count}',
+        'activity.queue.unknown': 'Unverified {count}',
         'view.brief': "Project brief",
         'sync.manual': "Manual transfer",
         'sync.memories': "Memories",
@@ -407,12 +404,12 @@ window.__ModuleLoader__.load({
         'library.scope.project': "Only in one project",
         'library.scope.global': "Across all projects",
         'library.scopeHint': "Linked notes remain limited by their source memory. Forgotten content is not recalled.",
-        'recall.title': 'Latest evidence lookup',
-        'recall.empty': 'Evidence will appear here after a recall question.',
+        'recall.title': 'Latest recall',
+        'recall.empty': 'None yet',
         'recall.found': 'Evidence included in this answer',
         'recall.missing': 'Still missing evidence',
         'recall.localDeepUsage': 'Local deep search · {count} gaps · {tokens} / {limit} tokens',
-        'recall.coverage': 'Included {covered} of {total} questions',
+        'recall.coverage': '{covered}/{total} supported',
         'recall.candidates': 'Candidate passages included; answers not yet confirmed',
         'recall.forgetSource': 'Forget this original message',
         'recall.forgetConfirm': 'Forget the entire original message and its extracted memories? This also blocks all of its indexed passages.',
@@ -432,7 +429,7 @@ window.__ModuleLoader__.load({
         'recall.model.cancel': 'Cancel preparation',
         'recall.model.import': 'Import offline model',
         'recall.model.folder': 'Model folder',
-        'recall.model.folderHint': 'Choose the folder containing the three pinned model files.',
+        'recall.model.folderHint': 'Choose a folder with the pinned model files.',
         'recall.model.progress': '{file}: {done} / {total}',
         'recall.model.preparing': 'Preparing local model',
         'recall.model.importing': 'Importing local model',
@@ -454,15 +451,12 @@ window.__ModuleLoader__.load({
         'stats.candidate': '\u5f85\u5ba1',
         'stats.total': '\u603b\u8ba1',
         'stats.projects': '\u9879\u76ee',
-        'activity.activeDays': '活跃天数',
-        'activity.avgConfidence': '平均置信度',
         'activity.blueColor': '湖蓝',
         'activity.cell': '{date} · {count} 条',
         'activity.colorMenu': '配色',
         'activity.cumulativeTooltip': '截至 {end}：累计 {count} 条记忆',
         'activity.customColor': '自定义颜色…',
         'activity.amberColor': '暖金',
-        'activity.last7': '近 7 天',
         'activity.less': '少',
         'activity.mode.cumulative': '累计',
         'activity.mode.daily': '每日',
@@ -470,7 +464,6 @@ window.__ModuleLoader__.load({
         'activity.more': '多',
         'activity.roseColor': '烟粉',
         'activity.sparseHint': '热力图会随着记忆积累逐渐点亮。',
-        'activity.streak': '连续天数',
         'activity.summary': '近一年 {total} 条 · {days} 天有记录',
         'activity.tealColor': '青绿',
         'activity.themeColor': '跟随主题',
@@ -545,10 +538,9 @@ window.__ModuleLoader__.load({
         'library.exportResult': '已导出 {written} 条 · 跳过 {skipped} 条。',
         'library.importResult': '已导入 {imported} 条 · 跳过 {skipped} 条 · 冲突 {conflicts} 条。',
         'library.syncFailed': '同步失败：{reason}',
-        'settings.captureQueue': '提炼任务：待处理 {pending} · 待补全 {partial} · 未知 {unknown} · 失败 {failed} · 完成 {done}',
         'settings.captureAllowance': '今日自动调用 {used}/{limit} · 提炼与深查共用',
-        'settings.captureResume': '{count} 项等待额度 · 本地时间 {time} 自动继续。手动恢复会使用额外调用额度。',
-        'settings.capturePaused': '{count} 项等待额度 · 自动捕获已关闭或每日额度为 0。',
+        'settings.captureResume': '{count} 项等额度 · {time} 自动续跑。手动恢复会额外调用。',
+        'settings.capturePaused': '{count} 项暂停 · 捕获关闭或额度为 0。',
         'settings.captureRetry': '恢复下一项',
         'settings.captureUnknownConfirm': '上一次请求结果未知，重新发送可能再次计费。确认发送新请求？',
         'settings.captureNothing': '没有可恢复的末级任务，请检查正在运行或结果未知的子任务。',
@@ -565,8 +557,7 @@ window.__ModuleLoader__.load({
         'settings.group.data': '\u6570\u636e',
         'settings.group.obsidian': 'Obsidian',
         "obsidian.auto": "自动双向同步",
-        "obsidian.autoHint": "DSH 运行期间，上一轮结束后约每 5 秒同步一次。请先保存设置。冲突双方保留在 _conflicts，替换过的文件保留在 _history。",
-        'obsidian.readingHint': '在同步目录打开「阅读/首页」，按项目和主题阅读并跳转原文。自动整理区下方可保留自己的补充。',
+        'obsidian.autoHint': '冲突保留双方版本。打开「阅读/首页」查看原文。',
         "obsidian.now": "立即同步",
         "obsidian.syncStatus": "最近同步：{time} · 导出 {sent} · 导入 {received} · 冲突 {conflicts}",
         "obsidian.notYet": "尚未同步",
@@ -592,24 +583,19 @@ window.__ModuleLoader__.load({
         'settings.saving': '\u4fdd\u5b58\u4e2d\u2026',
         'settings.saved': '\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
         'settings.state.dirty': '\u6709\u672a\u4fdd\u5b58\u7684\u66f4\u6539',
-        'settings.state.saved': '\u5df2\u4fdd\u5b58',
-        'settings.state.savedAt': '\u5df2\u4fdd\u5b58 \u00b7 {time}',
-        'settings.badge.on': '\u81ea\u52a8\u7ef4\u62a4\u4e2d',
-        'settings.badge.off': '\u81ea\u7ef4\u62a4\u5df2\u5173\u95ed',
         'settings.maintenance.off': '\u81ea\u7ef4\u62a4\u5df2\u5173\u95ed \u00b7 \u5386\u53f2\u5907\u4efd\u4ecd\u4fdd\u7559\u5728\u672c\u5730',
         'settings.data.label': '\u5bfc\u51fa\u3001\u5bfc\u5165\u4e0e\u5907\u4efd',
         'data.export': '\u5bfc\u51fa',
         'data.import': '\u5bfc\u5165',
-        "health.title": "存储状态",
+        'health.title': '运行状态',
         "health.ok": "可用",
-        "health.attention": "需要处理",
+        'health.attention': '需处理',
         "health.unavailable": "已暂停",
         "health.download": "导出诊断摘要",
         "health.hint": "只包含版本、状态码和数量，不含记忆正文、文件路径或会话标识。",
         "health.profile": "按宿主配置隔离",
         "health.explicit": "独立指定目录",
         "health.memories": "当前记忆 {memories} · 删除标记 {deleted}",
-        "health.jobs": "排队 {pending} · 处理中 {running} · 未完成 {partial} · 失败 {failed} · 待核实 {unknown}",
         "health.corrupt": "无法读取的原始记录行：{count}",
         "health.storage-probe-failed": "本地读写核验失败，请检查目录权限和磁盘空间。",
         "health.panel-unavailable": "设置面板网关不可用，请检查宿主扩展服务后重新加载插件。",
@@ -617,7 +603,7 @@ window.__ModuleLoader__.load({
         "health.hooks-unavailable": "必要的会话或预处理钩子不可用，请检查宿主兼容性后重新加载插件。",
         "health.extraction-route-unavailable": "提炼模型路由不可用，请在宿主选择可用模型后重试队列任务。",
         "health.lexical-failed": "关键词检索遇到错误，请重新加载插件后重试。",
-        "health.semantic-failed": "本地语义检索需要准备模型，请在下方准备或导入固定模型。",
+        'health.semantic-failed': '语义检索已回退到关键词，可准备本地模型。',
         "health.injection-failed": "上下文注入遇到错误，请检查捕获和注入设置后重试。",
         "health.obsidian-failed": "部分 Obsidian 文件需要处理，请打开同步设置查看或重试。",
         "health.component.storage": "存储读写",
@@ -646,11 +632,11 @@ window.__ModuleLoader__.load({
         "health.settings-unreadable": "无法读取设置。请检查文件权限后重新加载插件。",
         "health.profile-explicit": "当前目录由独立配置指定，尚未核验宿主配置隔离。",
         "health.backup-failed": "完整备份未完成，已有备份保留。请检查存储或稍后重试。",
-        "health.corrupt-lines": "已跳过无法读取的记录行。请检查本地隔离记录或恢复已验证备份，再判断记忆是否完整。",
-        "health.capture-incomplete": "存在未完成或失败的提炼任务，请查看下方任务列表。",
-        "health.capture-unknown": "部分请求结果未知，为避免重复计费不会自动重发。",
+        'health.corrupt-lines': '部分记录无法读取，请检查隔离文件或备份。',
+        'health.capture-incomplete': '部分提炼任务需恢复。',
+        'health.capture-unknown': '待核实任务暂停重发，避免重复计费。',
         'data.backup': '完整备份',
-        'data.backupHint': '导出和导入用于迁移当前记忆。完整备份还保留历史、原文、设置和请求回执；通过恢复工具还原到新目录。',
+        'data.backupHint': '导出保存当前记录，完整备份另含原文、历史、设置和调用记录。',
         'data.exported': '\u5df2\u5bfc\u51fa',
         'data.imported': '\u5df2\u5bfc\u5165 {imported} \u6761\uff0c\u8df3\u8fc7 {skipped} \u6761',
         'data.protectedDeleted': '已保留 {count} 条本地记忆的遗忘状态。',
@@ -659,15 +645,14 @@ window.__ModuleLoader__.load({
         'settings.failed': '\u4fdd\u5b58\u5931\u8d25\uff1a{reason}',
         'settings.maintenance.none': '\u5c1a\u672a\u6267\u884c\u81ea\u7ef4\u62a4',
         'settings.maintenance.summary': '\u4e0a\u6b21\u81ea\u7ef4\u62a4\uff1a\u5f52\u6863 {archived} \u6761 \u00b7 \u6e05\u7406\u5907\u4efd {pruned} \u4efd',
-        'settings.extract.usage': '\u62bd\u53d6\u7ea6 {tokens} token\uff08\u4f30\u7b97\uff09',
-        'contextUsage.title': '记忆上下文用量',
+        'contextUsage.title': '当前会话记忆',
         'contextUsage.amount': '{tokens} / {budget} Token',
-        'contextUsage.detail': '当前会话最近一轮 · {items} 条记忆 · Token 为估算',
-        'contextUsage.detailZero': '当前会话最近一轮 · 未注入记忆',
-        'contextUsage.noRoom': '最近一轮没有可用于记忆的上下文空间。',
-        'contextUsage.noSession': '打开一个会话即可查看用量。',
-        'contextUsage.empty': '当前会话下次请求模型后显示用量。',
-        'contextUsage.disabled': '已关闭记忆注入。',
+        'contextUsage.detail': '上一轮 {items} 条 · 估算',
+        'contextUsage.detailZero': '上一轮未注入',
+        'contextUsage.noRoom': '上一轮无剩余空间',
+        'contextUsage.noSession': '未打开会话',
+        'contextUsage.empty': '等待模型回复',
+        'contextUsage.disabled': '记忆注入已关闭',
         'usage.title': 'Token 用量 · 近 7 天',
         'usage.total': '共 {tokens} token',
         'usage.inject': '注入',
@@ -762,7 +747,16 @@ window.__ModuleLoader__.load({
         'section.activity': "活动",
         'section.settings': "设置",
         'nav.sections': "记忆导航",
-        'view.activity': "提炼与用量",
+        'view.activity': '活动',
+        'activity.trends': '趋势',
+        'activity.extraction': '提炼',
+        'activity.idle': '空闲',
+        'activity.off': '已关闭',
+        'activity.queue.pending': '待处理 {count}',
+        'activity.queue.running': '处理中 {count}',
+        'activity.queue.partial': '待补全 {count}',
+        'activity.queue.failed': '失败 {count}',
+        'activity.queue.unknown': '待核实 {count}',
         'view.brief': "项目档案",
         'sync.manual': "手动导入与导出",
         'sync.memories': "记忆记录",
@@ -787,12 +781,12 @@ window.__ModuleLoader__.load({
         'library.scope.project': "仅指定项目",
         'library.scope.global': "所有项目",
         'library.scopeHint': "关联记忆的笔记仍受原记忆范围限制，已遗忘内容不会重新参与回答。",
-        'recall.title': '最近一次查证',
-        'recall.empty': '询问记忆后，这里会显示查证结果。',
+        'recall.title': '最近召回',
+        'recall.empty': '暂无记录',
         'recall.found': '已放入本轮回答的证据',
         'recall.missing': '仍缺少证据',
         'recall.localDeepUsage': '本地深查 · {count} 项缺口 · {tokens} / {limit} Token',
-        'recall.coverage': '本轮已覆盖 {covered} / {total} 项问题',
+        'recall.coverage': '{covered}/{total} 项有证据',
         'recall.candidates': '已送入候选原文，答案尚未确认',
         'recall.forgetSource': '忘记这条原始消息',
         'recall.forgetConfirm': '忘记整条原始消息及其提炼出的记忆？这也会阻止该消息的所有分段再次进入召回。',
@@ -812,7 +806,7 @@ window.__ModuleLoader__.load({
         'recall.model.cancel': '取消准备',
         'recall.model.import': '导入离线模型',
         'recall.model.folder': '模型文件夹',
-        'recall.model.folderHint': '选择包含三份固定模型文件的文件夹。',
+        'recall.model.folderHint': '选择包含固定版本模型文件的目录。',
         'recall.model.progress': '{file}：{done} / {total}',
         'recall.model.preparing': '正在准备本地模型',
         'recall.model.importing': '正在导入本地模型',
@@ -944,12 +938,6 @@ window.__ModuleLoader__.load({
       '.dsh-memory-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}',
       '.dsh-memory-root{--dsh-memory-card-border:var(--dsw-alias-border-l2,rgba(127,127,127,.22));--dsh-memory-card-bg:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-1,#fff));--dsh-memory-gap:14px;--dsh-memory-radius:12px}',
       '.dsh-memory-card{padding:14px;border:.5px solid var(--dsh-memory-card-border);border-radius:var(--dsh-memory-radius);background:var(--dsh-memory-card-bg)}',
-      '.dsh-memory-hero-cards{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:var(--dsh-memory-gap,14px);align-items:stretch}',
-      '.dsh-memory-hero-main,.dsh-memory-hero-side{display:flex;align-items:center;padding:14px;border:.5px solid var(--dsh-memory-card-border);border-radius:var(--dsh-memory-radius);background:var(--dsh-memory-card-bg)}',
-      '.dsh-memory-hero-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;flex:1 1 auto;min-width:0}',
-      '.dsh-memory-hero-metric{display:flex;align-items:baseline;gap:6px;min-width:0}',
-      '.dsh-memory-hero-metric b{font-size:20px;font-weight:600;letter-spacing:-.01em;line-height:28px;font-variant-numeric:tabular-nums}',
-      '.dsh-memory-hero-metric span{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280));font-size:12px;line-height:18px}',
       '.dsh-memory-flags{display:flex;gap:8px;align-items:center;flex:0 0 auto;flex-wrap:nowrap;margin-left:auto}',
       '.dsh-memory-chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l1,rgba(127,127,127,.2));border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px}',
       '.dsh-memory-chip[data-on="true"]{color:var(--dsw-alias-state-success-primary,#1a9e63);background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a9e63) 10%,transparent);border-color:transparent}',
@@ -1019,18 +1007,10 @@ window.__ModuleLoader__.load({
       '.dsh-memory-chip{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;white-space:nowrap}',
       '.dsh-memory-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#9ca0a6))}',
       '.dsh-memory-chip[data-on="true"] .dsh-memory-chip-dot{background:var(--dsw-alias-state-success-primary,#22c55e)}',
-      '@container (max-width:620px){.dsh-memory-hero-metrics{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:10px}.dsh-memory-hero-metrics .dsh-memory-hero-metric,.dsh-memory-hero-insights .dsh-memory-hero-metric{flex-direction:column;align-items:flex-start;gap:0}}',
-      '@container (max-width:479px){.dsh-memory-hero-cards{grid-template-columns:minmax(0,1fr)}.dsh-memory-hero-metrics .dsh-memory-hero-metric,.dsh-memory-hero-insights .dsh-memory-hero-metric{flex-direction:row;align-items:baseline;gap:6px}}',
-      '.dsh-memory-hero-insights{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;width:100%;min-width:0}',
       '.dsh-memory-settings{display:flex;flex-direction:column}',
-      '.dsh-memory-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}',
       '.dsh-memory-settings-title{margin:0;font-size:16px;font-weight:600;line-height:24px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-sub{margin:3px 0 0;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
-      '.dsh-memory-settings-badge{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;height:22px;padding:0 9px;border-radius:999px;background:var(--dsw-alias-bg-layer-1,#fff);border:.5px solid var(--dsh-memory-card-border);color:var(--dsw-alias-label-secondary,#6b7280);font-size:11px;white-space:nowrap}',
-      '.dsh-memory-settings-badge i{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary,#34a26b)}',
-      '.dsh-memory-settings-badge[data-off="true"] i{background:var(--dsw-alias-label-tertiary,#9ca0a6)}',
       '.dsh-memory-settings-group{margin-top:0}',
-      '.dsh-memory-settings-head+.dsh-memory-settings-group{margin-top:20px}',
       '.dsh-memory-settings-group+.dsh-memory-settings-group{padding-top:22px;border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-tabs{display:flex;gap:2px;flex-wrap:wrap;margin:6px 0 10px;padding-bottom:8px;border-bottom:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-tab{border:0;background:transparent;padding:4px 10px;border-radius:7px;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
@@ -1045,9 +1025,25 @@ window.__ModuleLoader__.load({
       '.dsh-memory-brief-project{display:flex;align-items:center;gap:12px;min-width:0;flex:1}',
       '.dsh-memory-brief-project select{min-width:0;max-width:100%;flex:1}',
       '.dsh-memory-brief-section{margin-top:14px;min-width:0}',
-      '.dsh-memory-recall-report{margin:24px 0;min-width:0;overflow-wrap:anywhere}',
-      '.dsh-memory-recall-report ul{margin:8px 0;padding-left:20px}',
-      '.dsh-memory-recall-report li{margin:6px 0}',
+      '.dsh-memory-activity-view{gap:0}',
+      '.dsh-memory-activity-view>.dsh-memory-context-usage{margin:8px 0 18px}',
+      '.dsh-memory-activity-totals{display:flex;flex-wrap:wrap;gap:6px 20px;padding:2px 0 14px;color:var(--dsw-alias-label-secondary);font-size:12px}',
+      '.dsh-memory-activity-totals b{color:var(--dsw-alias-label-primary);font-weight:600;font-variant-numeric:tabular-nums}',
+      '.dsh-memory-activity-line{display:flex;align-items:center;gap:8px;box-sizing:border-box;min-height:42px;border-top:.5px solid var(--dsh-memory-card-border);overflow-wrap:anywhere}',
+      '.dsh-memory-activity-label{margin-right:auto;font-weight:500}',
+      '.dsh-memory-activity-line .dsh-memory-muted{margin:0;text-align:right}',
+      '.dsh-memory-activity-warning{color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-primary));font-size:12px;text-align:right}',
+      '.dsh-memory-activity-disclosure>summary{list-style:none;cursor:pointer}',
+      '.dsh-memory-activity-disclosure>summary::-webkit-details-marker{display:none}',
+      '.dsh-memory-activity-disclosure>summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,currentColor);outline-offset:-2px;border-radius:4px}',
+      '.dsh-memory-activity-disclosure>summary::after{content:"";flex:none;width:6px;height:6px;margin:0 4px 0 2px;border-bottom:1px solid currentColor;border-right:1px solid currentColor;transform:rotate(-45deg)}',
+      '.dsh-memory-activity-disclosure[open]>summary::after{transform:rotate(45deg)}',
+      '.dsh-memory-activity-details{padding:0 0 14px;min-width:0;overflow-wrap:anywhere}',
+      '.dsh-memory-activity-details ul,.dsh-memory-activity-issues{margin:0 0 10px;padding-left:18px}',
+      '.dsh-memory-activity-issues{font-size:12px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
+      '.dsh-memory-extraction-status .dsh-memory-activity-line{flex-wrap:wrap;padding:5px 0}',
+      '.dsh-memory-extraction-status>p{margin:0 0 8px;overflow-wrap:anywhere}',
+      '.dsh-memory-activity-line .dsh-memory-button{margin-left:2px}',
       '.dsh-memory-context-usage{display:grid;gap:6px;min-width:0;margin:8px 0 20px}',
       '.dsh-memory-context-usage-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}',
       '.dsh-memory-context-usage-amount{font-size:13px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}',
@@ -1087,9 +1083,8 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-buttons{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}',
       '.dsh-memory-settings .dsh-memory-button{height:32px;padding:0 12px;font-size:12px;border-radius:8px;min-height:32px}',
       '.dsh-memory-settings-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px;padding:16px 0 0;border:0;border-radius:0;background:transparent;box-shadow:none;border-top:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-settings-foot>.dsh-memory-button{margin-left:auto}',
       '.dsh-memory-settings-state{display:inline-flex;align-items:center;gap:7px;color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px}',
-      '.dsh-memory-settings-state i{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary,#34a26b)}',
-      '.dsh-memory-settings-state[data-dirty="true"] i{background:var(--dsw-alias-state-warning-primary,#d97706)}',
       '.dsh-memory-settings-notice{margin:10px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280)}',
       '.dsh-memory-trend{margin-top:20px;padding-top:18px;border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-trend-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}',
@@ -1132,12 +1127,11 @@ window.__ModuleLoader__.load({
       '.dsh-memory-input,.dsh-memory-select,.dsh-memory-textarea,.dsh-memory-settings-input{border-radius:10px;text-align:center;padding:0 24px}',
       '.dsh-memory-library-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}',
       '.dsh-memory-view-tab:focus-visible,.dsh-memory-palette-trigger:focus-visible,.dsh-memory-palette-option:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
-      '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}.dsh-memory-settings-head{gap:10px}.dsh-memory-settings-row{gap:12px}}',
+      '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}.dsh-memory-settings-row{gap:12px}}',
       '@container (max-width:430px){.dsh-memory-settings-row{min-height:46px}.dsh-memory-settings .dsh-memory-button{height:30px;padding:0 10px;border-radius:8px;min-height:32px}}',
       '@container (max-width:560px){.dsh-memory-activity-head{flex-wrap:wrap;row-gap:6px}.dsh-memory-tabs{flex:0 0 auto}}',
       '.dsh-memory-root>.dsh-memory-card,.dsh-memory-root>.dsh-memory-profile{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}',
       '.dsh-memory-settings{padding:0;border:0;border-radius:0;background:transparent}',
-      '.dsh-memory-settings-head{margin-bottom:16px}',
       '.dsh-memory-toolbar .dsh-memory-input,.dsh-memory-toolbar .dsh-memory-select{width:100%;max-width:none;min-width:0}',
       '.dsh-memory-field-label{font-size:13px;color:var(--dsw-alias-label-primary)}',
       '.dsh-memory-textarea{align-content:center;text-align:center}',
@@ -1579,75 +1573,27 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function computeStreak(counts) {
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      let cursor = today.getTime()
-      if (!counts.has(dateKey(today))) cursor -= DAY_MS
-      let streak = 0
-      while (streak < 400) {
-        const key = dateKey(new Date(cursor))
-        if (!counts.has(key)) break
-        streak += 1
-        cursor -= DAY_MS
-      }
-      return streak
+    function MemoryTotals({ stats, t, locale }) {
+      const counts = ['total', 'active', 'candidate', 'projects']
+      return h('div', { className: 'dsh-memory-activity-totals' },
+        counts.filter(key => key !== 'candidate' || stats.candidate > 0).map(key =>
+          h('span', { key }, t('stats.' + key), ' ', h('b', null, stats[key].toLocaleString(locale || undefined)))))
     }
 
-    function HeroMetrics(props) {
-      const { stats, t } = props
-      const rows = [
-        [t('stats.active'), stats === null ? '\u2014' : String(stats.active)],
-        [t('stats.candidate'), stats === null ? '\u2014' : String(stats.candidate)],
-        [t('stats.total'), stats === null ? '\u2014' : String(stats.total)],
-        [t('stats.projects'), stats === null ? '\u2014' : String(stats.projects)],
+    function ActivityHeading({ title, value, warning = false }) {
+      return [
+        h('span', { key: 'title', className: 'dsh-memory-activity-label' }, title),
+        value ? h('span', { key: 'value', className: warning ? 'dsh-memory-activity-warning' : 'dsh-memory-muted' }, value) : null,
       ]
-      return h('div', { className: 'dsh-memory-hero-metrics' },
-        rows.map(([label, value]) => h('div', { key: label, className: 'dsh-memory-hero-metric' },
-          h('b', null, value),
-          h('span', null, label))))
     }
 
-    function computeInsights(activity, stats) {
-      const counts = new Map()
-      const days = activity !== null && activity !== undefined && Array.isArray(activity.days) ? activity.days : []
-      for (const day of days) {
-        if (day === null || typeof day !== 'object' || typeof day.date !== 'string') continue
-        const count = Number(day.count)
-        if (!Number.isFinite(count) || count <= 0) continue
-        counts.set(day.date, count)
-      }
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      let last7 = 0
-      for (let index = 0; index < 7; index += 1) {
-        const date = new Date(today)
-        date.setDate(today.getDate() - index)
-        last7 += counts.get(dateKey(date)) ?? 0
-      }
-      return {
-        streak: computeStreak(counts),
-        activeDays: counts.size,
-        last7,
-        averageConfidence: stats !== null && stats !== undefined && typeof stats.avgConfidence === 'number'
-          ? stats.avgConfidence.toFixed(2)
-          : '\u2014',
-      }
-    }
-
-    function HeroInsights(props) {
-      const { activity, stats, t, locale } = props
-      const insights = computeInsights(activity, stats)
-      const rows = [
-        [t('activity.streak'), String(insights.streak)],
-        [t('activity.activeDays'), compactNumber(insights.activeDays, locale)],
-        [t('activity.last7'), compactNumber(insights.last7, locale)],
-        [t('activity.avgConfidence'), insights.averageConfidence],
-      ]
-      return h('div', { className: 'dsh-memory-hero-insights' },
-        rows.map(([label, value]) => h('div', { key: label, className: 'dsh-memory-hero-metric' },
-          h('b', null, value),
-          h('span', null, label))))
+    function ActivityDisclosure({ title, value, warning, children }) {
+      const attrs = { className: 'dsh-memory-activity-disclosure' }
+      const heading = h(ActivityHeading, { title, value, warning })
+      if (children == null) return h('div', { className: 'dsh-memory-activity-line' }, heading)
+      return h('details', attrs,
+        h('summary', { className: 'dsh-memory-activity-line' }, heading),
+        h('div', { className: 'dsh-memory-activity-details' }, children))
     }
 
     function PalettePicker(props) {
@@ -1817,9 +1763,8 @@ window.__ModuleLoader__.load({
         catch (failure) { setError(messageOf(failure)) }
         finally { setBusy(false) }
       }
-      if (!report) return h('section', { className: 'dsh-memory-recall-report' },
-        h('h3', { className: 'dsh-memory-settings-title' }, t('recall.title')),
-        h('p', { className: 'dsh-memory-muted' }, t('recall.empty')))
+      const title = t('recall.title')
+      if (!report) return h(ActivityDisclosure, { title, value: t('recall.empty') })
       const stateKey = { 'not-needed': 'local', completed: 'completed', failed: 'failed', unknown: 'unknown', 'budget-exhausted': 'budget' }[report.completionState] ?? 'notSent'
       const sent = ['completed', 'unknown', 'requested'].includes(report.providerState)
       const tokens = report.usage?.totalTokens
@@ -1838,11 +1783,14 @@ window.__ModuleLoader__.load({
       })
       const found = evidenceList(report.covered ?? [])
       const candidates = evidenceList(report.candidates ?? [])
-      return h('section', { className: 'dsh-memory-recall-report' },
-        h('h3', { className: 'dsh-memory-settings-title' }, t('recall.title')),
+      const coverage = Number.isInteger(report.total)
+        ? t('recall.coverage', { covered: String(found.length), total: String(report.total) }) : ''
+      const warning = ['failed', 'unknown', 'budget'].includes(stateKey)
+      const value = [coverage, warning || !coverage ? t('recall.' + stateKey) : ''].filter(Boolean).join(' · ')
+      return h(ActivityDisclosure, { title, value, warning },
         h('p', { className: 'dsh-memory-brief-meta' },
           Number.isFinite(report.at) ? h('time', { dateTime: new Date(report.at).toISOString() }, new Date(report.at).toLocaleString(locale)) : null,
-          h('span', null, t('recall.' + stateKey)),
+          warning || !coverage ? null : h('span', null, t('recall.' + stateKey)),
           sent && report.provider?.model ? h('span', null, report.provider.model) : null,
           sent ? h('span', null, Number.isFinite(tokens) ? t('recall.usage', { tokens: String(tokens) }) : t('recall.usageUnknown')) : null),
         error ? h('p', { role: 'alert', className: 'dsh-memory-error-text' }, error) : null,
@@ -1852,7 +1800,6 @@ window.__ModuleLoader__.load({
           tokens: report.localDeepRecall.tokens.toLocaleString(locale || undefined),
           limit: report.localDeepRecall.limit.toLocaleString(locale || undefined),
         })) : null,
-        Number.isInteger(report.total) ? h('p', null, t('recall.coverage', { covered: String(found.length), total: String(report.total) })) : null,
         found.length ? h('div', null, h('strong', null, t('recall.found')), h('ul', null, found)) : null,
         candidates.length ? h('div', null, h('strong', null, t('recall.candidates')), h('ul', null, candidates)) : null,
         (report.budgetOmitted ?? []).length ? h('div', null,
@@ -1970,12 +1917,7 @@ window.__ModuleLoader__.load({
               Number(trait.confidence).toFixed(2))))))
     }
 
-    function timeNowText() {
-      const now = new Date()
-      return String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
-    }
-
-    /** Seven-day injection/extraction token bars (capture tab only). */
+    /** Seven-day injection and extraction token usage. */
     function TokenTrend(props) {
       const { usage, t } = props
       const days = usage !== null && usage !== undefined && Array.isArray(usage.days) ? usage.days : []
@@ -2063,7 +2005,7 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsCard(props) {
-      const { stats, call, t, locale, onSaved, group = 'capture' } = props
+      const { stats, call, t, onSaved, group = 'capture' } = props
       const [capture, setCapture] = React.useState(true)
       const [inject, setInject] = React.useState(true)
       const [budget, setBudget] = React.useState('360')
@@ -2073,9 +2015,7 @@ window.__ModuleLoader__.load({
       const [obsidianAuto, setObsidianAuto] = React.useState(false)
       const [obsidianFolder, setObsidianFolder] = React.useState('DSH Memory')
       const [baseline, setBaseline] = React.useState(null)
-      const [savedAt, setSavedAt] = React.useState('')
       const [busy, setBusy] = React.useState(false)
-      const [retrying, setRetrying] = React.useState(false)
       const [notice, setNotice] = React.useState('')
       const fileRef = React.useRef(null)
 
@@ -2113,20 +2053,6 @@ window.__ModuleLoader__.load({
         obsidianVault !== baseline.obsidianVault ||
         obsidianFolder !== baseline.obsidianFolder
       )
-      const last = stats === null ? null : stats.maintenance
-      const extraction = stats === null || stats.lastExtraction === null || stats.lastExtraction === undefined ? null : stats.lastExtraction
-      const captureQueue = stats === null || stats.capture === null || stats.capture === undefined ? null : stats.capture
-      const captureStorage = stats === null || stats.captureStorage === null || stats.captureStorage === undefined ? null : stats.captureStorage
-      const usage = extraction === null ? '' : ' · ' + t('settings.extract.usage', { tokens: String(extraction.promptTokens ?? 0) })
-      const summary = (maintenance
-        ? (last === null || last === undefined
-          ? t('settings.maintenance.none')
-          : t('settings.maintenance.summary', { archived: String(last.archived ?? 0), pruned: String(last.pruned ?? 0) }))
-        : t('settings.maintenance.off')) + usage
-      const stateText = dirty
-        ? t('settings.state.dirty')
-        : (savedAt === '' ? t('settings.state.saved') : t('settings.state.savedAt', { time: savedAt }))
-
       const snapshot = () => ({ capture, inject, budget, retention, maintenance, obsidianAuto, obsidianVault, obsidianFolder })
       const save = async () => {
         if (call === null || busy || !dirty) return
@@ -2144,7 +2070,6 @@ window.__ModuleLoader__.load({
             obsidianFolder: obsidianFolder.trim(),
           })
           setBaseline(snapshot())
-          setSavedAt(timeNowText())
           setNotice(t('settings.saved'))
           onSaved()
         } catch (failure) {
@@ -2153,29 +2078,6 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }
-      const retryCapture = async () => {
-        if (call === null || retrying) return
-        setRetrying(true)
-        setNotice('')
-        try {
-          const status = await call('captureStatus', {})
-          const tasks = (Array.isArray(status?.tasks) ? status.tasks : []).filter(entry => !entry.continuationTaskIds?.length)
-          const task = ['partial', 'failed', 'pending', 'unknown'].map(state => tasks.find(entry => entry.status === state)).find(Boolean)
-          if (task === undefined) {
-            setNotice(t('settings.captureNothing'))
-            return
-          }
-          if (task.status === 'unknown' && !window.confirm(t('settings.captureUnknownConfirm'))) return
-          await call('captureRetry', { taskId: task.id, confirmUnknown: task.status === 'unknown' })
-          setNotice(t('settings.captureRetried'))
-          onSaved()
-        } catch (failure) {
-          setNotice(t('settings.captureRetryFailed', { reason: messageOf(failure) }))
-        } finally {
-          setRetrying(false)
-        }
-      }
-
       const exportAll = async () => {
         if (call === null || busy) return
         setBusy(true)
@@ -2280,49 +2182,14 @@ window.__ModuleLoader__.load({
         disabled: busy,
       }, label)
 
-      return h('section', { className: 'dsh-memory-card dsh-memory-settings' },
+      return h('section', { className: 'dsh-memory-settings', 'aria-label': t('view.' + group) },
         stats?.settingsIssue ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.settingsIssue.message) : null,
-        (group === 'activity' || group === 'retention') && stats?.maintenance?.backupError ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.maintenance.backupError.message) : null,
-        h('div', { className: 'dsh-memory-settings-head' },
-          h('div', null,
-            h('h3', { className: 'dsh-memory-settings-title' }, t('view.' + group))),
-          group === 'retention' ? h('span', { className: 'dsh-memory-settings-badge', 'data-off': maintenance ? 'false' : 'true' },
-            h('i', null),
-            maintenance ? t('settings.badge.on') : t('settings.badge.off')) : null),
+        group === 'retention' && stats?.maintenance?.backupError ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.maintenance.backupError.message) : null,
         group === 'capture'
           ? h('div', { className: 'dsh-memory-settings-group' },
             switchRow(t('settings.capture'), capture, setCapture),
             switchRow(t('settings.inject'), inject, setInject),
             numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value)))
-          : group === 'activity' ? h('div', { className: 'dsh-memory-settings-group' },
-            captureQueue === null
-              ? null
-              : h('div', { className: 'dsh-memory-settings-row' },
-                h('span', { className: 'dsh-memory-settings-label' }, t('settings.captureQueue', {
-                  pending: String(captureQueue.pending ?? 0),
-                  partial: String(captureQueue.partial ?? 0),
-                  unknown: String(captureQueue.unknown ?? 0),
-                  failed: String(captureQueue.failed ?? 0),
-                  done: String(captureQueue.done ?? 0),
-                })),
-                (captureQueue.unknown ?? 0) + (captureQueue.failed ?? 0) + (captureQueue.pending ?? 0) + (captureQueue.partial ?? 0) > 0
-                  ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: retryCapture, disabled: retrying }, t('settings.captureRetry'))
-                  : null),
-            stats?.captureBudget ? h('div', { role: 'status' },
-              h('p', { className: 'dsh-memory-muted' }, t('settings.captureAllowance', stats.captureBudget)),
-              stats.captureBudget.waiting > 0 ? h('p', { className: 'dsh-memory-muted' },
-                t(stats.captureBudget.resumeAt ? 'settings.captureResume' : 'settings.capturePaused', {
-                  count: stats.captureBudget.waiting, time: formatTime(stats.captureBudget.resumeAt, locale),
-                })) : null) : null,
-            captureStorage === null
-              ? null
-              : h('div', { className: 'dsh-memory-settings-row' },
-                h('span', { className: 'dsh-memory-settings-label' }, t('settings.captureStorage', {
-                  sources: String(captureStorage.sources?.count ?? 0),
-                  size: String(((captureStorage.bytes ?? 0) / 1024 / 1024).toFixed(1)) + ' MB',
-                  tasks: String(captureStorage.tasks ?? 0),
-                }))),
-            h(TokenTrend, { usage: stats === null ? null : stats.usage, t }))
           : group === 'retention'
             ? h('div', { className: 'dsh-memory-settings-group' },
               numberRow(t('settings.retention'), retention, '天', '0', '36500', '10', (event) => setRetention(event.target.value)),
@@ -2346,7 +2213,6 @@ window.__ModuleLoader__.load({
               : h('div', { className: 'dsh-memory-settings-group' },
                 switchRow(t('obsidian.auto'), obsidianAuto, setObsidianAuto),
                 h('p', { className:'dsh-memory-muted' }, t('obsidian.autoHint')),
-                h('p', { className:'dsh-memory-muted' }, t('obsidian.readingHint')),
                 textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
                 textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
                 h(ObsidianSyncStatus, {call,t,disabled:busy||dirty}),
@@ -2362,10 +2228,8 @@ window.__ModuleLoader__.load({
                         onClick: () => transfer(kind, direction),
                       }, t('data.' + direction)))))))),
         notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
-        group === 'activity' || group === 'data' ? null : h('div', { className: 'dsh-memory-settings-foot' },
-          h('span', { className: 'dsh-memory-settings-state', 'data-dirty': dirty ? 'true' : 'false' },
-            h('i', null),
-            stateText),
+        group === 'data' ? null : h('div', { className: 'dsh-memory-settings-foot' },
+          dirty ? h('span', { className: 'dsh-memory-settings-state' }, t('settings.state.dirty')) : null,
           h('button', {
             type: 'button',
             className: 'dsh-memory-button dsh-memory-button-primary',
@@ -2672,7 +2536,69 @@ window.__ModuleLoader__.load({
       return { removed: before.slice(start, endBefore + 1), added: after.slice(start, endAfter + 1) }
     }
 
-    function HealthStatus({ health, t, onRepair }) {
+    function ExtractionStatus({ stats, call, t, locale, onSaved }) {
+      const [retrying, setRetrying] = React.useState(false)
+      const [notice, setNotice] = React.useState('')
+      const counts = stats.capture ?? {}
+      const states = ['pending', 'running', 'partial', 'failed', 'unknown']
+      const queued = states.filter(state => counts[state] > 0)
+      const canRetry = queued.some(state => state !== 'running')
+      const warning = queued.some(state => ['partial', 'failed', 'unknown'].includes(state))
+      const value = [...(stats.captureEnabled ? [] : [t('activity.off')]),
+        ...queued.map(state => t('activity.queue.' + state, { count: counts[state] }))].join(' · ') || t('activity.idle')
+      const budget = stats.captureBudget
+      const retryCapture = async () => {
+        if (call === null || retrying) return
+        setRetrying(true)
+        setNotice('')
+        try {
+          const status = await call('captureStatus', {})
+          const tasks = (Array.isArray(status?.tasks) ? status.tasks : []).filter(entry => !entry.continuationTaskIds?.length)
+          const task = ['partial', 'failed', 'pending', 'unknown'].map(state => tasks.find(entry => entry.status === state)).find(Boolean)
+          if (task === undefined) {
+            setNotice(t('settings.captureNothing'))
+            return
+          }
+          if (task.status === 'unknown' && !window.confirm(t('settings.captureUnknownConfirm'))) return
+          await call('captureRetry', { taskId: task.id, confirmUnknown: task.status === 'unknown' })
+          setNotice(t('settings.captureRetried'))
+          onSaved()
+        } catch (failure) {
+          setNotice(t('settings.captureRetryFailed', { reason: messageOf(failure) }))
+        } finally {
+          setRetrying(false)
+        }
+      }
+
+      return h('section', { className: 'dsh-memory-extraction-status' },
+        h('div', { className: 'dsh-memory-activity-line' },
+          h(ActivityHeading, { title: t('activity.extraction'), value, warning }),
+          canRetry ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: retryCapture, disabled: retrying || !call },
+            t('settings.captureRetry')) : null),
+        budget?.waiting > 0 ? h('p', { className: 'dsh-memory-muted', role: 'status' },
+          t(budget.resumeAt ? 'settings.captureResume' : 'settings.capturePaused', {
+            count: budget.waiting, time: formatTime(budget.resumeAt, locale),
+          })) : null,
+        notice ? h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice) : null)
+    }
+
+    function ActivityTrends({ stats, activity, locale, t }) {
+      const [open, setOpen] = React.useState(false)
+      const storage = stats.captureStorage
+      return h('details', { className: 'dsh-memory-activity-disclosure', onToggle: event => setOpen(event.currentTarget.open) },
+        h('summary', { className: 'dsh-memory-activity-line' }, h(ActivityHeading, { title: t('activity.trends') })),
+        open ? h('div', { className: 'dsh-memory-activity-details' },
+          h(ActivityHeatmap, { activity, stats, t, locale }),
+          h(TokenTrend, { usage: stats.usage, t }),
+          stats.captureBudget ? h('p', { className: 'dsh-memory-muted' }, t('settings.captureAllowance', stats.captureBudget)) : null,
+          storage ? h('p', { className: 'dsh-memory-muted' }, t('settings.captureStorage', {
+            sources: String(storage.sources?.count ?? 0),
+            size: ((storage.bytes ?? 0) / 1024 / 1024).toFixed(1) + ' MB',
+            tasks: String(storage.tasks ?? 0),
+          })) : null) : null)
+    }
+
+    function HealthStatus({ health, capture, t, onRepair }) {
       if (!health) return null
       const download = () => {
         const blob = new Blob([JSON.stringify(health, null, 2)], { type: 'application/json' })
@@ -2680,23 +2606,23 @@ window.__ModuleLoader__.load({
         anchor.href = url; anchor.download = 'dsh-memory-diagnostics.json'; anchor.click()
         setTimeout(() => URL.revokeObjectURL(url), 1000)
       }
-      return h('section', { className: 'dsh-memory-settings' },
-        h('h3', { className: 'dsh-memory-settings-title' }, t('health.title') + ' · ' + t('health.' + health.status)),
-        h('p', { className: 'dsh-memory-muted' }, health.isolation === 'unavailable' ? null : t('health.' + health.isolation)),
-        health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.memories', health.counts)),
-        health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.jobs', health.counts)),
-        health.counts?.corruptLines ? h('p', { className: 'dsh-memory-error-text' }, t('health.corrupt', { count: health.counts.corruptLines })) : null,
-        h('div', { className: 'dsh-memory-settings-group' }, Object.entries(health.components ?? {}).map(([key, component]) =>
-          h('div', { key, className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, t('health.component.' + key)),
-            h('span', { className: component.state === 'attention' || component.state === 'unavailable' ? 'dsh-memory-error-text' : 'dsh-memory-muted', role: 'status' },
-              t('health.state.' + component.state)),
-            component.issue ? h('p', { className: 'dsh-memory-error-text' }, t('health.' + component.issue)) : null,
-            component.action !== 'none' && component.state !== 'disabled' && onRepair
-              ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onRepair(component.action) }, t('health.action.' + component.action)) : null))),
-        health.issues.map(code => h('p', { key: code, className: 'dsh-memory-error-text', role: 'status' }, t('health.' + code))),
-        h('div', { className: 'dsh-memory-settings-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', onClick: download }, t('health.download'))),
-        h('p', { className: 'dsh-memory-muted' }, t('health.hint')))
+      const queueNeedsRecovery = capture?.failed > 0 || capture?.partial > 0 || capture?.unknown > 0
+      const issues = health.issues.filter(code => code !== 'capture-incomplete' || !queueNeedsRecovery)
+      return h('section', null,
+        h(ActivityDisclosure, { title: t('health.title'), value: t('health.' + health.status), warning: health.status !== 'ok' },
+          health.isolation === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.' + health.isolation)),
+          health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.memories', health.counts)),
+          h('div', { className: 'dsh-memory-settings-group' }, Object.entries(health.components ?? {}).map(([key, component]) =>
+            h('div', { key, className: 'dsh-memory-settings-row' },
+              h('span', { className: 'dsh-memory-settings-label' }, t('health.component.' + key)),
+              h('span', { className: 'dsh-memory-muted' }, t('health.state.' + component.state)),
+              component.action !== 'none' && component.state !== 'disabled' && onRepair
+                ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onRepair(component.action) }, t('health.action.' + component.action)) : null))),
+          h('div', { className: 'dsh-memory-settings-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', onClick: download }, t('health.download'))),
+          h('p', { className: 'dsh-memory-muted' }, t('health.hint'))),
+        issues.length ? h('ul', { className: 'dsh-memory-activity-issues', role: 'status' },
+          issues.map(code => h('li', { key: code }, t('health.' + code),
+            code === 'corrupt-lines' && health.counts?.corruptLines ? ' ' + t('health.corrupt', { count: health.counts.corruptLines }) : null))) : null)
     }
 
     function SemanticModelControls({ call, initial, t }) {
@@ -2706,6 +2632,9 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState('')
       const operationVersion = React.useRef(0), statusVersion = React.useRef(0)
       const active = ['preparing', 'downloading', 'importing', 'loading', 'indexing'].includes(status?.state)
+      React.useEffect(() => {
+        if (!busy && !active) setStatus(initial)
+      }, [initial])
       React.useEffect(() => {
         if (!call || (!busy && !active)) return undefined
         let stopped = false
@@ -2729,14 +2658,16 @@ window.__ModuleLoader__.load({
         } catch (value) { if (version === operationVersion.current) setError(messageOf(value)) }
         finally { if (version === operationVersion.current) setBusy('') }
       }
-      if (!call || status?.state === 'disabled') return null
+      const title = t('recall.semantic')
+      const value = t('recall.semantic.' + (status?.state ?? 'idle'))
+      if (!call || status?.state === 'disabled') return h(ActivityDisclosure, { title, value })
       const progress = status?.progress
-      return h('div', { className: 'dsh-memory-settings-group' },
-        h('p', { className: 'dsh-memory-muted', role: 'status' }, progress?.total
-          ? t('recall.model.progress', { file: progress.asset ?? '', done: String(progress.downloaded ?? 0), total: String(progress.total) })
-          : t('recall.semantic.' + (status?.state ?? 'idle'))),
+      return h(ActivityDisclosure, { title, value, warning: !!status?.error || status?.state === 'failed' },
+        progress?.total ? h('p', { className: 'dsh-memory-muted', role: 'status' },
+          t('recall.model.progress', { file: progress.asset ?? '', done: String(progress.downloaded ?? 0), total: String(progress.total) })) : null,
         progress?.total ? h('progress', { max: progress.total, value: Math.min(progress.total, progress.downloaded ?? 0), 'aria-label': t('recall.semantic') }) : null,
-        status?.error ? h('p', { className: 'dsh-memory-error-text', role: 'status' }, t('recall.semantic.failed')) : null,
+        status?.total ? h('p', { className: 'dsh-memory-muted' },
+          t('recall.semanticProgress', { indexed: String(status.indexed), total: String(status.total) })) : null,
         h('div', { className: 'dsh-memory-settings-row' },
           h('span', { className: 'dsh-memory-settings-label' }, t('recall.model.folder')),
           h('input', { className: 'dsh-memory-settings-input', type: 'text', value: folder, onChange: event => setFolder(event.target.value), 'aria-label': t('recall.model.folder') })),
@@ -3122,22 +3053,16 @@ window.__ModuleLoader__.load({
       }
 
       if (view === 'activity') {
-        return h('div', { className: 'dsh-memory-root' }, header, viewTabs,
+        return h('div', { className: 'dsh-memory-root dsh-memory-activity-view' }, header, viewTabs,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
-          stats ? h(ContextUsage, { sessionId, sample: contextUsage, enabled: stats.injectEnabled, t, locale }) : null,
-          h('section', { className: 'dsh-memory-hero-cards' },
-            h('div', { className: 'dsh-memory-hero-main' }, h(HeroMetrics, { stats, t })),
-            h('div', { className: 'dsh-memory-hero-side' }, h(HeroInsights, { activity: data?.activity, stats, t, locale }))),
-          h(HealthStatus, { health: stats?.health, t, onRepair: repairHealth }),
-          h(ActivityHeatmap, { activity: data?.activity, stats, t, locale }),
-          stats?.semantic ? h('section', { className: 'dsh-memory-recall-report' },
-            h('h3', { className: 'dsh-memory-settings-title' }, t('recall.semantic')),
-            h('p', { role: 'status' }, t('recall.semantic.' + stats.semantic.state)),
-            stats.semantic.total ? h('p', { className: 'dsh-memory-muted' }, t('recall.semanticProgress', { indexed: String(stats.semantic.indexed), total: String(stats.semantic.total) })) : null,
-            stats.semantic.error ? h('p', { className: 'dsh-memory-error-text' }, t('recall.semantic.failed')) : null) : null,
-          stats?.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null,
-          h(RecallReport, { report: stats?.lastRecall, t, locale, call, onSaved: load }),
-          h(SettingsCard, { stats, call, t, locale, onSaved: load, group: 'activity' }))
+          stats ? h(React.Fragment, null,
+            h(ContextUsage, { sessionId, sample: contextUsage, enabled: stats.injectEnabled, t, locale }),
+            h(MemoryTotals, { stats, t, locale }),
+            h(ExtractionStatus, { stats, call, t, locale, onSaved: load }),
+            h(RecallReport, { report: stats.lastRecall, t, locale, call, onSaved: load }),
+            h(HealthStatus, { health: stats.health, capture: stats.capture, t, onRepair: repairHealth }),
+            stats.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null,
+            h(ActivityTrends, { stats, activity: data?.activity, t, locale })) : null)
       }
 
       if (view === 'profile') {
@@ -3174,7 +3099,7 @@ window.__ModuleLoader__.load({
           viewTabs,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
-          h(SettingsCard, { stats, call, t, locale, onSaved: load, group: view }))
+          h(SettingsCard, { stats, call, t, onSaved: load, group: view }))
       }
 
       const suggestionItems = topicSuggestions !== null && Array.isArray(topicSuggestions.suggestions) ? topicSuggestions.suggestions : []
