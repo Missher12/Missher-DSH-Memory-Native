@@ -674,6 +674,9 @@ export function recallQueryPlan(query, previousQuery, followUp) {
         .replace(/(?:每天|每日|现在|当时|当初|这次|具体|安排在|定在|的)/gu, ' ')
         .trim()
     }
+    if (details[i]?.name === 'retention' && /^(?:记录|记录的)$/u.test(entityResidueForPart(subject))) {
+      subject = ''
+    }
     return { text: entityResidueForPart(subject), terms: recallSubjectTerms(subject) }
   })
   for (let index = 0; index < parts.length; index += 1) {

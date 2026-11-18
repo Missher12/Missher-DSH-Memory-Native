@@ -101,6 +101,71 @@ test('recall reports follow the active session and project through the completed
   assert.equal((await panel('stats', { scope: 'project', projectKey: key })).lastRecall, null)
 })
 
+test('retention and reason inherit the named backup, and reason coverage requires a specific phrase', async t => {
+  const fog = '雾杉备份每天03:42执行，保留61天，为了避开每日导入的磁盘峰值。'
+  const whale = '砂鲸快照每天05:10执行，保留90天，因为要避开批量校验的 CPU 峰值。'
+  const { key, prepare, panel, handlers } = await setup(t, [
+    { id: 'mem_fog_backup', content: fog },
+    { id: 'mem_whale_snapshot', content: whale },
+  ])
+  const queryFog = '雾杉备份每天几点执行、记录保留多久、为什么改时间？请按原话逐项回答。不要保存本轮问答。'
+  const preparedFog = await prepare(queryFog, 'session-fog-backup')
+  const pendingFog = (await panel('stats', { sessionId: 'session-fog-backup', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(pendingFog.total, 3)
+  assert.deepEqual(pendingFog.questions.map(question => question.detail), ['clock', 'retention', 'reason'])
+  assert.ok(pendingFog.questions[1].injected.some(evidence => evidence.id === 'mem_fog_backup'))
+  assert.ok(pendingFog.questions[2].injected.some(evidence => evidence.id === 'mem_fog_backup'))
+  assert.ok(pendingFog.questions.every(question => question.injected.every(evidence => evidence.id !== 'mem_whale_snapshot')))
+  completeAnswer(handlers, preparedFog.session, '雾杉备份每天03:42执行，保留61天，因为要避开巡检占用的磁盘峰值。')
+  const reportFog = (await panel('stats', { sessionId: 'session-fog-backup', scope: 'project', projectKey: key })).lastRecall
+  assert.deepEqual(reportFog.questions.map(question => question.answerCoverage), ['covered', 'covered', 'unverified'])
+
+  const preparedFogExact = await prepare(queryFog, 'session-fog-backup-exact')
+  completeAnswer(handlers, preparedFogExact.session, '雾杉备份每天03:42执行，保留61天，因为要避开每日导入的磁盘峰值。')
+  const reportFogExact = (await panel('stats', { sessionId: 'session-fog-backup-exact', scope: 'project', projectKey: key })).lastRecall
+  assert.deepEqual(reportFogExact.questions.map(question => question.answerCoverage), ['covered', 'covered', 'covered'])
+
+  const queryWhale = '砂鲸快照每天几点执行、记录保留多久、为什么改时间？请按原话逐项回答。不要保存本轮问答。'
+  const preparedWhale = await prepare(queryWhale, 'session-whale-snapshot')
+  const pendingWhale = (await panel('stats', { sessionId: 'session-whale-snapshot', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(pendingWhale.total, 3)
+  assert.deepEqual(pendingWhale.questions.map(question => question.detail), ['clock', 'retention', 'reason'])
+  assert.ok(pendingWhale.questions[1].injected.some(evidence => evidence.id === 'mem_whale_snapshot'))
+  assert.ok(pendingWhale.questions[2].injected.some(evidence => evidence.id === 'mem_whale_snapshot'))
+  assert.ok(pendingWhale.questions.every(question => question.injected.every(evidence => evidence.id !== 'mem_fog_backup')))
+  completeAnswer(handlers, preparedWhale.session, whale)
+  const reportWhale = (await panel('stats', { sessionId: 'session-whale-snapshot', scope: 'project', projectKey: key })).lastRecall
+  assert.deepEqual(reportWhale.questions.map(question => question.answerCoverage), ['covered', 'covered', 'covered'])
+})
+
+test('clock and retention answer coverage compares complete values', async t => {
+  const { key, prepare, panel, handlers } = await setup(t, [
+    { id: 'mem_exact_backup_values', content: '雾杉备份每天02:37执行，保留41天。' },
+  ])
+  const query = '雾杉备份每天几点执行，记录保留多久？'
+  const mismatched = await prepare(query, 'session-mismatched-values')
+  completeAnswer(handlers, mismatched.session, '雾杉备份每天12:37执行，保留141天。')
+  const mismatchReport = (await panel('stats', { sessionId: 'session-mismatched-values', scope: 'project', projectKey: key })).lastRecall
+  assert.deepEqual(mismatchReport.questions.map(question => question.answerCoverage), ['unverified', 'unverified'])
+
+  const equivalent = await prepare(query, 'session-equivalent-values')
+  completeAnswer(handlers, equivalent.session, '雾杉备份每天 2：37 执行，保留 041 天。')
+  const equivalentReport = (await panel('stats', { sessionId: 'session-equivalent-values', scope: 'project', projectKey: key })).lastRecall
+  assert.deepEqual(equivalentReport.questions.map(question => question.answerCoverage), ['covered', 'covered'])
+})
+
+test('reason coverage strips repeated cause prefixes before comparing the source phrase', async t => {
+  const { key, prepare, panel, handlers } = await setup(t, [
+    { id: 'mem_reason_prefixes', content: '星芒快照改到03:42的原因是为了避开每日导入的磁盘峰值。' },
+  ])
+  const prepared = await prepare('星芒快照为什么改到03:42？', 'session-reason-prefixes')
+  completeAnswer(handlers, prepared.session, '原因：避开每日导入的磁盘峰值。')
+  const report = (await panel('stats', { sessionId: 'session-reason-prefixes', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(report.questions.length, 1)
+  assert.equal(report.questions[0].detail, 'reason')
+  assert.equal(report.questions[0].answerCoverage, 'covered')
+})
+
 test('multi-question answer coverage is independent, and repeated question values do not collapse slots', async t => {
   const { key, panel, prepare, handlers } = await setup(t, [
     { id: 'mem_same_value_snapshot', content: '银帆快照每天04:20执行，报表也每天04:20开始。' },

@@ -70,6 +70,19 @@ test('a polite instruction to answer from memory preserves the three real snapsh
   }
 })
 
+test('standalone answer formats do not add questions or erase quoted source text', () => {
+  const question = '雾杉备份每天几点执行、记录保留多久、为什么改时间？'
+  for (const instruction of ['请按原话逐项回答', '请按表格回答', '只给结论']) {
+    const parts = recallQueryPlan(`${question}${instruction}。不要保存本轮问答。`)
+      .filter(part => part.role === 'subquestion')
+    assert.deepEqual(parts.map(part => part.detail), ['clock', 'retention', 'reason'], instruction)
+    assert.ok(parts.every(part => !part.query.includes(instruction)), instruction)
+  }
+
+  const quoted = recallQueryPlan('“请按原话逐项回答”是什么意思？')
+  assert.ok(quoted.some(part => part.query.includes('请按原话逐项回答')))
+})
+
 test('a request to give only the unit does not add a recall question',()=>{
   const plan=recallQueryPlan('我偏好用什么计量单位？请只给单位。不要保存或提炼本轮问答。','',false)
   assert.deepEqual(plan.map(part=>part.query),['我偏好用什么计量单位'])

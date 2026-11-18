@@ -7,6 +7,7 @@ const CURRENT_NO_SAVE_PATTERN = new RegExp(
 )
 const GENERAL_NO_SAVE_PATTERN = /(?:不要|不得|不必|无需|禁止|不)(?:保存|记录|提炼|写入)(?:到)?(?:长期)?记忆|do not (?:save|store|remember) (?:this|these)|don['’]t (?:save|store|remember) (?:this|these)/giu
 const ANSWER_CONTROL_PATTERN = /^(?:(?:只|仅)?根据.{0,40}(?:记忆|已有资料|现有信息)|(?:每项|每个|每条)(?:都)?(?:用|按).{0,80}(?:回答|输出)|(?:没有|若无|如果没有|缺少)依据.{0,50}(?:不记得|不知道|写|回答)|(?:请)?(?:不要|别|请勿|不必|无需)(?:调用|使用)工具|(?:只|仅)(?:输出|回答).{0,50}|(?:回答|输出)(?:格式|要求)|工具名\s*[:：])/iu
+const ANSWER_PRESENTATION_PATTERN = /^(?:请)?(?:(?:(?:按照|按|用)(?:原话|原文|表格|列表|要点|分点|编号|JSON|Markdown)(?:(?:逐项|逐条|分别|简短|简洁|简要)\s*)*(?:格式)?(?:回答|作答|输出|列出))|(?:(?:只|仅)(?:给(?:出)?|输出|回答)(?:结论|摘要|要点|答案|结果|原话|原文|表格|列表)(?:即可|就行)?)|(?:(?:分点|逐项|逐条|分别)(?:回答|作答)))$/iu
 const VALUE_ONLY_CONTROL_PATTERN = /^(?:请)?(?:只|仅)(?:给(?:出)?|输出|回答)(?:单位|数值|数字|名称|时间|日期|版本号|结果|答案)(?:即可|就行)?$/u
 const CONTROL_PREFIX_PATTERNS = [
   /^(?:请)?(?:只|仅)?根据(?:已有|现有|当前|此前)?(?:记忆|资料|上下文)(?:内容)?(?:来)?\s*(?:(?:逐项|逐条|分别|简短|简洁|简要)\s*){0,2}(?:回答|作答)(?:\s*[：:]?\s*|(?=[^\s：:]))/u,
@@ -54,7 +55,7 @@ function stripLeadingControlPrefix(clause) {
 
 function isControlClause(clause) {
   const normalized = stripLeadingControlPrefix(clause).replace(/^[“"「『(（\s]+/u, '')
-  return /^(?:请)?(?:(?:简短|简洁|简要|逐项|分别)\s*){1,2}(?:回答|作答)/u.test(normalized) || ANSWER_CONTROL_PATTERN.test(normalized) || VALUE_ONLY_CONTROL_PATTERN.test(normalized) ||
+  return /^(?:请)?(?:(?:简短|简洁|简要|逐项|分别)\s*){1,2}(?:回答|作答)/u.test(normalized) || ANSWER_CONTROL_PATTERN.test(normalized) || ANSWER_PRESENTATION_PATTERN.test(normalized) || VALUE_ONLY_CONTROL_PATTERN.test(normalized) ||
     containsUnquotedDirective(normalized, CURRENT_NO_SAVE_PATTERN) ||
     containsUnquotedDirective(normalized, GENERAL_NO_SAVE_PATTERN)
 }
