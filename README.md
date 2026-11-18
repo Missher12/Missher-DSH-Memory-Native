@@ -2,7 +2,7 @@
 
 ![Memory Native · 长期记忆（品牌插画）](docs/images/cover-v2.png)
 
-当前原生版本 **1.7.0-native.20261118.1** · [下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases)
+当前原生版本 **1.7.1-native.20261118.1** · [下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases)
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
 [仓库](https://github.com/Missher12/Missher-DSH-Memory-Native) · [Releases 下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases) · [设计文档](docs/design.md) · [验证记录](docs/verification.md)

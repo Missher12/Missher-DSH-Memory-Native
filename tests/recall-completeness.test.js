@@ -58,6 +58,18 @@ test('answer style modifiers in either order are controls, not extra factual que
   assert.ok(recallQueryPlan('用户希望什么风格的回答？','',false).some(part=>part.query.includes('风格')))
 })
 
+test('a polite instruction to answer from memory preserves the three real snapshot questions', () => {
+  const snapshot = '澄湾快照每天几点执行、保留多久、为什么改时间？'
+  for (const query of [
+    snapshot + '请只根据记忆逐项回答。不要保存或提炼本轮问答。不要调用工具。',
+    '请只根据记忆逐项回答：' + snapshot,
+    '请根据已有记忆来分别简短作答：' + snapshot,
+  ]) {
+    const parts = recallQueryPlan(query).filter(part => part.role === 'subquestion')
+    assert.deepEqual(parts.map(part => part.detail), ['clock', 'retention', 'reason'], query)
+  }
+})
+
 test('a request to give only the unit does not add a recall question',()=>{
   const plan=recallQueryPlan('我偏好用什么计量单位？请只给单位。不要保存或提炼本轮问答。','',false)
   assert.deepEqual(plan.map(part=>part.query),['我偏好用什么计量单位'])
