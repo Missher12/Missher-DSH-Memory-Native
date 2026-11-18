@@ -45,16 +45,123 @@ async function setup(t, records = [], llm, testOptions) {
     return response.value
   }
   let turn = 0
-  const ask = async (content, sessionId = 'session-integration', sessionState = {}) => {
+  const prepare = async (content, sessionId = 'session-integration', sessionState = {}) => {
     const messages = [{ id: `query-${++turn}`, role: 'user', source: { kind: 'user' }, content }]
     const result = await handlers['agent/pre-step']({
       agent: { session: { id: sessionId, header: { cwd }, ...sessionState } }, messages,
       modelSelection: { provider: 'host-provider', model: 'host-model' },
     }, async () => ({ kind: 'enter', messages }))
-    return result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n')
+    return { result, messages, session: { id: sessionId, header: { cwd }, ...sessionState },
+      block: result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n') }
   }
-  return { root, dataDir, key, panel, ask, store, warnings }
+  const ask = async (...args) => (await prepare(...args)).block
+  return { root, dataDir, key, cwd, panel, ask, prepare, handlers, store, warnings }
 }
+
+function completeAnswer(handlers, session, text, reason = 'completed') {
+  handlers['session/event'](session, { type: 'assistant/message', data: { message: {
+    role: 'assistant', source: { kind: 'assistant' }, content: [{ type: 'text', text }],
+  } } })
+  handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: reason } } })
+}
+
+test('recall reports follow the active session and project through the completed turn', async t => {
+  const otherCwd = join(tmpdir(), 'dsh-memory-report-other-project')
+  const otherKey = projectIdentity(otherCwd).key
+  const { key, cwd, panel, prepare, handlers } = await setup(t, [
+    { id: 'mem_report_a', content: '青岚快照每天04:20执行，保留47天，因为要避开每日导入的磁盘峰值。' },
+    { id: 'mem_report_b', projectKey: otherKey, content: '赤潮快照每天06:15执行，保留63天，因为要避开早间归档。' },
+  ])
+  const questionA = '青岚快照每天几点执行，保留多久，为什么改时间？'
+  const questionB = '赤潮快照每天几点执行，保留多久，为什么改时间？'
+  const a = await prepare(questionA, 'session-a')
+  const b = await prepare(questionB, 'session-b', { header: { cwd: otherCwd } })
+  const c = await prepare(questionA, 'session-c')
+  const aSession = { id: 'session-a', header: { cwd } }
+  const bSession = { id: 'session-b', header: { cwd: otherCwd } }
+  completeAnswer(handlers, aSession, '青岚快照每天04:20执行，保留47天，因为要避开每日导入的磁盘峰值。')
+  completeAnswer(handlers, bSession, '赤潮快照每天06:15执行，保留63天，因为要避开早间归档。')
+  completeAnswer(handlers, c.session, '青岚快照每天04:20执行。')
+
+  const reportA = (await panel('stats', { sessionId: 'session-a', scope: 'project', projectKey: key })).lastRecall
+  const reportB = (await panel('stats', { sessionId: 'session-b', scope: 'project', projectKey: otherKey })).lastRecall
+  assert.equal(reportA.projectKey, key)
+  assert.equal(reportB.projectKey, otherKey)
+  assert.equal(reportA.turnKey, 'id:' + a.messages[0].id)
+  assert.equal(reportB.turnKey, 'id:' + b.messages[0].id)
+  assert.equal(reportA.outcome, 'completed')
+  assert.equal(reportA.questions.length, 3)
+  assert.ok(reportA.questions.every(question => question.answerCoverage === 'covered'))
+  assert.ok(reportA.questions.every(question => question.answerExcerpt !== null))
+  assert.ok(reportA.questions.some(question => question.injected.some(evidence => evidence.text.includes('04:20'))))
+  assert.equal(reportB.questions.filter(question => question.answerCoverage === 'covered').length, 3)
+  const reportC = (await panel('stats', { sessionId: 'session-c', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(reportC.questions.filter(question => question.answerCoverage === 'covered').length, 1)
+  assert.equal(reportC.questions.filter(question => question.answerCoverage === 'unverified').length, 2)
+  assert.equal((await panel('stats', { scope: 'project', projectKey: key })).lastRecall, null)
+})
+
+test('multi-question answer coverage is independent, and repeated question values do not collapse slots', async t => {
+  const { key, panel, prepare, handlers } = await setup(t, [
+    { id: 'mem_same_value_snapshot', content: '银帆快照每天04:20执行，报表也每天04:20开始。' },
+    { id: 'mem_retention_value', content: '银帆快照保留47天。' },
+  ])
+  const prepared = await prepare('银帆快照几点执行，报表几点开始，银帆快照保留多久？', 'session-partial')
+  completeAnswer(handlers, prepared.session, '银帆快照和报表都在04:20。保留期限我无法确认。')
+  const report = (await panel('stats', { sessionId: 'session-partial', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(report.questions.length, 3)
+  assert.equal(report.questions.filter(question => question.answerCoverage === 'covered').length, 2)
+  assert.equal(report.questions.filter(question => question.answerCoverage === 'unverified').length, 1)
+  assert.equal(report.questions.filter(question => question.query.includes('几点') || question.query.includes('开始')).length, 2)
+})
+
+test('duplicate native inbox and user events do not erase the report for the same turn', async t => {
+  const { key, panel, prepare, handlers } = await setup(t, [
+    { id: 'mem_duplicate_native_event', content: '星芒快照每天在03:42执行，保留61天。' },
+  ])
+  const prepared = await prepare('星芒快照每天几点执行，保留多久？', 'session-duplicate-event')
+  const input = prepared.messages[0]
+  handlers['session/event'](prepared.session, { type: 'user/message', data: input })
+  handlers['session/event'](prepared.session, { type: 'agent/inbox/spliced', data: { inserted: [input] } })
+  completeAnswer(handlers, prepared.session, '星芒快照每天在03:42执行，保留61天。')
+  const report = (await panel('stats', { sessionId: prepared.session.id, scope: 'project', projectKey: key })).lastRecall
+  assert.ok(report)
+  assert.equal(report.outcome, 'completed')
+  assert.deepEqual(report.questions.map(question => question.answerCoverage), ['covered', 'covered'])
+})
+
+test('no-evidence, unanswered, aborted and forget outcomes never claim answer coverage', async t => {
+  const { key, panel, prepare, handlers } = await setup(t, [
+    { id: 'mem_forget_report', content: '碧潮交接的备用代号是雨燕七号。' },
+  ])
+  const noEvidence = await prepare('火星的公转周期是多少？', 'session-empty')
+  completeAnswer(handlers, noEvidence.session, '火星的公转周期是687天。')
+  const emptyReport = (await panel('stats', { sessionId: 'session-empty', scope: 'project', projectKey: key })).lastRecall
+  assert.ok(emptyReport.questions.every(question => question.answerCoverage !== 'covered'))
+
+  const unanswered = await prepare('碧潮交接的备用代号是什么？', 'session-unanswered')
+  handlers['session/event'](unanswered.session, { type: 'assistant/message', data: { message: {
+    role: 'assistant', source: { kind: 'candidate' }, content: [{ type: 'text', text: '雨燕七号。' }],
+  } } })
+  handlers['session/event'](unanswered.session, { type: 'tool/result', data: { content: '雨燕七号。' } })
+  handlers['session/event'](unanswered.session, { type: 'assistant/message', data: { message: {
+    role: 'assistant', channel: 'analysis', source: { kind: 'assistant' }, content: [{ type: 'text', text: '雨燕七号。' }],
+  } } })
+  handlers['session/event'](unanswered.session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  const unansweredReport = (await panel('stats', { sessionId: 'session-unanswered', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(unansweredReport.outcome, 'completed')
+  assert.ok(unansweredReport.questions.every(question => question.answerCoverage === 'unverified'))
+  assert.ok(unansweredReport.questions.every(question => question.answerExcerpt === null))
+
+  const aborted = await prepare('碧潮交接的备用代号是什么？', 'session-aborted')
+  completeAnswer(handlers, aborted.session, '雨燕七号。', 'aborted')
+  const abortedReport = (await panel('stats', { sessionId: 'session-aborted', scope: 'project', projectKey: key })).lastRecall
+  assert.equal(abortedReport.outcome, 'aborted')
+  assert.ok(abortedReport.questions.every(question => question.answerCoverage !== 'covered'))
+
+  await panel('removeMemory', { id: 'mem_forget_report', scope: 'project', projectKey: key })
+  assert.equal((await panel('stats', { sessionId: 'session-unanswered', scope: 'project', projectKey: key })).lastRecall, null)
+})
 
 test('the routed model capacity and the host measurement shrink the real injection budget to zero', async t => {
   let occupied = 850
@@ -122,7 +229,7 @@ test('deep recall searches only the missing snapshot reason and never treats a s
   const answer = await ask('灰晶快照每天几点执行、保留多久、为什么改时间？')
   for (const text of ['03:42', '61 天', '避开每日导入的磁盘峰值']) assert.ok(answer.includes(text))
   assert.doesNotMatch(answer, /审核流程/u)
-  const report = (await panel('stats')).lastRecall
+  const report = (await panel('stats', { sessionId: 'session-integration' })).lastRecall
   assert.equal(report.covered.length, 3)
   assert.deepEqual(report.localDeepRecall.queries, ['灰晶快照 为什么改时间'])
   assert.equal(report.localDeepRecall.limit, 50000)
@@ -142,7 +249,7 @@ test('unextracted original evidence remains usable without another paid call, bu
   assert.match(answer,/用户原文（未提炼）/u)
   assert.match(answer,/可按用户所述引用/u)
   assert.doesNotMatch(answer,/\[事实\]/u)
-  const report=(await panel('stats',{scope:'project',projectKey:key})).lastRecall
+  const report=(await panel('stats',{scope:'project',projectKey:key,sessionId:'session-integration'})).lastRecall
   assert.equal(report.covered.length,0)
   assert.equal(report.candidates.length,1)
   const id=report.candidates[0].evidence[0].id
@@ -158,7 +265,7 @@ test('a high vector score cannot inject unrelated global memories for a physical
     content:'用户要求界面设计先用可交互的 HTML demo 做方案预览，再落到真实面板。'},
     {id:'mem_unrelated_global',scope:'global',projectKey:null,kind:'fact',content:'用户今天要整理 Git 仓库。'}],undefined,{semantic:{enabled:true,engine}})
   assert.equal(await ask('雪松交接的备用物料盒放在哪里？'),'')
-  assert.equal((await panel('stats',{scope:'global'})).lastRecall.candidates.length,0)
+  assert.equal((await panel('stats',{scope:'global',sessionId:'session-integration'})).lastRecall.candidates.length,0)
 })
 
 test('answering a global preference cannot inject an unrelated or foreign project preference via the profile',async t=>{
@@ -170,7 +277,7 @@ test('answering a global preference cannot inject an unrelated or foreign projec
   const block=await ask('我的单位偏好是什么？')
   assert.match(block,/公制单位/u)
   assert.doesNotMatch(block,/玉竹四号|浅色背景/u)
-  const report=(await panel('stats',{scope:'global'})).lastRecall
+  const report=(await panel('stats',{scope:'global',sessionId:'session-integration'})).lastRecall
   assert.deepEqual(report.covered.flatMap(item=>item.evidence.map(e=>e.id)),['mem_unit_preference'])
 })
 
@@ -182,7 +289,7 @@ test('a preference question matches its requested category instead of the common
   const block=await ask('我偏好用什么计量单位？请只给单位。不要保存或提炼本轮问答。')
   assert.match(block,/公制单位/u)
   assert.doesNotMatch(block,/浅色背景/u)
-  const report=(await panel('stats',{scope:'global'})).lastRecall
+  const report=(await panel('stats',{scope:'global',sessionId:'session-integration'})).lastRecall
   assert.equal(report.total,1)
   assert.equal(report.covered.length,1)
 })
@@ -238,8 +345,10 @@ test('apply rechecks memory authority after passage embedding before persisting 
   await panel('removeMemory',{id:'mem_revoked_during_embedding',scope:'project',projectKey:key})
   release()
   await pending
+  assert.equal((await panel('stats',{scope:'project',projectKey:key,sessionId:'session-integration'})).lastRecall,null,
+    'a recall already in progress cannot repopulate a report after forgetting')
   assert.equal(await ask('霁海系统的版本追踪编号是多少？'),'')
-  const report=await panel('stats',{scope:'project',projectKey:key})
+  const report=await panel('stats',{scope:'project',projectKey:key,sessionId:'session-integration'})
   assert.equal(report.semantic.total,0)
   assert.equal(report.semantic.indexed,0)
   assert.equal(existsSync(join(dataDir,'.cache','semantic','multilingual-e5-small-761b726-v1',key+'.jsonl')),false)
@@ -301,7 +410,7 @@ test('one product version cannot mark a different product slot covered; verified
   assert.match(result, /MariaDB 11\.4\.7/u)
   assert.doesNotMatch(result, /06:12|41 天/u)
   assert.equal(calls, 1)
-  const report = (await panel('stats', { scope: 'project', projectKey: 'unused' })).lastRecall
+  const report = (await panel('stats', { scope: 'project', projectKey: 'unused', sessionId: 'session-integration' })).lastRecall
   assert.equal(report.missing.length, 2)
   assert.ok(report.missing.every(query => /构建/u.test(query)))
   assert.ok(report.covered.every(item => !item.query.includes('构建')))

@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { createPanelBackend } from '../host/remote.js'
-import { computeActivity, localDayKey } from '../host/remote-contract.js'
+import { computeActivity, computeStats, localDayKey } from '../host/remote-contract.js'
+import { buildRecord } from '../host/records.js'
 import { MemoryStore } from '../host/store.js'
 
 const DAY = 86_400_000
@@ -97,4 +98,69 @@ test('localDayKey formats dates in local calendar time', () => {
   const date = new Date(2026, 9, 31, 23, 59, 59)
   assert.equal(localDayKey(date.getTime()), '2026-10-31')
   assert.equal(localDayKey(new Date(2026, 0, 1, 0, 0, 0).getTime()), '2026-01-01')
+})
+
+test('incremental store summaries preserve counts through activation, edit, archive, supersede, delete, import and reopen', (t) => {
+  const { root, store, backend } = setup(t)
+  assert.equal(typeof store.aggregateStats, 'function')
+  assert.equal(typeof store.activitySummary, 'function')
+  const fact = seed(store, Date.now(), { confidence: .9, content: '基础记录用于计数。' })
+  const candidate = seed(store, Date.now(), { status: 'candidate', content: '候选记录用于计数。' })
+  assert.equal(computeStats(backend, { scope: 'project', projectKey: KEY }).active, 1)
+  assert.equal(computeStats(backend, { scope: 'project', projectKey: KEY }).candidate, 1)
+
+  store.update(candidate.id, { status: 'active' }, [{ scope: 'project', projectKey: KEY }])
+  store.update(fact.id, { content: '编辑后的基础记录用于计数。' }, [{ scope: 'project', projectKey: KEY }])
+  let stats = computeStats(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(stats.active, 2)
+  assert.equal(stats.candidate, 0)
+  assert.equal(computeActivity(backend, { scope: 'project', projectKey: KEY }).total, 2)
+
+  store.update(fact.id, { status: 'archived' }, [{ scope: 'project', projectKey: KEY }])
+  stats = computeStats(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(stats.active, 1)
+  assert.equal(stats.archived, 1)
+
+  const replacement = buildRecord({ kind: 'fact', scope: 'project', projectKey: KEY,
+    confidence: .9, content: '替换后的记录用于计数。' }, { id: 'mem_replacement_for_activity' })
+  assert.equal(replacement.ok, true)
+  store.replace(candidate.id, replacement.record)
+  stats = computeStats(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(stats.active, 1)
+  assert.equal(stats.archived, 1)
+  assert.equal(stats.superseded, 1)
+  assert.equal(computeActivity(backend, { scope: 'project', projectKey: KEY }).total, 3)
+
+  store.remove(replacement.record.id, [{ scope: 'project', projectKey: KEY }])
+  stats = computeStats(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(stats.deleted, 1)
+  assert.equal(stats.archived, 1)
+  assert.equal(stats.total, 2)
+  assert.equal(computeActivity(backend, { scope: 'project', projectKey: KEY }).total, 2)
+
+  const imported = store.write({ kind: 'decision', scope: 'project', projectKey: KEY,
+    content: '导入后的决策用于计数。' }, { id: 'mem_imported_for_activity' })
+  assert.equal(imported.ok, true)
+  store.remove(imported.record.id, [{ scope: 'project', projectKey: KEY }])
+  const reopened = new MemoryStore({ root }).open()
+  const importRecord = { ...imported.record, id: 'mem_bulk_import_for_activity', revision: 1 }
+  assert.equal(reopened.importData({ schemaVersion: 2, global: [], projects: { [KEY]: [importRecord] } }).imported, 1)
+  backend.store = reopened
+  stats = computeStats(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(stats.total, 3)
+  assert.equal(stats.active, 0)
+  assert.equal(stats.candidate, 1)
+  assert.equal(stats.deleted, 2)
+  assert.equal(computeActivity(backend, { scope: 'project', projectKey: KEY }).total, 3)
+
+  const afterReopen = new MemoryStore({ root }).open()
+  backend.store = afterReopen
+  stats = computeStats(backend, { scope: 'project', projectKey: KEY })
+  assert.equal(stats.total, 3)
+  assert.equal(stats.active, 0)
+  assert.equal(stats.candidate, 1)
+  assert.equal(stats.archived, 1)
+  assert.equal(stats.superseded, 1)
+  assert.equal(stats.deleted, 2)
+  assert.equal(computeActivity(backend, { scope: 'project', projectKey: KEY }).total, 3)
 })

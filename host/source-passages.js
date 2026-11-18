@@ -86,6 +86,7 @@ export class SourcePassageIndex {
   #root
   #projects = new Map()
   constructor(root) { this.#root = root }
+  clear() { this.#projects.clear() }
   #refresh(projectKey) {
     if (!isValidProjectKey(projectKey)) return null
     let cached = this.#projects.get(projectKey)

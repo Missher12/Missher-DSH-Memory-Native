@@ -101,7 +101,7 @@ export function packRecords(scopes, index, graph) {
   for (const [key, state] of scopes) {
     const start = all.length
     for (const record of state.records.values()) { ordinals.set(record, all.length); all.push(record) }
-    const { records, ...scope } = state
+    const { records, aggregate: _aggregate, ...scope } = state
     packedScopes.push([key, { ...scope, start, count: all.length - start }])
   }
   const columns = META_FIELDS.map(() => ({ values: [], refs: new Uint32Array(all.length), ids: new Map() }))

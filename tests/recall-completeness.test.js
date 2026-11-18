@@ -36,7 +36,7 @@ async function setup(t, inject = {}, fixtureContents = null) {
     const response=await handlers['agent/pre-step']({agent:{session:{id:'new-session',header:{cwd}}},messages},async()=>({kind:'enter',messages}))
     const block=response.messages.filter(m=>m.source?.kind==='memory').flatMap(m=>m.content.map(b=>b.text)).join('\n')
     let stats
-    const request=Readable.from([Buffer.from(JSON.stringify({method:'stats',input:{scope:'project',projectKey:key}}))]);request.method='POST'
+    const request=Readable.from([Buffer.from(JSON.stringify({method:'stats',input:{scope:'project',projectKey:key,sessionId:'new-session'}}))]);request.method='POST'
     await route.handler(request,{writeHead(){},end(body){const reply=JSON.parse(body);assert.equal(reply.ok,true);stats=reply.value}})
     return {block,report:stats.lastRecall}
   }

@@ -30,9 +30,10 @@ import { readFileSync, renameSync, statSync, utimesSync, writeFileSync, unlinkSy
 import { openMemoryRuntime } from '../host/startup.js'
 import { MemoryIndex } from '../host/search.js'
 import { buildRecord } from '../host/records.js'
-import { computeProfile, knowledgeGraph } from '../host/remote-contract.js'
+import { computeActivity, computeProfile, computeStats, knowledgeGraph } from '../host/remote-contract.js'
 import { createPanelBackend } from '../host/remote.js'
 import { deriveProfile } from '../host/profile.js'
+import { packRecords } from '../host/cache-records.js'
 
 const fixedNow = 1_750_000_000_000
 const scopeA = [{ scope: 'project', projectKey: 'project-a' }]
@@ -75,6 +76,28 @@ test('fresh cache restores full records, profile, scoring and project isolation'
   assert.equal(search(reopened, 'secretB', 'project-b').hits[0].record.id, 'b')
   assert.match(reopened.profile(2, fixedNow).traits[0].statement, /保留原文/u)
   assert.deepEqual(reopened.store.find('a', scopeA), new MemoryStore({ root }).open().find('a', scopeA))
+})
+
+test('cache scopes without aggregates can be updated before first stats and aggregates stay out of the cache', (t) => {
+  const root = createFixture(t)
+  const initial = openMemoryRuntime({ root, clock: () => fixedNow })
+  initial.dispose()
+  const runtime = openMemoryRuntime({ root, clock: () => fixedNow })
+  t.after(() => runtime.dispose())
+  assert.equal(runtime.metrics.cacheHit, true)
+  assert.equal(runtime.store.snapshot().get('project:project-a').aggregate, null)
+
+  runtime.store.update('a', { content: 'OMEGA cached update before statistics' }, scopeA)
+  assert.ok(runtime.store.write({ kind: 'fact', scope: 'project', projectKey: 'project-a', confidence: .9,
+    content: 'Added before the first aggregate is built.' }, { id: 'added-before-stats', now: fixedNow }).ok)
+  const backend = createPanelBackend({ store: runtime.store, index: runtime.index, config: {}, root })
+  const stats = computeStats(backend, { scope: 'project', projectKey: 'project-a' })
+  assert.equal(stats.total, 4)
+  assert.equal(stats.active, 4)
+  assert.equal(computeActivity(backend, { scope: 'project', projectKey: 'project-a', days: 730 }).total, 2)
+
+  const packed = packRecords(runtime.store.snapshot(), runtime.index.snapshot(), runtime.graph())
+  assert.ok(packed.scopes.every(([, state]) => !Object.hasOwn(state, 'aggregate')))
 })
 
 test('cached search honors validFrom for present and missing timestamps', async (t) => {

@@ -41,6 +41,98 @@ export const SCHEMA_VERSION = 2
 export const PURGED_IDS_FILE = 'obsidian-purged-ids.json'
 export const MAX_RECORDS_PER_FILE = 2000
 export const MAX_BYTES_PER_FILE = 4 * 1024 * 1024
+const SUMMARY_KINDS = ['preference', 'fact', 'decision', 'episode']
+
+function activityDay(at) {
+  const date = new Date(at)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function pushMax(heap, value) {
+  let index = heap.push(value) - 1
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2)
+    if (heap[parent] >= value) break
+    heap[index] = heap[parent]
+    index = parent
+  }
+  heap[index] = value
+}
+
+function popMax(heap) {
+  const max = heap[0]
+  const tail = heap.pop()
+  if (heap.length > 0) {
+    let index = 0
+    while (true) {
+      const left = index * 2 + 1, right = left + 1
+      if (left >= heap.length) break
+      const child = right < heap.length && heap[right] > heap[left] ? right : left
+      if (heap[child] <= tail) break
+      heap[index] = heap[child]
+      index = child
+    }
+    heap[index] = tail
+  }
+  return max
+}
+
+function emptyAggregate() {
+  return { total: 0, deleted: 0, statusCounts: new Map(), kinds: new Map(SUMMARY_KINDS.map(kind => [kind, 0])),
+    confidenceSum: 0, confidenceCount: 0, activityDays: new Map(), timestamps: new Map(), maxTimestampHeap: [] }
+}
+
+function adjustAggregate(aggregate, rawRecord, delta) {
+  if (rawRecord === undefined) return
+  const record = hotRecord(rawRecord)
+  aggregate.statusCounts.set(record.status, (aggregate.statusCounts.get(record.status) ?? 0) + delta)
+  const isDeleted = record.status === 'deleted'
+  if (isDeleted) aggregate.deleted += delta
+  else aggregate.total += delta
+
+  if (record.status === 'active' || record.status === 'candidate') {
+    if (aggregate.kinds.has(record.kind)) aggregate.kinds.set(record.kind, aggregate.kinds.get(record.kind) + delta)
+    if (typeof record.confidence === 'number' && Number.isFinite(record.confidence)) {
+      aggregate.confidenceSum += record.confidence * delta
+      aggregate.confidenceCount += delta
+    }
+  }
+
+  if (isDeleted) return
+  const at = typeof record.updatedAt === 'number' ? record.updatedAt : record.observedAt
+  if (typeof at === 'number' && Number.isFinite(at)) {
+    const date = activityDay(at)
+    let bucket = aggregate.activityDays.get(date)
+    if (bucket === undefined) {
+      bucket = { date, count: 0, preference: 0, fact: 0, decision: 0, episode: 0 }
+      aggregate.activityDays.set(date, bucket)
+    }
+    bucket.count += delta
+    if (Object.hasOwn(bucket, record.kind)) bucket[record.kind] += delta
+    if (bucket.count <= 0) aggregate.activityDays.delete(date)
+
+    const previousCount = aggregate.timestamps.get(at) ?? 0
+    const count = previousCount + delta
+    if (count <= 0) aggregate.timestamps.delete(at)
+    else {
+      if (delta > 0 && previousCount === 0) pushMax(aggregate.maxTimestampHeap, at)
+      aggregate.timestamps.set(at, count)
+    }
+  }
+}
+
+function buildAggregate(records) {
+  const aggregate = emptyAggregate()
+  for (const record of records) adjustAggregate(aggregate, record, 1)
+  return aggregate
+}
+
+function latestAggregateTimestamp(aggregate) {
+  while (aggregate.maxTimestampHeap.length > 0 && !aggregate.timestamps.has(aggregate.maxTimestampHeap[0])) {
+    popMax(aggregate.maxTimestampHeap)
+  }
+  return aggregate.maxTimestampHeap[0] ?? 0
+}
 
 function readPurgedIds(root) {
   const file = join(root, PURGED_IDS_FILE)
@@ -163,6 +255,7 @@ export class MemoryStore {
       const paths = scopePaths(this.#root, state.scope, state.projectKey)
       state.dir = paths.dir
       state.file = paths.file
+      state.aggregate = null
     }
     this.#scopes = scopes
     return this
@@ -218,6 +311,7 @@ export class MemoryStore {
       bytes: parsed.bytes,
       corrupt: parsed.corrupt,
       stamp: fileStamp(paths.file),
+      aggregate: null,
     }
     if (parsed.corrupt > 0) this.#quarantine(paths.file, parsed.corruptLines)
     this.#scopes.set(key, state)
@@ -308,6 +402,7 @@ export class MemoryStore {
         closeSync(fd)
       }
       state.records.set(next.id, next)
+      this.#adjustAggregate(state, current, next)
       rememberAuthority(next, line.slice(0, -1))
       state.lines += 1
       state.bytes += Buffer.byteLength(line) + separatorBytes
@@ -387,6 +482,8 @@ export class MemoryStore {
       // No consumer sees either half until the authority file was committed.
       state.records.set(previous.id, previous)
       state.records.set(record.id, record)
+      this.#adjustAggregate(state, old, previous)
+      this.#adjustAggregate(state, undefined, record)
       rememberAuthority(previous, previousJson)
       rememberAuthority(record, recordJson)
       state.lines += 2
@@ -439,6 +536,7 @@ export class MemoryStore {
         // Directory fsync is best effort on platforms that refuse it.
       }
       state.records = new Map(latest.map((record) => [record.id, record]))
+      if (state.aggregate != null) state.aggregate = buildAggregate(state.records.values())
       let changed = false
       for (let i = 0; i < latest.length; i += 1) {
         if (rememberAuthority(latest[i], lines[i])) changed = true
@@ -506,6 +604,7 @@ export class MemoryStore {
           // Directory fsync is best effort.
         }
         state.records.delete(id)
+        this.#adjustAggregate(state, previous, undefined)
         state.lines = kept.length
         state.bytes = Buffer.byteLength(text)
         state.stamp = fileStamp(state.file)
@@ -589,12 +688,51 @@ export class MemoryStore {
     const parsed = readJsonl(state.file)
     if (stamp === state.stamp) return
     state.records = new Map(latestRevisions(parsed.records).map((record) => [record.id, record]))
+    if (state.aggregate != null) state.aggregate = buildAggregate(state.records.values())
     state.lines = parsed.lines
     state.bytes = parsed.bytes
     state.corrupt = parsed.corrupt
     state.stamp = stamp
     if (parsed.corrupt > 0) this.#quarantine(state.file, parsed.corruptLines)
     this.#notifyChange({ type: 'refresh', state })
+  }
+
+  #adjustAggregate(state, previous, next) {
+    if (state.aggregate == null) return
+    adjustAggregate(state.aggregate, previous, -1)
+    adjustAggregate(state.aggregate, next, 1)
+  }
+
+  #aggregate(state) {
+    state.aggregate ??= buildAggregate(state.records.values())
+    return state.aggregate
+  }
+
+  /** Cached whole-store counters; mutation paths update them by record revision. */
+  aggregateStats() {
+    const projectKeys = this.listProjects()
+    const scopes = [this.#state('global', null), ...projectKeys.map(key => this.#state('project', key))]
+    const result = { total: 0, deleted: 0, statusCounts: new Map(), kinds: new Map(SUMMARY_KINDS.map(kind => [kind, 0])),
+      confidenceSum: 0, confidenceCount: 0, lastCapturedAt: 0, projectKeys }
+    for (const state of scopes) {
+      const aggregate = this.#aggregate(state)
+      result.total += aggregate.total
+      result.deleted += aggregate.deleted
+      result.confidenceSum += aggregate.confidenceSum
+      result.confidenceCount += aggregate.confidenceCount
+      result.lastCapturedAt = Math.max(result.lastCapturedAt, latestAggregateTimestamp(aggregate))
+      for (const [status, count] of aggregate.statusCounts) {
+        result.statusCounts.set(status, (result.statusCounts.get(status) ?? 0) + count)
+      }
+      for (const [kind, count] of aggregate.kinds) result.kinds.set(kind, (result.kinds.get(kind) ?? 0) + count)
+    }
+    return result
+  }
+
+  /** Per-day current record counts for an activity chart. Returned buckets are copies. */
+  activitySummary(scope, projectKey) {
+    const aggregate = this.#aggregate(this.#state(scope, projectKey))
+    return [...aggregate.activityDays.values()].map(bucket => ({ ...bucket })).sort((left, right) => left.date.localeCompare(right.date))
   }
 
   /** Keep the first copy of each corrupt line so compaction cannot erase it silently. */

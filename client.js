@@ -408,6 +408,17 @@ window.__ModuleLoader__.load({
         'recall.empty': 'None yet',
         'recall.found': 'Evidence included in this answer',
         'recall.missing': 'Still missing evidence',
+        'recall.hits': 'Retrieved hits',
+        'recall.injected': 'Text actually injected',
+        'recall.notInjected': 'Found but omitted by the context budget',
+        'recall.answer': 'Final answer',
+        'recall.answer.pending': 'Waiting for the turn to finish',
+        'recall.answer.covered': 'Supported in the final answer',
+        'recall.answer.unverified': 'Needs verification',
+        'recall.answer.no-evidence': 'No matching memory found',
+        'recall.answer.not-injected': 'Matching evidence was not injected',
+        'recall.answer.aborted': 'Turn cancelled; not assessed',
+        'recall.memorySource': '{kind} · {scope}',
         'recall.localDeepUsage': 'Local deep search · {count} gaps · {tokens} / {limit} tokens',
         'recall.coverage': '{covered}/{total} supported',
         'recall.candidates': 'Candidate passages included; answers not yet confirmed',
@@ -785,6 +796,17 @@ window.__ModuleLoader__.load({
         'recall.empty': '暂无记录',
         'recall.found': '已放入本轮回答的证据',
         'recall.missing': '仍缺少证据',
+        'recall.hits': '检索命中',
+        'recall.injected': '实际注入文字',
+        'recall.notInjected': '已找到，但受上下文预算限制未注入',
+        'recall.answer': '最终回答',
+        'recall.answer.pending': '等待本轮结束',
+        'recall.answer.covered': '最终回答包含可核对的依据',
+        'recall.answer.unverified': '待核实',
+        'recall.answer.no-evidence': '未找到匹配记忆',
+        'recall.answer.not-injected': '匹配依据未注入',
+        'recall.answer.aborted': '本轮已取消，未评估',
+        'recall.memorySource': '{kind} · {scope}',
         'recall.localDeepUsage': '本地深查 · {count} 项缺口 · {tokens} / {limit} Token',
         'recall.coverage': '{covered}/{total} 项有证据',
         'recall.candidates': '已送入候选原文，答案尚未确认',
@@ -1768,28 +1790,54 @@ window.__ModuleLoader__.load({
       const stateKey = { 'not-needed': 'local', completed: 'completed', failed: 'failed', unknown: 'unknown', 'budget-exhausted': 'budget' }[report.completionState] ?? 'notSent'
       const sent = ['completed', 'unknown', 'requested'].includes(report.providerState)
       const tokens = report.usage?.totalTokens
-      const missing = report.unresolved ?? report.missing ?? []
-      const evidenceList = items => items.map((item, index) => {
-        const evidenceNodes = (item.evidence ?? []).map(evidence => {
-          const quotes = (evidence.sourceRefs ?? []).filter(ref => typeof ref.excerpt === 'string' && ref.excerpt !== '')
-          return h('div', { key: evidence.id },
-            evidence.noteTitle ? h('p', null, evidence.noteTitle) : null,
-            quotes.map((ref, refIndex) => h('blockquote', { key: refIndex }, ref.excerpt)),
-            !evidence.noteTitle && quotes.length === 0 ? h('p', { className: 'dsh-memory-muted' }, t('brief.noQuote')) : null,
-            evidence.kind === 'source' ? h('div', { className: 'dsh-memory-danger-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', disabled: busy, onClick: () => forget(evidence) }, t('recall.forgetSource'))) : null)
+      const questions = Array.isArray(report.questions) ? report.questions : []
+      const covered = questions.filter(question => question.answerCoverage === 'covered').length
+      const coverage = t('recall.coverage', { covered: String(covered), total: String(report.total ?? questions.length) })
+      const warning = report.outcome === 'aborted' || ['failed', 'unknown', 'budget'].includes(stateKey)
+      const value = [coverage, report.outcome === 'pending' ? t('recall.answer.pending') : report.outcome === 'aborted' ? t('recall.answer.aborted') : ''].filter(Boolean).join(' · ')
+      const evidenceNode = (evidence, showInjected = false) => {
+        const refs = Array.isArray(evidence.sourceRefs) ? evidence.sourceRefs : []
+        const source = evidence.noteTitle ?? t('recall.memorySource', {
+          kind: evidence.kind ?? 'memory', scope: evidence.scope === 'global' ? t('library.scope.global') : (evidence.projectKey ?? t('library.scope.project')),
         })
-        return h('li', { key: index }, item.query,
-          h('details', { className: 'dsh-memory-brief-sources' }, h('summary', null, t('brief.sources')), evidenceNodes))
+        return h('div', { key: evidence.id },
+          showInjected && evidence.text ? h('blockquote', null, evidence.text) : null,
+          h('p', { className: 'dsh-memory-muted' }, [evidence.verified === false ? t('recall.answer.unverified') : null, source].filter(Boolean).join(' · ')),
+          showInjected ? null : refs.map((ref, index) => ref.excerpt ? h('blockquote', { key: index }, ref.excerpt) : null),
+          evidence.kind === 'source' ? h('div', { className: 'dsh-memory-danger-actions' }, h('button', {
+            type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', disabled: busy,
+            onClick: () => forget(evidence),
+          }, t('recall.forgetSource'))) : null)
+      }
+      const questionRows = questions.map((question, index) => {
+        const status = t('recall.answer.' + (question.answerCoverage ?? 'pending'))
+        const injected = Array.isArray(question.injected) ? question.injected : []
+        const injectedIds = new Set(injected.map(evidence => evidence.id))
+        const notInjected = Array.isArray(question.notInjected) ? question.notInjected : []
+        const hiddenIds = new Set([...injectedIds, ...notInjected.map(evidence => evidence.id)])
+        const additionalHits = (question.hits ?? []).filter(evidence => !hiddenIds.has(evidence.id))
+        const detailSections = []
+        if (injected.length) detailSections.push(h('div', { key: 'injected' },
+          h('strong', null, t('recall.injected')),
+          h('ul', null, injected.map(evidence => h('li', { key: evidence.id }, evidenceNode(evidence, true))))))
+        detailSections.push(h('div', { key: 'answer' }, h('strong', null, t('recall.answer')),
+          question.answerCoverage === 'covered' && question.answerExcerpt
+            ? h('blockquote', null, question.answerExcerpt)
+            : h('p', { className: 'dsh-memory-muted' }, status)))
+        if (additionalHits.length) detailSections.push(h('div', { key: 'hits' },
+          h('strong', null, t('recall.hits')),
+          h('ul', null, additionalHits.map(evidence => h('li', { key: evidence.id }, evidenceNode(evidence))))))
+        if (notInjected.length) detailSections.push(h('div', { key: 'not-injected' },
+          h('strong', null, t('recall.notInjected')),
+          h('ul', null, notInjected.map(evidence => h('li', { key: evidence.id }, evidenceNode(evidence))))))
+        return h('li', { key: index }, h('details', { className: 'dsh-memory-brief-sources' },
+          h('summary', null, question.query, ' · ', status),
+          h('div', { className: 'dsh-memory-activity-details' }, detailSections)))
       })
-      const found = evidenceList(report.covered ?? [])
-      const candidates = evidenceList(report.candidates ?? [])
-      const coverage = Number.isInteger(report.total)
-        ? t('recall.coverage', { covered: String(found.length), total: String(report.total) }) : ''
-      const warning = ['failed', 'unknown', 'budget'].includes(stateKey)
-      const value = [coverage, warning || !coverage ? t('recall.' + stateKey) : ''].filter(Boolean).join(' · ')
       return h(ActivityDisclosure, { title, value, warning },
         h('p', { className: 'dsh-memory-brief-meta' },
           Number.isFinite(report.at) ? h('time', { dateTime: new Date(report.at).toISOString() }, new Date(report.at).toLocaleString(locale)) : null,
+          report.projectKey ? h('span', null, report.projectKey) : null,
           warning || !coverage ? null : h('span', null, t('recall.' + stateKey)),
           sent && report.provider?.model ? h('span', null, report.provider.model) : null,
           sent ? h('span', null, Number.isFinite(tokens) ? t('recall.usage', { tokens: String(tokens) }) : t('recall.usageUnknown')) : null),
@@ -1800,14 +1848,7 @@ window.__ModuleLoader__.load({
           tokens: report.localDeepRecall.tokens.toLocaleString(locale || undefined),
           limit: report.localDeepRecall.limit.toLocaleString(locale || undefined),
         })) : null,
-        found.length ? h('div', null, h('strong', null, t('recall.found')), h('ul', null, found)) : null,
-        candidates.length ? h('div', null, h('strong', null, t('recall.candidates')), h('ul', null, candidates)) : null,
-        (report.budgetOmitted ?? []).length ? h('div', null,
-          h('strong', null, t('recall.budgetOmitted')),
-          h('ul', null, report.budgetOmitted.map((query, index) => h('li', { key: index }, query)))) : null,
-        missing.length ? h('div', null,
-          h('strong', null, t('recall.missing')),
-          h('ul', null, missing.map((query, index) => h('li', { key: index }, query)))) : null)
+        questionRows.length ? h('ul', null, questionRows) : null)
     }
 
     function ProjectBrief({ call, projectKeys, initialProject, t, locale }) {
@@ -2705,7 +2746,7 @@ window.__ModuleLoader__.load({
       const [libraryError, setLibraryError] = React.useState('')
       const [libraryRefresh, setLibraryRefresh] = React.useState(0)
       const [data, setData] = React.useState(null)
-      const [contextUsage, setContextUsage] = React.useState(null)
+      const [sessionPanel, setSessionPanel] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [notice, setNotice] = React.useState('')
@@ -2726,6 +2767,10 @@ window.__ModuleLoader__.load({
       const [bulkTagValue, setBulkTagValue] = React.useState('')
       const [toolbarNarrow, setToolbarNarrow] = React.useState(false)
       const toolbarObserver = React.useRef(null)
+      const loadGeneration = React.useRef(0)
+      const sessionRequestGeneration = React.useRef(0)
+      const activeSessionId = React.useRef(sessionId)
+      activeSessionId.current = sessionId
       const setToolbarNode = React.useCallback((node) => {
         if (toolbarObserver.current !== null) {
           toolbarObserver.current.disconnect()
@@ -2756,13 +2801,19 @@ window.__ModuleLoader__.load({
 
       const load = React.useCallback(async () => {
         if (call === null) return
+        const request = ++loadGeneration.current
+        const requestedSessionId = activeSessionId.current
+        const isCurrent = () => request === loadGeneration.current && requestedSessionId === activeSessionId.current
         setLoading(true)
         setError('')
         try {
           const stats = await call('stats', { scope })
+          if (!isCurrent()) return
           if (stats?.health?.status === 'unavailable') { setData({ stats, list: null, activity: null, profile: null }); return }
           const activity = await call('activity', { scope, days: 371 })
+          if (!isCurrent()) return
           const profile = await call('profile', { limit: 10 })
+          if (!isCurrent()) return
           const projectKey = scope === 'project' && typeof stats?.currentProjectKey === 'string'
             ? stats.currentProjectKey
             : undefined
@@ -2776,11 +2827,11 @@ window.__ModuleLoader__.load({
             limit: pageSize,
             offset: page * pageSize,
           })
-          setData({ stats, activity, profile, list: listed })
+          if (isCurrent()) setData({ stats, activity, profile, list: listed })
         } catch (failure) {
-          setError(messageOf(failure))
+          if (isCurrent()) setError(messageOf(failure))
         } finally {
-          setLoading(false)
+          if (request === loadGeneration.current) setLoading(false)
         }
       }, [call, scope, status, kind, topic, query, page, pageSize])
 
@@ -2788,18 +2839,30 @@ window.__ModuleLoader__.load({
         void load()
       }, [load])
 
+      const refreshSessionPanel = React.useCallback(async () => {
+        if (!call) return
+        const request = ++sessionRequestGeneration.current
+        const requestedSessionId = sessionId
+        try {
+          const stats = await call('stats', { scope, sessionId: requestedSessionId })
+          if (request !== sessionRequestGeneration.current) return
+          setSessionPanel({ sessionId: requestedSessionId, usage: stats?.contextUsage,
+            report: stats?.lastRecall ?? null, injectEnabled: stats?.injectEnabled })
+        } catch (failure) {
+          if (request === sessionRequestGeneration.current) setError(messageOf(failure))
+        }
+      }, [call, scope, sessionId])
+
       React.useEffect(() => {
         if (view !== 'activity' || !call) return undefined
-        let cancelled = false
-        const refresh = () => call('stats', { scope, sessionId }).then(stats => {
-          if (cancelled) return
-          setContextUsage({ sessionId, usage: stats?.contextUsage })
-          setData(previous => previous ? { ...previous, stats } : previous)
-        }).catch(failure => { if (!cancelled) setError(messageOf(failure)) })
-        void refresh()
-        const timer = setInterval(refresh, 5000)
-        return () => { cancelled = true; clearInterval(timer) }
-      }, [view, call, scope, sessionId])
+        void refreshSessionPanel()
+        const timer = setInterval(() => { void refreshSessionPanel() }, 5000)
+        return () => { sessionRequestGeneration.current++; clearInterval(timer) }
+      }, [view, call, refreshSessionPanel])
+
+      const reloadAfterRecallChange = React.useCallback(async () => {
+        await Promise.all([load(), refreshSessionPanel()])
+      }, [load, refreshSessionPanel])
 
       React.useEffect(() => {
         if (view !== 'library' || call === null) return undefined
@@ -3005,6 +3068,7 @@ window.__ModuleLoader__.load({
       }
 
       const stats = data === null ? null : data.stats
+      const activeSessionPanel = sessionPanel?.sessionId === sessionId ? sessionPanel : null
       const listed = data === null ? null : data.list
       const items = listed === null ? [] : listed.items
       const total = listed === null ? 0 : listed.total
@@ -3056,10 +3120,12 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'dsh-memory-root dsh-memory-activity-view' }, header, viewTabs,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
           stats ? h(React.Fragment, null,
-            h(ContextUsage, { sessionId, sample: contextUsage, enabled: stats.injectEnabled, t, locale }),
+            h(ContextUsage, { sessionId,
+              sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
+              enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale }),
             h(MemoryTotals, { stats, t, locale }),
             h(ExtractionStatus, { stats, call, t, locale, onSaved: load }),
-            h(RecallReport, { report: stats.lastRecall, t, locale, call, onSaved: load }),
+            h(RecallReport, { report: activeSessionPanel?.report ?? null, t, locale, call, onSaved: reloadAfterRecallChange }),
             h(HealthStatus, { health: stats.health, capture: stats.capture, t, onRepair: repairHealth }),
             stats.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null,
             h(ActivityTrends, { stats, activity: data?.activity, t, locale })) : null)

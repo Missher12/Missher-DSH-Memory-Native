@@ -145,7 +145,11 @@ export function createPanelBackend(options) {
   backend.projectBrief = (input) => projectBrief(backend, input)
   backend.activity = (input) => computeActivity(backend, input)
   backend.profile = (input) => computeProfile(backend, input)
-  backend.update = (input) => applyUpdate(backend, input)
+  backend.update = (input) => {
+    const result = applyUpdate(backend, input)
+    options.invalidateRecall?.()
+    return result
+  }
   backend.removeMemory = (input) => {
     const result = applyRemove(backend, input)
     options.invalidateRecall?.()
@@ -156,11 +160,27 @@ export function createPanelBackend(options) {
   backend.exportData = () => exportData(backend)
   backend.importData = (input) => importData(backend, input)
   backend.backup = () => createBackup(backend)
-  backend.restoreMemory = (input) => restoreMemory(backend, input)
-  backend.purgeMemory = (input) => purgeMemory(backend, input)
+  backend.restoreMemory = (input) => {
+    const result = restoreMemory(backend, input)
+    options.invalidateRecall?.()
+    return result
+  }
+  backend.purgeMemory = (input) => {
+    const result = purgeMemory(backend, input)
+    options.invalidateRecall?.()
+    return result
+  }
   backend.history = (input) => memoryHistory(backend, input)
-  backend.bulkAction = (input) => bulkAction(backend, input)
-  backend.restoreRevision = (input) => restoreRevision(backend, input)
+  backend.bulkAction = (input) => {
+    const result = bulkAction(backend, input)
+    if (result.updatedCount > 0) options.invalidateRecall?.()
+    return result
+  }
+  backend.restoreRevision = (input) => {
+    const result = restoreRevision(backend, input)
+    options.invalidateRecall?.()
+    return result
+  }
   backend.topicSuggestions = (input) => topicSuggestions(backend, input)
   backend.mergeTopics = (input) => mergeTopics(backend, input)
   backend.obsidianExport = (input) => obsidianExport(backend, input)

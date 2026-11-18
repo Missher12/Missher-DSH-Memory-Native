@@ -306,33 +306,36 @@ export function computeStats(backend, raw) {
   const input = asObject(raw)
   const { scope, projectKey } = normalizeScope(input)
   const sessionId = optionalText(input.sessionId, 'sessionId', 180)
-  const allRecords = backend.store.listAll({ includeDeleted: true })
-  let total = 0
-  let deleted = 0
-  const counts = { active: 0, candidate: 0, archived: 0, superseded: 0 }
-  const kinds = { preference: 0, fact: 0, decision: 0, episode: 0 }
-  let confidenceSum = 0
-  let confidenceCount = 0
-  let lastCapturedAt = 0
-  for (const item of allRecords) {
-    const record = hotRecord(item)
-    if (record.status === 'deleted') { deleted += 1; continue }
-    total += 1
-    if (Object.hasOwn(counts, record.status)) counts[record.status] += 1
-    if (Object.hasOwn(kinds, record.kind) && (record.status === 'active' || record.status === 'candidate')) {
-      kinds[record.kind] += 1
-    }
-    if (record.status === 'active' || record.status === 'candidate') {
-      if (typeof record.confidence === 'number' && Number.isFinite(record.confidence)) {
-        confidenceSum += record.confidence
-        confidenceCount += 1
+  const aggregate = typeof backend.store.aggregateStats === 'function' ? backend.store.aggregateStats() : null
+  let total = aggregate?.total ?? 0
+  let deleted = aggregate?.deleted ?? 0
+  const counts = aggregate === null ? { active: 0, candidate: 0, archived: 0, superseded: 0 }
+    : Object.fromEntries(['active', 'candidate', 'archived', 'superseded'].map(status => [status, aggregate.statusCounts.get(status) ?? 0]))
+  const kinds = aggregate === null ? { preference: 0, fact: 0, decision: 0, episode: 0 }
+    : Object.fromEntries(['preference', 'fact', 'decision', 'episode'].map(kind => [kind, aggregate.kinds.get(kind) ?? 0]))
+  let confidenceSum = aggregate?.confidenceSum ?? 0
+  let confidenceCount = aggregate?.confidenceCount ?? 0
+  let lastCapturedAt = aggregate?.lastCapturedAt ?? 0
+  let projectKeys = aggregate?.projectKeys
+  if (aggregate === null) {
+    for (const item of backend.store.listAll({ includeDeleted: true })) {
+      const record = hotRecord(item)
+      if (record.status === 'deleted') { deleted += 1; continue }
+      total += 1
+      if (Object.hasOwn(counts, record.status)) counts[record.status] += 1
+      if (Object.hasOwn(kinds, record.kind) && (record.status === 'active' || record.status === 'candidate')) kinds[record.kind] += 1
+      if (record.status === 'active' || record.status === 'candidate') {
+        if (typeof record.confidence === 'number' && Number.isFinite(record.confidence)) {
+          confidenceSum += record.confidence
+          confidenceCount += 1
+        }
       }
+      const at = typeof record.updatedAt === 'number' ? record.updatedAt : record.observedAt
+      if (typeof at === 'number' && at > lastCapturedAt) lastCapturedAt = at
     }
-    const at = typeof record.updatedAt === 'number' ? record.updatedAt : record.observedAt
-    if (typeof at === 'number' && at > lastCapturedAt) lastCapturedAt = at
   }
   const current = currentProjectKey(backend.store)
-  const projectKeys = backend.store.listProjects()
+  projectKeys ??= backend.store.listProjects()
   const maintenance = backend.root ? readMaintenance(backend.root) : null
   const settingsIssue = backend.getSettingsIssue?.() ?? null
   const captureState = backend.getCaptureStatus?.()
@@ -358,7 +361,7 @@ export function computeStats(backend, raw) {
     lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
     contextUsage: sessionId === undefined ? null : (backend.getContextUsage?.(sessionId) ?? null),
     lastExtraction: typeof backend.getLastExtraction === 'function' ? backend.getLastExtraction() : null,
-    lastRecall: typeof backend.getLastRecall === 'function' ? backend.getLastRecall() : null,
+    lastRecall: typeof backend.getLastRecall === 'function' ? backend.getLastRecall(sessionId) : null,
     semantic: backend.getSemanticStatus?.() ?? null,
     usage: computeUsageSummary(backend.root),
     capture: captureState?.counts ?? null,
@@ -411,16 +414,25 @@ export function computeActivity(backend, raw) {
   const start = today.getTime() - (days - 1) * DAY_MS
   const buckets = new Map()
   let total = 0
-  for (const record of backend.store.list(scope, resolvedProjectKey)) {
-    if (record.status === 'deleted') continue
-    const at = typeof record.updatedAt === 'number' ? record.updatedAt : record.observedAt
-    if (typeof at !== 'number' || at < start) continue
-    const key = localDayKey(at)
-    const bucket = buckets.get(key) ?? { date: key, count: 0, preference: 0, fact: 0, decision: 0, episode: 0 }
-    bucket.count += 1
-    if (Object.hasOwn(bucket, record.kind)) bucket[record.kind] += 1
-    buckets.set(key, bucket)
-    total += 1
+  if (typeof backend.store.activitySummary === 'function') {
+    const firstDay = localDayKey(start)
+    for (const summary of backend.store.activitySummary(scope, resolvedProjectKey)) {
+      if (summary.date < firstDay) continue
+      buckets.set(summary.date, summary)
+      total += summary.count
+    }
+  } else {
+    for (const record of backend.store.list(scope, resolvedProjectKey)) {
+      if (record.status === 'deleted') continue
+      const at = typeof record.updatedAt === 'number' ? record.updatedAt : record.observedAt
+      if (typeof at !== 'number' || at < start) continue
+      const key = localDayKey(at)
+      const bucket = buckets.get(key) ?? { date: key, count: 0, preference: 0, fact: 0, decision: 0, episode: 0 }
+      bucket.count += 1
+      if (Object.hasOwn(bucket, record.kind)) bucket[record.kind] += 1
+      buckets.set(key, bucket)
+      total += 1
+    }
   }
   const list = [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date))
   return { scope, projectKey: resolvedProjectKey, days: list, total, activeDays: list.length }
