@@ -206,6 +206,7 @@ export class MemoryStore {
   #meta
   #beforeWrite = null
   #onChange = null
+  #onRecallRevoke = null
   #changeListeners = new Set()
   #backupInFlight = null
   #purgedIds = new Set()
@@ -227,9 +228,10 @@ export class MemoryStore {
     return this.#root
   }
 
-  setLifecycle({ beforeWrite = null, onChange = null } = {}) {
+  setLifecycle({ beforeWrite = null, onChange = null, onRecallRevoke = null } = {}) {
     this.#beforeWrite = beforeWrite
     this.#onChange = onChange
+    this.#onRecallRevoke = onRecallRevoke
   }
 
   addChangeListener(listener) {
@@ -379,8 +381,16 @@ export class MemoryStore {
         }
       }
       mkdirSync(state.dir, { recursive: true, mode: 0o700 })
-      if (current && (current.content !== next.content || (current.status === 'active' && next.status !== 'active'))) blockSourceRecall(this.#root, current)
-      if (next.status === 'deleted') blockSourceRecall(this.#root, next)
+      const revokesCurrent = current && (current.content !== next.content || (current.status === 'active' && next.status !== 'active') || next.status === 'deleted')
+      const revokesNext = next.status === 'deleted'
+      if (revokesCurrent || revokesNext) {
+        const revoked = [revokesCurrent ? current : null, revokesNext ? next : null].filter(Boolean)
+        this.#onRecallRevoke?.({ recordRevisions: revokesCurrent ? [{ id: current.id, revision: current.revision }] : [], sourceIds: [...new Set(revoked.flatMap(record =>
+          (record.sourceRefs ?? []).map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '')))],
+          ...(next.status === 'deleted' ? { reason: 'delete' } : {}) })
+      }
+      if (revokesCurrent) blockSourceRecall(this.#root, current)
+      if (revokesNext) blockSourceRecall(this.#root, next)
       const line = `${JSON.stringify(next)}\n`
       const fd = openSync(state.file, 'a+', 0o600)
       const originalSize = fstatSync(fd).size
@@ -453,6 +463,8 @@ export class MemoryStore {
         throw new Error('replacement target is no longer active in this scope')
       }
       if (state.records.has(replacement.id)) throw new Error('replacement id already exists')
+      this.#onRecallRevoke?.({ recordRevisions: [{ id: old.id, revision: old.revision }], sourceIds: (old.sourceRefs ?? [])
+        .map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '') })
       blockSourceRecall(this.#root, old)
       const previous = nextRevision(old, { status: 'superseded', validTo: this.#clock() }, this.#clock())
       const record = { ...replacement, supersedesId: oldId }
@@ -577,6 +589,8 @@ export class MemoryStore {
         this.#refreshState(state)
         if (!state.records.has(id)) return false
         previous = state.records.get(id)
+        this.#onRecallRevoke?.({ recordIds: [id], recordRevisions: [{ id, revision: previous.revision }],
+          sourceIds: (previous.sourceRefs ?? []).map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '') })
         const purgedIds = new Set(this.#currentPurgedIds())
         purgedIds.add(id)
         atomicWritePrivate(join(this.#root, PURGED_IDS_FILE), `${JSON.stringify([...purgedIds].sort())}\n`)

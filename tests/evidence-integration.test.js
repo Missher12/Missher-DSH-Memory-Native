@@ -23,7 +23,7 @@ async function waitForStart(started, label, timeoutMs = 5000) {
 async function setup(t, records = [], llm, testOptions) {
   const root = mkdtempSync(join(tmpdir(), 'memory-evidence-integration-'))
   const dataDir = join(root, 'data'), cwd = join(root, 'project'), key = projectIdentity(cwd).key
-  const store = new MemoryStore({ root: dataDir }).open(), handlers = {}, effects = [], warnings = []
+  const store = new MemoryStore({ root: dataDir }).open(), handlers = {}, effects = [], warnings = [], liveSessions = new Map()
   for (const row of records) {
     assert.ok(store.write({ kind: 'fact', scope: 'project', projectKey: key, confidence: .95, ...row }).ok)
     if (row.status === 'superseded') store.update(row.id, { status: row.status }, [{ scope: 'project', projectKey: key }])
@@ -31,7 +31,8 @@ async function setup(t, records = [], llm, testOptions) {
   let onRoute
   const routeReady = new Promise(resolve => { onRoute = resolve })
   const webServer = { register(route) { onRoute(route); return () => {} } }
-  apply({ get: name => name === 'webServer' ? webServer : name === 'llm' ? llm : testOptions?.host?.[name],
+  apply({ sessions: { get: id => liveSessions.get(id) },
+    get: name => name === 'webServer' ? webServer : name === 'llm' ? llm : testOptions?.host?.[name],
     on: (name, fn) => { handlers[name] = fn; return () => {} },
     effect: factory => { effects.push(factory); return () => {} }, logger: { warn(...args) { warnings.push(args.join(' ')) }, info() {} },
   }, { dataDir, capture: { enabled: false }, maintenance: { enabled: false }, obsidian: { autoSync: false } }, testOptions)
@@ -47,11 +48,13 @@ async function setup(t, records = [], llm, testOptions) {
   let turn = 0
   const prepare = async (content, sessionId = 'session-integration', sessionState = {}) => {
     const messages = [{ id: `query-${++turn}`, role: 'user', source: { kind: 'user' }, content }]
+    const session = { id: sessionId, header: { cwd }, ...sessionState }
+    liveSessions.set(sessionId, session)
     const result = await handlers['agent/pre-step']({
-      agent: { session: { id: sessionId, header: { cwd }, ...sessionState } }, messages,
+      agent: { session }, messages,
       modelSelection: { provider: 'host-provider', model: 'host-model' },
     }, async () => ({ kind: 'enter', messages }))
-    return { result, messages, session: { id: sessionId, header: { cwd }, ...sessionState },
+    return { result, messages, session,
       block: result.messages.filter(m => m.source?.kind === 'memory').flatMap(m => m.content.map(b => b.text)).join('\n') }
   }
   const ask = async (...args) => (await prepare(...args)).block
@@ -323,6 +326,26 @@ test('unextracted original evidence remains usable without another paid call, bu
   assert.doesNotMatch(await ask('碧潮交接的备用联络代号是什么？'),/雨燕七号/u)
 })
 
+test('forgetting an original source removes every current recall report that cites its evidence', async t => {
+  const { dataDir, key, cwd, panel, ask, handlers } = await setup(t)
+  const saved = saveSource(dataDir, { sessionId: 'source-session', messageId: 'source-forget', projectKey: key,
+    role: 'user', sourceKind: 'user', text: '碧潮交接的备用联络代号是雨燕七号。' })
+  const source = readSource(dataDir, saved.id)
+  assert.ok(grantSourceRecall(dataDir, source, key))
+
+  const answer = await ask('碧潮交接的备用联络代号是什么？')
+  assert.match(answer, /雨燕七号/u)
+  const session = { id: 'session-integration', header: { cwd } }
+  completeAnswer(handlers, session, '碧潮交接的备用联络代号是雨燕七号。')
+  const report = (await panel('stats', { sessionId: session.id, projectKey: key })).lastRecall
+  const evidence = report.questions.flatMap(question => [...question.hits, ...question.injected, ...question.notInjected])
+    .find(item => item.kind === 'source' && item.sourceRefs.some(ref => ref.sourceId === saved.id))
+  assert.ok(evidence)
+
+  await panel('removeMemory', { id: evidence.id, scope: 'project', projectKey: key })
+  assert.equal((await panel('stats', { sessionId: session.id, projectKey: key })).lastRecall, null)
+})
+
 test('a high vector score cannot inject unrelated global memories for a physical-location question',async t=>{
   // Adversarial similarity exercises the policy boundary, not embedding quality.
   const engine={state:'ready',async embed(texts){return texts.map(()=>[1,...Array(383).fill(0)])},dispose(){}}
@@ -419,6 +442,33 @@ test('apply rechecks memory authority after passage embedding before persisting 
   assert.equal(existsSync(join(dataDir,'.cache','semantic','multilingual-e5-small-761b726-v1',key+'.jsonl')),false)
 })
 
+test('editing an unrelated record does not cancel another session recall already in flight', async t => {
+  let begin, release
+  const started = new Promise(resolve => { begin = resolve })
+  const waiting = new Promise(resolve => { release = resolve })
+  const engine = { state: 'ready', async embed(texts, mode) {
+    if (mode === 'query') { begin(); await waiting }
+    return texts.map(() => [1, ...Array(383).fill(0)])
+  }, dispose() {} }
+  const { key, panel, prepare, handlers } = await setup(t, [
+    { id: 'mem_edit_during_recall', content: '无关记录的机房提示音是青鸟三声。' },
+    { id: 'mem_recall_other_session', content: '青岚构建工具使用 Vite 8.4.2。' },
+  ], undefined, { semantic: { enabled: true, engine } })
+
+  const pending = prepare('青岚构建工具是什么版本？苍穹遥测服务的地区配置是什么？', 'session-other')
+  try { await waitForStart(started, 'unrelated session query embedding') }
+  catch (error) { release(); await pending; throw error }
+  await panel('update', { id: 'mem_edit_during_recall', scope: 'project', projectKey: key,
+    patch: { content: '无关记录的机房提示音现在是白鹭两声。' } })
+  release()
+  const prepared = await pending
+  assert.match(prepared.block, /Vite 8\.4\.2/u)
+  completeAnswer(handlers, prepared.session, '青岚构建工具使用 Vite 8.4.2。')
+  const report = (await panel('stats', { scope: 'project', projectKey: key, sessionId: 'session-other' })).lastRecall
+  assert.equal(report.outcome, 'completed')
+  assert.match(report.questions[0].injected[0].text, /Vite 8\.4\.2/u)
+})
+
 test('apply rechecks source grants after passage embedding before persisting a vector', async t => {
   let begin, release
   const started = new Promise(resolve => { begin=resolve })
@@ -467,7 +517,7 @@ test('one product version cannot mark a different product slot covered; verified
     const text = typeof content === 'string' ? content : content.map(p => p.text ?? '').join('')
     return stream({ ...request, messages: [{ content: text.slice(text.indexOf('{"query"')) }] })
   }
-  const { panel, ask } = await setup(t, [
+  const { key, panel, ask } = await setup(t, [
     { id: 'mem_relation', content: '青岩项目的关系型数据库采用 MariaDB 11.4.7。' },
     { id: 'mem_unrelated', content: '青岩快照每天 06:12 生成，保留 41 天。' },
   ], llm)
@@ -475,7 +525,7 @@ test('one product version cannot mark a different product slot covered; verified
   assert.match(result, /MariaDB 11\.4\.7/u)
   assert.doesNotMatch(result, /06:12|41 天/u)
   assert.equal(calls, 1)
-  const report = (await panel('stats', { scope: 'project', projectKey: 'unused', sessionId: 'session-integration' })).lastRecall
+  const report = (await panel('stats', { scope: 'project', projectKey: key, sessionId: 'session-integration' })).lastRecall
   assert.equal(report.missing.length, 2)
   assert.ok(report.missing.every(query => /构建/u.test(query)))
   assert.ok(report.covered.every(item => !item.query.includes('构建')))

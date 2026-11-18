@@ -1,6 +1,6 @@
 /**
- * Compare the legacy full scans with the incremental panel summaries.
- * Run with the bundled Node: <node> scripts/bench-activity.mjs
+ * Compare legacy full scans with incremental summaries and a warm per-session report refresh.
+ * Run: node scripts/bench-activity.mjs
  * Optional: BENCH_RECORDS=50000 BENCH_ROUNDS=35
  */
 
@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { buildRecord } from '../host/records.js'
 import { computeActivity, computeStats } from '../host/remote-contract.js'
 import { projectIdentity } from '../host/paths.js'
+import { createRecallReportStore } from '../host/recall-reports.js'
 import { MemoryStore } from '../host/store.js'
 
 const RECORD_COUNT = Number(process.env.BENCH_RECORDS) > 0 ? Number(process.env.BENCH_RECORDS) : 50_000
@@ -54,7 +55,16 @@ try {
   writeFileSync(projectPath, `${lines.join('\n')}\n`, { mode: 0o600 })
 
   const store = new MemoryStore({ root }).open()
-  const backend = { root, store, index: { upsert() {}, remove() {} }, config: {} }
+  const reportStore = createRecallReportStore(root, 'f'.repeat(64))
+  const reportSession = 'benchmark-session'
+  const seededReport = { at: now, projectKey, turnKey: 'id:benchmark', outcome: 'completed', total: 1,
+    questions: [{ query: 'benchmark query', hits: [], injected: [], notInjected: [], answerCoverage: 'unverified', answerExcerpt: null }],
+    localDeepRecall: null }
+  reportStore.write(reportSession, projectKey, seededReport)
+  assert.deepEqual(reportStore.get(reportSession, projectKey), seededReport, 'seed one warm current-session report')
+  const backend = { root, store, index: { upsert() {}, remove() {} }, config: {},
+    getLastRecall: (sessionId, requestedProject) => sessionId === reportSession && requestedProject === projectKey
+      ? reportStore.get(sessionId, projectKey) : null }
   const legacyStore = new Proxy(store, {
     get(target, key) {
       if (key === 'aggregateStats' || key === 'activitySummary') return undefined
@@ -63,7 +73,7 @@ try {
     },
   })
   const legacyBackend = { ...backend, store: legacyStore }
-  const statsInput = { scope: 'project', projectKey }
+  const statsInput = { scope: 'project', projectKey, sessionId: reportSession }
   const activityInput = { ...statsInput, days: 371 }
   const equalSummaries = label => {
     const currentStats = computeStats(backend, statsInput)
@@ -72,6 +82,7 @@ try {
       assert.equal(currentStats[field], scannedStats[field], `${label}: stats.${field}`)
     }
     assert.deepEqual(currentStats.kinds, scannedStats.kinds, `${label}: stats.kinds`)
+    assert.deepEqual(currentStats.lastRecall, scannedStats.lastRecall, `${label}: stats.lastRecall`)
     const currentActivity = computeActivity(backend, activityInput)
     const scannedActivity = computeActivity(legacyBackend, activityInput)
     assert.deepEqual(currentActivity, scannedActivity, `${label}: activity`)
@@ -82,6 +93,7 @@ try {
   const timingsResult = {
     records: RECORD_COUNT,
     rounds: ROUNDS,
+    lastRecall: { warmSessionRead: timings(() => reportStore.get(reportSession, projectKey)) },
     stats: { legacyFullScan: timings(() => computeStats(legacyBackend, statsInput)),
       incremental: timings(() => computeStats(backend, statsInput)) },
     activity: { legacyFullScan: timings(() => computeActivity(legacyBackend, activityInput)),

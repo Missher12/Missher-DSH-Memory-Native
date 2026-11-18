@@ -127,6 +127,8 @@ export function createPanelBackend(options) {
     getContextUsage: options.getContextUsage,
     getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
     getLastRecall: typeof options.getLastRecall === 'function' ? options.getLastRecall : null,
+    getLastRecallAsync: typeof options.getLastRecallAsync === 'function' ? options.getLastRecallAsync : null,
+    invalidateRecallReferences: typeof options.invalidateRecallReferences === 'function' ? options.invalidateRecallReferences : null,
     getSemanticStatus: typeof options.getSemanticStatus === 'function' ? options.getSemanticStatus : null,
     prepareSemantic: typeof options.prepareSemantic === 'function' ? options.prepareSemantic : null,
     getSettingsIssue: typeof options.getSettingsIssue === 'function' ? options.getSettingsIssue : null,
@@ -141,7 +143,11 @@ export function createPanelBackend(options) {
     applySettings: typeof options.applySettings === 'function' ? options.applySettings : null,
   }
   backend.list = (input) => listMemories(backend, input)
-  backend.stats = (input) => computeStats(backend, input)
+  backend.stats = (input) => {
+    const stats = computeStats(backend, input)
+    if (!backend.getLastRecallAsync) return stats
+    return Promise.resolve(backend.getLastRecallAsync(input)).then(lastRecall => ({ ...stats, lastRecall: lastRecall ?? null }))
+  }
   backend.projectBrief = (input) => projectBrief(backend, input)
   backend.activity = (input) => computeActivity(backend, input)
   backend.profile = (input) => computeProfile(backend, input)

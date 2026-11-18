@@ -23,6 +23,7 @@ import { resolveConfig } from './host/config.js'
 import { memoryBudgetFor } from './host/context-budget.js'
 import { projectIdentity } from './host/paths.js'
 import { prepareStorage } from './host/storage-boundary.js'
+import { createRecallReportStore, recallReportReferences, recallReportSessionKey } from './host/recall-reports.js'
 import { memoryHealth, probeStorage, storageIssue } from './host/health.js'
 import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, conflictsRecallProject, formatMemoryLine, hasContentMatch, isEffectiveAt, isFollowUpQuery, isHistoricalQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallNamedProjectTerms, recallSubjectTerms, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from './host/recall.js'
 import { analyzeUserMessageControls, isBareRemember } from './host/user-controls.js'
@@ -93,10 +94,34 @@ function sessionOf(ctx, agent) {
   if (agent === null || typeof agent !== 'object') return undefined
   if (agent.session !== undefined) return agent.session
   try {
-    return ctx.get('sessions')?.get?.(agent.id)
+    return ctx.sessions?.get?.(agent.id) ?? ctx.get('sessions')?.get?.(agent.id)
   } catch {
     return undefined
   }
+}
+
+function sessionProjectKey(session, expectedId) {
+  if (session === null || typeof session !== 'object') return null
+  const header = session.header
+  const sessionId = session.id ?? header?.id ?? header?.sessionId
+  if (typeof sessionId === 'string' && sessionId !== expectedId) return null
+  const cwd = typeof header?.cwd === 'string' ? header.cwd : typeof session.cwd === 'string' ? session.cwd : null
+  return cwd ? projectIdentity(cwd).key : null
+}
+
+async function hostSessionProjectKey(ctx, sessionId) {
+  try {
+    const loadedSession = ctx.sessions?.get?.(sessionId) ?? ctx.get('sessions')?.get?.(sessionId)
+    const loaded = sessionProjectKey(loadedSession, sessionId)
+    if (loaded !== null) return loaded
+  } catch {}
+  let persistence
+  try { persistence = ctx.get('sessionPersistence') } catch {}
+  if (typeof persistence?.stat !== 'function') return null
+  try {
+    const metadata = await persistence.stat(sessionId)
+    return metadata === undefined || metadata === null ? null : sessionProjectKey(metadata, sessionId)
+  } catch { return null }
 }
 
 /** Test-only observer; normal Host activation never resolves a diagnostic service. */
@@ -258,6 +283,29 @@ function setRecallReport(reports, sessionId, report) {
   while (reports.size > RECALL_REPORT_SESSION_LIMIT) reports.delete(reports.keys().next().value)
 }
 
+function beginRecallTurn(reports, turns, generations, sessionId, { turnKey, projectKey, query, startSeq, turnId }) {
+  if (typeof sessionId !== 'string' || sessionId === '') return null
+  const current = turns.get(sessionId)
+  const sameTurn = current?.projectKey === projectKey && (current.turnKey === turnKey ||
+    current.query === query && Number.isSafeInteger(startSeq) && current.startSeq === startSeq)
+  if (sameTurn) {
+    current.turnKey = turnKey
+    current.query = query
+    if (Number.isSafeInteger(startSeq) && (!Number.isSafeInteger(current.startSeq) || startSeq < current.startSeq)) current.startSeq = startSeq
+    current.turnId ??= turnId
+    return current
+  }
+  const generation = (generations.get(sessionId) ?? 0) + 1
+  generations.delete(sessionId)
+  generations.set(sessionId, generation)
+  while (generations.size > RECALL_REPORT_SESSION_LIMIT) generations.delete(generations.keys().next().value)
+  const next = { generation, turnKey, projectKey, query, assistantText: null,
+    ...(Number.isSafeInteger(startSeq) ? { startSeq } : {}), ...(turnId === undefined ? {} : { turnId }) }
+  turns.set(sessionId, next)
+  setRecallReport(reports, sessionId, null)
+  return next
+}
+
 function visibleAssistantText(event) {
   if (event?.type !== 'assistant/message') return null
   const message = event.data?.message
@@ -269,7 +317,7 @@ function visibleAssistantText(event) {
   return text === '' ? null : text.slice(0, 16_000)
 }
 
-function completeRecallTurn(reports, turns, session, event) {
+function completeRecallTurn(reports, turns, generations, session, event, persistReport, logger) {
   const sessionId = typeof session?.id === 'string' ? session.id : undefined
   if (sessionId === undefined) return
   const turn = turns.get(sessionId)
@@ -281,34 +329,47 @@ function completeRecallTurn(reports, turns, session, event) {
       const key = turnKeyOf(latest, messages, text, undefined)
       const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
       const projectKey = cwd ? projectIdentity(cwd).key : null
-      const report = reports.get(sessionId)
-      // DSH can surface one prompt as both inbox-spliced and user-message after pre-step.
-      if ((turn?.turnKey === key && turn.projectKey === projectKey) ||
-          (report?.turnKey === key && report.projectKey === projectKey)) return
-      turns.set(sessionId, { turnKey: key, projectKey, query: text, assistantText: null })
-      reports.delete(sessionId)
+      beginRecallTurn(reports, turns, generations, sessionId, {
+        turnKey: key, projectKey, query: text,
+        startSeq: Number.isSafeInteger(event.seq) ? event.seq : latest.seq,
+        turnId: event.data?.turnId ?? event.turnId,
+      })
     }
     return
   }
   if (event?.type === 'assistant/message') {
     const text = visibleAssistantText(event)
-    if (turn && text !== null) turn.assistantText = text
+    if (turn && text !== null && generations.get(sessionId) === turn.generation &&
+        (!Number.isSafeInteger(turn.startSeq) || !Number.isSafeInteger(event.seq) || event.seq >= turn.startSeq)) {
+      turn.assistantText = text
+      turn.turnId ??= event.data?.turnId ?? event.turnId
+    }
     return
   }
   if (event?.type !== 'turn/end') return
-  if (turn !== undefined) {
+  if (turn !== undefined && generations.get(sessionId) === turn.generation) {
+    const eventSeq = Number.isSafeInteger(event.seq) ? event.seq : undefined
+    const eventTurnId = event.data?.turnId ?? event.turnId
+    if ((Number.isSafeInteger(turn.startSeq) && Number.isSafeInteger(eventSeq) && eventSeq < turn.startSeq) ||
+        (turn.turnId !== undefined && eventTurnId !== undefined && turn.turnId !== eventTurnId)) return
     const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
     const projectKey = cwd ? projectIdentity(cwd).key : null
     const report = reports.get(sessionId)
-    if (report && report.turnKey === turn.turnKey && report.projectKey === turn.projectKey && report.projectKey === projectKey) {
+    if (report && report.outcome === 'pending' && report.turnKey === turn.turnKey &&
+        report.projectKey === turn.projectKey && report.projectKey === projectKey) {
       const completed = event.data?.reason?.kind === 'completed'
       const questions = report.questions.map(question => completed
         ? { ...question, ...assessAnswerCoverage(question, turn.assistantText) }
         : { ...question, answerCoverage: 'aborted', answerExcerpt: null })
-      setRecallReport(reports, sessionId, { ...report, outcome: completed ? 'completed' : 'aborted', questions })
+      const finalized = { ...report, outcome: completed ? 'completed' : 'aborted', questions }
+      let persisted
+      try { persisted = persistReport?.(sessionId, finalized) }
+      catch (error) { logger?.warn?.(`[dsh-memory] recall report save failed: ${error instanceof Error ? error.message : String(error)}`) }
+      if (persisted === false) reports.delete(sessionId)
+      else setRecallReport(reports, sessionId, finalized)
     }
   }
-  turns.delete(sessionId)
+  if (turns.get(sessionId) === turn) turns.delete(sessionId)
 }
 
 function isRecallQuestion(query) {
@@ -465,7 +526,7 @@ function appendPassageEvidence(hitsById, hit, plan) {
   return saved
 }
 
-function recallEvidenceReport(hit) {
+function recallEvidenceReport(hit, filterSourceRefs = sourceRefs => sourceRefs) {
   const record = hit.record
   return {
     id: record.id,
@@ -476,7 +537,7 @@ function recallEvidenceReport(hit) {
     observedAt: record.observedAt ?? null,
     validFrom: record.validFrom ?? null,
     validTo: record.validTo ?? null,
-    sourceRefs: (record.sourceRefs ?? []).slice(0, 3).map(ref => ({
+    sourceRefs: filterSourceRefs(record.sourceRefs ?? []).slice(0, 3).map(ref => ({
       sourceId: ref.sourceId, sessionId: ref.sessionId ?? null, messageId: ref.messageId ?? null,
       role: ref.role ?? null, sourceKind: ref.sourceKind ?? null, from: ref.from ?? null,
       to: ref.to ?? null, at: ref.at ?? null, excerpt: ref.excerpt ?? null,
@@ -498,12 +559,29 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   let config
   let runtime
   let storage
+  let passageIndex = null
+  let recallReportStore
   let settingsIssue = null
   let lastInjection = null
   let lastExtraction = null
   const lastRecallBySession = new Map()
   const recallTurnBySession = new Map()
-  let recallInvalidationEpoch = 0
+  const recallGenerationBySession = new Map()
+  const invalidateRecallReferences = targets => {
+    const affected = recallReportStore?.invalidateReferences(targets) ?? new Set()
+    for (const [sessionId, report] of lastRecallBySession) {
+      if (affected.has(recallReportSessionKey(sessionId)) || recallReportReferences(report, targets)) lastRecallBySession.delete(sessionId)
+    }
+    for (const [sessionId, turn] of recallTurnBySession) {
+      const references = turn.evidenceRefs ?? []
+      if (recallReportReferences(references, targets) || turn.recallInProgress && references.length === 0 && targets.reason === 'delete') {
+        turn.invalidated = true
+        lastRecallBySession.delete(sessionId)
+      }
+    }
+    passageIndex?.clear()
+    return affected
+  }
   const contextUsageBySession = new Map()
   const panelHealth = { transport: 'pending', selfTest: 'pending' }
   const storageHealth = { state: 'pending' }
@@ -516,6 +594,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   try {
     storage = prepareStorage(ctx, baseConfig)
     root = storage.root
+    recallReportStore = createRecallReportStore(root, storage.identity)
     let storedSettings
     try { storedSettings = readSettings(root) }
     catch (error) {
@@ -525,7 +604,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       ctx.logger?.warn?.(`[dsh-memory] ${error.message}`)
     }
     config = resolveConfig(mergeConfigObjects(rawConfig, settingsToConfig(storedSettings)))
-    runtime = openMemoryRuntime({ root })
+    runtime = openMemoryRuntime({ root, onRecallRevoke: invalidateRecallReferences })
     store = runtime.store
     index = runtime.index
     ctx.logger?.debug?.(`[dsh-memory] startup metrics ${JSON.stringify(runtime.metrics)}`)
@@ -541,7 +620,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
 
   const knowledgeIndex = new KnowledgeRecallIndex(root, store)
   const sourceIndex = new SourceCandidateIndex(store)
-  const passageIndex = new SourcePassageIndex(root)
+  passageIndex = new SourcePassageIndex(root)
   const semanticOptions = testOptions?.semantic ?? {}
   const customSemanticLive = semanticOptions.isLive
   const semanticLive = customSemanticLive ?? ((record, projectKey) => {
@@ -630,7 +709,12 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   try {
     ctx.on('session/event', (session, event) => {
       hookHealth.events++
-      try { completeRecallTurn(lastRecallBySession, recallTurnBySession, session, event) } catch { /* A report must never affect a host turn. */ }
+      try {
+        completeRecallTurn(lastRecallBySession, recallTurnBySession, recallGenerationBySession, session, event,
+          (sessionId, report) => recallReportStore.write(sessionId, report.projectKey, report), ctx.logger)
+      } catch (error) {
+        ctx.logger?.warn?.(`[dsh-memory] recall report update failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
       const source = event?.data?.source ?? event?.data?.message?.source
       if (event?.type === 'user/message' && (source === undefined || source === null || source.kind === 'user')) hookHealth.userMessages++
       try {
@@ -644,13 +728,38 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
 
   try {
     ctx.on('agent/pre-step', async (payload, next) => {
-    const reportEpoch = recallInvalidationEpoch
+    const payloadMessages = Array.isArray(payload?.messages) ? payload.messages : []
+    const preStepSession = sessionOf(ctx, payload?.agent)
+    const preStepSessionId = typeof preStepSession?.id === 'string' ? preStepSession.id : undefined
+    const preStepUser = [...payloadMessages].reverse().find(isUserQuestionMessage)
+    const preStepQuery = textOf(preStepUser).trim()
+    const preStepPreviousUser = payloadMessages.slice(0, Math.max(0, payloadMessages.lastIndexOf(preStepUser)))
+      .findLast(message => isUserQuestionMessage(message) && !isMemoryMessage(message) && textOf(message).trim() !== '')
+    const preStepPreviousQuery = preStepPreviousUser ? textOf(preStepPreviousUser).trim() : undefined
+    const preStepCwd = typeof preStepSession?.header?.cwd === 'string' ? preStepSession.header.cwd : undefined
+    const preStepTurn = preStepSessionId !== undefined && preStepCwd !== undefined && preStepQuery !== ''
+      ? beginRecallTurn(lastRecallBySession, recallTurnBySession, recallGenerationBySession, preStepSessionId, {
+        turnKey: turnKeyOf(preStepUser, payloadMessages, preStepQuery, preStepPreviousQuery),
+        projectKey: projectIdentity(preStepCwd).key,
+        query: preStepQuery,
+        startSeq: preStepUser?.seq,
+        turnId: payload?.turnId,
+      }) : null
+    const preStepGeneration = preStepTurn?.generation
+    if (preStepTurn !== null) preStepTurn.recallInProgress = true
     hookHealth.preSteps++
     let decision
-    try { decision = await next() } catch (error) { recallFailures++; throw error }
-    if (decision === null || typeof decision !== 'object' || decision.kind !== 'enter') return decision
+    let activeRecallGeneration = preStepGeneration
+    try { decision = await next() } catch (error) {
+      if (preStepTurn !== null) preStepTurn.recallInProgress = false
+      recallFailures++
+      throw error
+    }
+    if (decision === null || typeof decision !== 'object' || decision.kind !== 'enter') {
+      if (preStepTurn !== null) preStepTurn.recallInProgress = false
+      return decision
+    }
 
-    const payloadMessages = Array.isArray(payload?.messages) ? payload.messages : []
     const decidedMessages = Array.isArray(decision.messages) ? decision.messages : payloadMessages
     const previous = decidedMessages.filter(isMemoryMessage)
     const retained = decidedMessages.filter((message) => !isMemoryMessage(message))
@@ -663,7 +772,6 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       if (payload?.signal?.aborted === true) return withoutPrevious
       const session = sessionOf(ctx, payload?.agent)
       sessionId = typeof session?.id === 'string' ? session.id : undefined
-      if (sessionId !== undefined) lastRecallBySession.delete(sessionId)
       const remembering = capture.waitForRemembering(session, payloadMessages)
       if (remembering) await remembering
       if (!config.inject.enabled) return withoutPrevious
@@ -695,13 +803,13 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     if (availableMemoryTokens === 0 || payload.signal?.aborted) return withoutPrevious
     const previousQuery = userTexts[1]
     const turnKey = turnKeyOf(latestUserMessage, payloadMessages, query, previousQuery)
-    if (sessionId !== undefined) {
-      const priorTurn = recallTurnBySession.get(sessionId)
-      const activeTurn = priorTurn?.projectKey === identity.key && (priorTurn.turnKey === turnKey || priorTurn.query === query)
-        ? { ...priorTurn, turnKey, query }
-        : { turnKey, projectKey: identity.key, query, assistantText: null }
-      recallTurnBySession.set(sessionId, activeTurn)
-    }
+    const activeTurn = sessionId === undefined ? null : beginRecallTurn(lastRecallBySession, recallTurnBySession, recallGenerationBySession, sessionId, {
+      turnKey, projectKey: identity.key, query, startSeq: latestUserMessage?.seq, turnId: payload?.turnId,
+    })
+    if (preStepGeneration !== undefined && activeTurn?.generation !== preStepGeneration) return withoutPrevious
+    const turnGeneration = activeTurn?.generation
+    if (activeTurn !== null) activeTurn.recallInProgress = true
+    activeRecallGeneration = turnGeneration
     const followUp = previousQuery !== undefined && isFollowUpQuery(analyzeUserMessageControls(query).retrievalQuery)
 
     const now = Date.now()
@@ -995,6 +1103,13 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     let candidatePool = []
     const localPassages = new Map()
     let localDeepRecall = null
+    const noteInFlightEvidence = () => {
+      if (activeTurn === null) return
+      const records = [...hitsById.values(), ...candidatePool].map(hit => hit.record)
+      activeTurn.evidenceRefs = [...new Map(records.map(record => [`${record.id}\0${record.revision}`, {
+        id: record.id, revision: record.revision,
+      }])).values()]
+    }
     if (missingSlots.length > 0 && isRecallQuestion(query)) {
       const plans = new Map(missingSlots.slice(0, MAX_RECALL_LOOKUPS)
         .filter(({ plan }) => plan.timeIntent.kind === 'current' && !plan.requiresRelationTrace)
@@ -1020,6 +1135,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         ...passageIndex.candidates(identity.key).map(hit => hit.record)]
         .filter(record => !record.quoted && !looksSensitive(record.content))
       let semanticLists = []
+      noteInFlightEvidence()
       try {
         semanticLists = await semanticIndex.search(missingSlots.slice(0, MAX_RECALL_LOOKUPS).map(entry => entry.plan.searchQuery ?? entry.plan.query),
           semanticCorpus, { projectKey: identity.key, signal: payload?.signal })
@@ -1030,6 +1146,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         index, knowledgeIndex, passageIndex, semanticLists, store, projectKey: identity.key,
         timeIntents: missingSlots.map(entry => entry.plan.timeIntent), now,
       })
+      noteInFlightEvidence()
       // Search original user passages only through current active memory source grants.
       // The source resolver checks task completion, scope, exact byte ranges, deletion,
       // opt-out, quotation and sensitive-content guards before it returns a quote.
@@ -1197,6 +1314,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       }
     }
     const updateLastRecall = (injectedIds = []) => {
+      const reportEvidence = hit => recallEvidenceReport(hit, sourceRefs => recallReportStore.filterSourceRefs(sourceRefs))
       coverage = slotPlans.map(plan => slotEvidence(plan, [...hitsById.values()], hasSubquestions))
       missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
       if (!isRecallQuestion(query) && hitsById.size === 0) return
@@ -1204,14 +1322,14 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       const injectedCoverage = coverage.map(hits => hits.filter(hit => delivered.has(hit.record.id)))
       const reportItems = covered => slotPlans.map((plan, index) => ({
         query: plan.query,
-        evidence: [...new Map(covered[index].map(hit => [hit.record.id, hit])).values()].map(recallEvidenceReport),
+        evidence: [...new Map(covered[index].map(hit => [hit.record.id, hit])).values()].map(reportEvidence),
       })).filter(item => item.evidence.length > 0)
       const questions = slotPlans.map((plan, index) => {
         const candidateHits = [...hitsById.values()].filter(hit => hit.candidateSlots?.includes(plan.query))
         const related = [...new Map([...coverage[index], ...candidateHits].map(hit => [hit.record.id, hit])).values()]
         const deliveredHits = related.filter(hit => delivered.has(hit.record.id))
         const notInjected = coverage[index].filter(hit => !delivered.has(hit.record.id))
-        const item = hit => ({ ...recallEvidenceReport(hit), verified: hit.record.unverifiedRecall !== true })
+        const item = hit => ({ ...reportEvidence(hit), verified: hit.record.unverifiedRecall !== true })
         return {
           query: plan.query,
           detail: plan.detail ?? null,
@@ -1233,7 +1351,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         retrieved: reportItems(coverage),
         covered: reportItems(injectedCoverage),
         candidates: slotPlans.map(plan => ({ query: plan.query, evidence: [...hitsById.values()]
-          .filter(hit => delivered.has(hit.record.id) && hit.candidateSlots?.includes(plan.query)).map(recallEvidenceReport) }))
+          .filter(hit => delivered.has(hit.record.id) && hit.candidateSlots?.includes(plan.query)).map(reportEvidence) }))
           .filter(item => item.evidence.length > 0),
         missing: slotPlans.filter((_, index) => injectedCoverage[index].length === 0).map(plan => plan.query),
         unresolved: missingSlots.map(entry => entry.plan.query),
@@ -1248,7 +1366,11 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
         semantic: semanticIndex.status(),
         localDeepRecall,
       }
-      if (reportEpoch === recallInvalidationEpoch) setRecallReport(lastRecallBySession, sessionId, report)
+      const currentTurn = sessionId === undefined ? null : recallTurnBySession.get(sessionId)
+      if (currentTurn?.generation === turnGeneration && !currentTurn.invalidated &&
+          currentTurn.turnKey === turnKey && currentTurn.projectKey === identity.key) {
+        setRecallReport(lastRecallBySession, sessionId, report)
+      }
     }
     updateLastRecall()
     const removeRecallHit = id => {
@@ -1434,6 +1556,8 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       ctx.logger?.warn?.(`[dsh-memory] recall skipped: ${error instanceof Error ? error.message : String(error)}`)
       return withoutPrevious
     } finally {
+      const currentTurn = sessionId ? recallTurnBySession.get(sessionId) : null
+      if (currentTurn && currentTurn.generation === activeRecallGeneration) currentTurn.recallInProgress = false
       if (sessionId && payload?.signal?.aborted !== true) {
         contextUsageBySession.delete(sessionId)
         contextUsageBySession.set(sessionId, {
@@ -1527,11 +1651,27 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     getLastInjection: () => lastInjection,
     getContextUsage: sessionId => contextUsageBySession.get(sessionId),
     getLastExtraction: () => lastExtraction,
-    getLastRecall: sessionId => lastRecallBySession.get(sessionId) ?? null,
+    getLastRecallAsync: async input => {
+      const sessionId = typeof input?.sessionId === 'string' ? input.sessionId : undefined
+      if (sessionId === undefined) return null
+      if (lastRecallBySession.has(sessionId)) {
+        const report = lastRecallBySession.get(sessionId)
+        if (report === null) return null
+        if (recallReportStore.isInvalidated(report)) {
+          lastRecallBySession.delete(sessionId)
+          return null
+        }
+        const projectKey = await hostSessionProjectKey(ctx, sessionId)
+        if (projectKey === null || input?.projectKey !== undefined && input.projectKey !== null && input.projectKey !== '' && input.projectKey !== projectKey) return null
+        return report?.projectKey === projectKey ? report : null
+      }
+      if (!recallReportStore.has(sessionId)) return null
+      const projectKey = await hostSessionProjectKey(ctx, sessionId)
+      if (projectKey === null || input?.projectKey !== undefined && input.projectKey !== null && input.projectKey !== '' && input.projectKey !== projectKey) return null
+      return recallReportStore.get(sessionId, projectKey)
+    },
+    invalidateRecallReferences,
     invalidateRecall: () => {
-      recallInvalidationEpoch++
-      lastRecallBySession.clear()
-      recallTurnBySession.clear()
       passageIndex.clear()
     },
     getSemanticStatus: () => semanticIndex.status(),

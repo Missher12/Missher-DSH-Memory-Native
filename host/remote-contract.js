@@ -361,7 +361,7 @@ export function computeStats(backend, raw) {
     lastInjection: typeof backend.getLastInjection === 'function' ? backend.getLastInjection() : null,
     contextUsage: sessionId === undefined ? null : (backend.getContextUsage?.(sessionId) ?? null),
     lastExtraction: typeof backend.getLastExtraction === 'function' ? backend.getLastExtraction() : null,
-    lastRecall: typeof backend.getLastRecall === 'function' ? backend.getLastRecall(sessionId) : null,
+    lastRecall: typeof backend.getLastRecall === 'function' ? backend.getLastRecall(sessionId, input.projectKey) : null,
     semantic: backend.getSemanticStatus?.() ?? null,
     usage: computeUsageSummary(backend.root),
     capture: captureState?.counts ?? null,
@@ -1051,10 +1051,12 @@ export function applyRemove(backend, raw) {
   if (target.id.startsWith('source:')) {
     const scope = target.scopes[0]
     const removed = scope.scope === 'project' && forgetSourcePassage(backend.root ?? backend.store.root,
-      target.id, scope.projectKey, backend.store, backend.index)
+      target.id, scope.projectKey, backend.store, backend.index, backend.invalidateRecallReferences)
     if (!removed) throw new PanelInputError('原文不存在、已遗忘或不属于此项目')
     return removed
   }
+  const current = backend.store.find(target.id, target.scopes)
+  if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
   const removed = backend.store.remove(target.id, target.scopes)
   if (removed === undefined) throw new PanelInputError('memory not found in the requested scope')
   backend.index.remove(target.id)

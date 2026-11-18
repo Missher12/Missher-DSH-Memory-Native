@@ -25,7 +25,7 @@ function graphView(records) {
 }
 
 /** Open fully searchable data; cache failures always fall back to the authority. */
-export function openMemoryRuntime({ root, clock = () => Date.now() }) {
+export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevoke = null }) {
   const started = performance.now()
   const store = new MemoryStore({ root, clock }).open()
   const index = new MemoryIndex()
@@ -169,6 +169,7 @@ export function openMemoryRuntime({ root, clock = () => Date.now() }) {
 
   store.setLifecycle({
     beforeWrite: synchronize,
+    onRecallRevoke,
     onChange(event) {
       if (event.type === 'refresh') {
         rebuild(event.state)

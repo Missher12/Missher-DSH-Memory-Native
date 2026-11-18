@@ -44,5 +44,5 @@ export function prepareStorage(ctx, config) {
     }
     if (saved === undefined) atomicWritePrivate(file, `${JSON.stringify(owner)}\n`)
   })
-  return { root, isolation: owner.kind }
+  return { root, isolation: owner.kind, identity: owner.identity }
 }

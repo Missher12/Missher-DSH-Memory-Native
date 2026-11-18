@@ -191,12 +191,14 @@ export class SourcePassageIndex {
 }
 
 /** Forgetting an original passage blocks its entire source, including extracted facts. */
-export function forgetSourcePassage(root, id, projectKey, store, index) {
+export function forgetSourcePassage(root, id, projectKey, store, index, invalidateRecallReferences) {
   const match = /^source:(src_[a-f0-9]{24}):\d+:\d+$/u.exec(id)
   if (!match || !authorized(root, match[1], projectKey, true)) return null
+  const derived = [...store.list('project', projectKey), ...store.list('global', null)]
+    .filter(record => record.sourceRefs?.some(ref => ref.sourceId === match[1]))
+  invalidateRecallReferences?.({ sourceIds: [match[1]] })
   blockSourceRecall(root, { sourceRefs: [{ sourceId: match[1] }] })
-  for (const record of [...store.list('project', projectKey), ...store.list('global', null)]) {
-    if (!record.sourceRefs?.some(ref => ref.sourceId === match[1])) continue
+  for (const record of derived) {
     store.remove(record.id, [{ scope: record.scope, projectKey: record.projectKey ?? null }]); index.remove(record.id)
   }
   for (const task of readCaptureTasks(root)) {
