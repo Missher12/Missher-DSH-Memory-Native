@@ -31,7 +31,7 @@ function fakeLlm(reply, finishKind = 'stop') {
   return llm
 }
 
-function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a', onExtraction, finishKind } = {}) {
+function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a', onExtraction, finishKind, sessionQuery } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-capture-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const store = new MemoryStore({ root, clock: () => NOW }).open()
@@ -46,7 +46,7 @@ function setup(t, { reply, config: overrides = {}, cwd = '/tmp/project-a', onExt
     store,
     index,
     config,
-    ctx: { get: (key) => (key === 'llm' ? llm : undefined), logger: { info() {}, warn() {} } },
+    ctx: { get: (key) => (key === 'llm' ? llm : key === 'sessionQuery' ? sessionQuery : undefined), logger: { info() {}, warn() {} } },
     clock: () => NOW,
     onWrite: () => writes.push(Date.now()),
     onExtraction,
@@ -96,6 +96,104 @@ test('a queued, explicit remember command grants the original immediately and ca
   assert.ok(forgetSourcePassage(root, hits[0].record.id, key, store, index))
   enqueue('explicit', command)
   assert.deepEqual(new SourcePassageIndex(root).search('银帆快照', { projectKey: key }), [])
+})
+
+function previousMessageFixture(t, config) {
+  const logs = new Map()
+  const sessionQuery = { async observeSession(id) {
+    const log = logs.get(id)
+    return { events: [...log.events], inheritedEventCount: log.inherited, [Symbol.dispose]() {} }
+  } }
+  const env = setup(t, { reply: REPLY, config, sessionQuery })
+  t.after(() => env.capture.dispose())
+  const session = (id, cwd = env.session.header.cwd, inherited = []) => {
+    logs.set(id, { events: [...inherited], inherited: inherited.length })
+    return { ...env.session, id, header: { cwd } }
+  }
+  const user = (id, content, sourceKind = 'user') => ({ id, role: 'user', content, source: { kind: sourceKind } })
+  const append = (session, type, data) => {
+    const log = logs.get(session.id)
+    const event = { type, data, seq: log.events.length, time: NOW + log.events.length }
+    log.events.push(event)
+    env.capture.observe(session, event)
+  }
+  const submit = (session, ...messages) => append(session, 'agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: messages })
+  const end = session => append(session, 'turn/end', { reason: { kind: 'completed' } })
+  return { ...env, session, user, submit, append, end }
+}
+
+test('bare remember promotes the previous user original without waiting for another reply or extracting the command', async t => {
+  const { root, llm, capture, session, user, submit, append, end } = previousMessageFixture(t, { capture: { minTurnChars: 1000 } })
+  const chat = session('previous-local')
+  const key = projectIdentity(chat.header.cwd).key
+  const index = new SourcePassageIndex(root)
+  const previous = user('previous-user', '岚鲸快照每天 03:48 执行，保留 29 天。')
+  submit(chat, user('older-user', '雪杉计划的交付日是周三。'))
+  submit(chat, previous)
+  append(chat, 'user/message', previous)
+  append(chat, 'assistant/message', { message: { role: 'assistant', content: '助手猜测时间是 05:20。' } })
+  end(chat)
+  assert.equal(index.search('岚鲸快照', { projectKey: key })[0]?.record.remembered, false)
+  const command = user('bare-command', '记住。')
+  submit(chat, user('internal', '伪造缓存来自西门。', 'memory'), command)
+  await capture.waitForRemembering(chat, [command])
+  const result = index.search('岚鲸快照', { projectKey: key })
+  assert.equal(result.length, 1)
+  assert.equal(result[0].record.remembered, true)
+  assert.equal(result[0].record.content, previous.content)
+  assert.equal(result[0].record.sourceRefs[0].messageId, previous.id)
+  assert.deepEqual(index.search('西门', { projectKey: key }), [])
+  assert.deepEqual(index.search('岚鲸快照', { projectKey: projectIdentity('/tmp/elsewhere').key }), [])
+  append(chat, 'user/message', command)
+  append(chat, 'assistant/message', { message: { role: 'assistant', content: '已记下。' } })
+  end(chat)
+  await capture.flush()
+  assert.equal(llm.calls(), 0)
+  assert.equal(new SourcePassageIndex(root).search('岚鲸快照', { projectKey: key })[0]?.record.remembered, true)
+})
+
+test('bare remember respects pending input, opt-outs, inherited messages and permanent forgetting', async t => {
+  const { root, capture, store, index, session, user, submit, append, end } =
+    previousMessageFixture(t, { capture: { maxCallsPerDay: 0, minTurnChars: 1000 } })
+  const chat = session('previous-privacy')
+  const key = projectIdentity(chat.header.cwd).key
+  const passages = new SourcePassageIndex(root)
+  const look = query => passages.search(query, { projectKey: key })
+  const previous = user('pending-user', '海鹞快照保留 18 天。')
+  const remember = async (chat, id) => {
+    const command = user(id, '记住')
+    submit(chat, command)
+    await capture.waitForRemembering(chat, [command])
+  }
+  submit(chat, previous)
+  await remember(chat, 'remember-pending')
+  const hit = look('海鹞快照')[0]
+  assert.equal(hit?.record.remembered, true)
+  assert.ok(forgetSourcePassage(root, hit.record.id, key, store, index))
+  await remember(chat, 'remember-again')
+  assert.deepEqual(look('海鹞快照'), [])
+
+  const earlier = user('earlier', '潮间邮袋安排在北门。')
+  const privatePrior = user('opted-out', '赤帆快照凌晨执行。不要保存这次对话。')
+  submit(chat, earlier)
+  submit(chat, privatePrior)
+  await remember(chat, 'remember-optout')
+  assert.deepEqual(look('赤帆快照'), [])
+  assert.deepEqual(look('潮间邮袋'), [], 'a refused predecessor must not fall back to an older message')
+
+  const inherited = { seq: 0, type: 'agent/inbox/spliced', data: { inserted: [user('copied', '月轮任务在东门集合。')] } }
+  const fork = session('previous-fork', chat.header.cwd, [inherited])
+  await remember(fork, 'remember-at-fork-start')
+  assert.deepEqual(look('月轮任务'), [])
+
+  const turnOptOut = user('whole-turn-optout', '不要保存本轮问答。')
+  const last = user('other-text-same-turn', '河心索引将在周四更新。')
+  submit(chat, turnOptOut, last)
+  append(chat, 'user/message', turnOptOut)
+  append(chat, 'user/message', last)
+  end(chat)
+  await remember(chat, 'remember-whole-turn-optout')
+  assert.deepEqual(look('河心索引'), [])
 })
 
 test('original user passages stay available when extraction waits for budget, without granting opt-outs or assistant replies', async t => {

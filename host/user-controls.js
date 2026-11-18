@@ -86,6 +86,11 @@ export function analyzeUserMessageControls(value) {
 
 const REMEMBER_COMMAND = /^(?:(?:请(?:你)?|帮我|麻烦(?:你)?)\s*)?(?:记住|记下|记一下|别忘(?:了)?)\s*|^(?:please\s+)?remember(?:\s+(?:this|that))?(?=\s|[:：,，])\s*/iu
 
+/** A standalone command refers to the previous user input in this session. */
+export function isBareRemember(value) {
+  return typeof value === 'string' && /^记住[。！!]*$/u.test(value.trim())
+}
+
 /** A direct command with explicit content, rather than a mention of the command. */
 export function explicitRememberText(value) {
   const text = String(value ?? '').trim()

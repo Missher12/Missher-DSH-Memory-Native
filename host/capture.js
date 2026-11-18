@@ -30,6 +30,7 @@ import {
   reconcileReplacements,
   saveSource,
   readSource,
+  sourceIdOf,
   canReadSource,
   turnIdOf,
   updateCaptureTask,
@@ -39,9 +40,9 @@ import {
 } from './capture-journal.js'
 import { projectIdentity } from './paths.js'
 import { estimateTokens } from './recall.js'
-import { buildRecord, contentHashOf, mergeSourceRefs } from './records.js'
+import { buildRecord, contentHashOf, looksSensitive, mergeSourceRefs } from './records.js'
 import { tokenize } from './tokenize.js'
-import { analyzeUserMessageControls, explicitRememberText } from './user-controls.js'
+import { analyzeUserMessageControls, explicitRememberText, isBareRemember } from './user-controls.js'
 import { grantSourceRecall } from './source-passages.js'
 import { readRecallSelection, readRecallSelections, recallSelectionId, writeRecallSelection } from './recall-journal.js'
 import { buildRecallSelectionPrompt } from './recall-selection.js'
@@ -50,6 +51,7 @@ const SIMILARITY_THRESHOLD = 0.9
 const PREFERENCE_SIMILARITY_THRESHOLD = 0.85
 const CONFLICT_SIMILARITY_THRESHOLD = 0.7
 const EXPLICIT_MEMORY_PATTERN = /记住|记一下|记下这个|别忘|以后都|从现在起|remember (?:this|that)|don'?t forget|from now on/iu
+const NO_SAVE_REASON = '明确要求不保存当前问答，已跳过提炼'
 const LOW_EFFORT_ORDER = ['off', 'none', 'minimal', 'low']
 const MAX_EVIDENCE_EXCERPT = 240
 
@@ -109,6 +111,40 @@ function textOfContent(content) {
     .map((block) => block.text)
     .join('\n')
     .trim()
+}
+
+const isNativeUserInput = message => message?.role === 'user' && message.source?.kind === 'user' &&
+  typeof message.id === 'string' && message.id !== ''
+
+function previousUserInput(observation, event, command) {
+  const events = observation.events
+  const first = observation.inheritedEventCount
+  const eligible = message => isNativeUserInput(message) && message.id !== command.id &&
+    !isBareRemember(textOfContent(message.content))
+  if (event.seq < first) return null
+  let submission = event.type === 'agent/inbox/spliced' ? event : null
+  if (submission === null) {
+    for (let seq = event.seq - 1; seq >= first; seq--) {
+      const row = events[seq]
+      if (row?.type === 'agent/inbox/spliced' && row.data.inserted.some(message => message.id === command.id)) {
+        submission = row
+        break
+      }
+    }
+  }
+  let admitted = null
+  for (let seq = submission?.seq ?? event.seq - 1; seq >= first; seq--) {
+    const row = events[seq]
+    if (submission && row?.type === 'agent/inbox/spliced') {
+      const inserted = row.data.inserted
+      const end = seq === submission.seq ? inserted.findIndex(message => message.id === command.id) : inserted.length
+      for (let index = end - 1; index >= 0; index--) {
+        if (eligible(inserted[index])) return { ...row, data: inserted[index] }
+      }
+    }
+    if (admitted === null && row?.type === 'user/message' && eligible(row.data)) admitted = row
+  }
+  return admitted
 }
 
 /** Token-set Jaccard overlap of two statements, used to collapse near duplicates. */
@@ -361,6 +397,7 @@ export class CapturePipeline {
   #onExtraction
   #onUsage
   #buffers = new Map()
+  #remembering = new WeakMap()
   #queue = Promise.resolve()
   #draining = null
   #resuming = null
@@ -552,14 +589,18 @@ export class CapturePipeline {
     if (event.type === 'agent/inbox/spliced') {
       if (!this.#config.capture.enabled) return
       for (const message of event.data?.inserted ?? []) {
-        if (message?.role !== 'user' || message.source?.kind !== 'user' || typeof message.id !== 'string') continue
+        if (!isNativeUserInput(message)) continue
         const text = textOfContent(message.content)
-        if (explicitRememberText(text) !== null) this.#saveMessage(session, { data: message }, 'user', text)
+        if (isBareRemember(text)) this.#startRemembering(session, event, message)
+        else if (explicitRememberText(text) !== null) this.#saveMessage(session, { data: message }, 'user', text)
       }
       return
     }
     if (event.type === 'user/message') {
       const text = textOfContent(event.data?.content)
+      if (this.#config.capture.enabled && isNativeUserInput(event.data) && isBareRemember(text)) {
+        this.#startRemembering(session, event, event.data)
+      }
       if (text !== '') this.#push(session, event, 'user', text)
       return
     }
@@ -579,6 +620,62 @@ export class CapturePipeline {
         this.#logger?.warn?.(`[dsh-memory] turn intake not persisted: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
+  }
+
+  /** Complete the local save before the chat model responds to the command. */
+  waitForRemembering(session, messages) {
+    const jobs = this.#remembering.get(session)
+    if (!jobs) return undefined
+    const pending = messages.map(message => jobs.get(message.id)).filter(Boolean)
+    return pending.length ? Promise.all(pending) : undefined
+  }
+
+  #startRemembering(session, event, message) {
+    let jobs = this.#remembering.get(session)
+    if (!jobs) {
+      jobs = new Map()
+      this.#remembering.set(session, jobs)
+    }
+    if (jobs.has(message.id)) return
+    jobs.set(message.id, this.#rememberPrevious(session, event, message).catch(error => {
+      this.#logger?.warn?.(`[dsh-memory] previous message could not be remembered: ${error.message}`)
+    }))
+    if (jobs.size > 64) jobs.delete(jobs.keys().next().value)
+  }
+
+  async #rememberPrevious(session, event, command) {
+    const root = this.#store?.root
+    const cwd = session.header?.cwd
+    if (typeof root !== 'string' || typeof cwd !== 'string') return
+    const projectKey = projectIdentity(cwd).key
+    const query = this.#ctx?.get?.('sessionQuery')
+    let previous
+    const haveNativeHistory = typeof query?.observeSession === 'function' && Number.isSafeInteger(event.seq)
+    if (haveNativeHistory) {
+      const observation = await query.observeSession(session.id, { projectionMode: 'none', signal: this.#abort.signal })
+      try {
+        if (typeof observation.header?.cwd === 'string' && projectIdentity(observation.header.cwd).key !== projectKey) return
+        previous = previousUserInput(observation, event, command)
+      } finally {
+        observation[Symbol.dispose]()
+      }
+    } else {
+      const data = session.deriveMessages?.().findLast(message => isNativeUserInput(message) &&
+        message.id !== command.id && !isBareRemember(textOfContent(message.content)))
+      if (data) previous = { data }
+    }
+    if (!previous || this.#disposed || !this.#config.capture.enabled) return
+    const text = textOfContent(previous.data.content)
+    if (!text || looksSensitive(text) || memoryOptOut({ role: 'user', sourceKind: 'user', text })) return
+    const id = sourceIdOf({ sessionId: session.id, role: 'user', messageId: previous.data.id, text })
+    if (!canReadSource(root, id)) return
+    const existing = readSource(root, id)
+    if (existing && (existing.sessionId !== session.id || existing.projectKey !== projectKey || existing.text !== text)) return
+    if (readTurnIntakes(root).intakes.some(intake => intake.sessionId === session.id &&
+        intake.reason === NO_SAVE_REASON && intake.sourceIds?.includes(id))) return
+    if (!existing && (!haveNativeHistory || !this.#saveMessage(session, previous, 'user', text))) return
+    const source = existing ?? readSource(root, id)
+    grantSourceRecall(root, source, projectKey, { remembered: true })
   }
 
   /** Abort the in-flight request; journaled sources and tasks survive. */
@@ -898,10 +995,10 @@ export class CapturePipeline {
     const explicit = sourceRecords.some((source) => source.role === 'user' && source.sourceKind === 'user' && EXPLICIT_MEMORY_PATTERN.test(source.text))
     const noSave = sourceRecords.some((source) =>
       source.role === 'user' && source.sourceKind === 'user' && analyzeUserMessageControls(source.text).noSaveDirective)
+    const userSources = sourceRecords.filter(isDirectUserSource)
+    const bareOnly = userSources.length > 0 && userSources.every(source => isBareRemember(source.text))
     if (noSave) {
-      blockSourceRecall(root, { sourceRefs: sourceRecords
-        .filter(source => source.role === 'user' && source.sourceKind === 'user' && explicitRememberText(source.text) !== null)
-        .map(source => ({ sourceId: source.id })) })
+      blockSourceRecall(root, { sourceRefs: userSources.map(source => ({ sourceId: source.id })) })
     }
     const identity = projectIdentity(cwd)
     const id = turnIdOf({ sessionId: session.id, sourceIds: sourceRecords.map((source) => source.id) })
@@ -910,8 +1007,10 @@ export class CapturePipeline {
     const skipped = !this.#config.capture.enabled
       ? 'capture disabled'
       : noSave
-        ? '明确要求不保存当前问答，已跳过提炼'
-        : chars < this.#config.capture.minTurnChars && !explicit && !sourceRecords.some(isOrdinaryDecision) ? 'turn shorter than capture.minTurnChars' : null
+        ? NO_SAVE_REASON
+        : bareOnly
+          ? '仅包含记住指令，原文按来源处理'
+          : chars < this.#config.capture.minTurnChars && !explicit && !sourceRecords.some(isOrdinaryDecision) ? 'turn shorter than capture.minTurnChars' : null
     const intake = writeTurnIntake(root, {
       id,
       sessionId: session.id,

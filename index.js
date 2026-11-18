@@ -25,7 +25,7 @@ import { projectIdentity } from './host/paths.js'
 import { prepareStorage } from './host/storage-boundary.js'
 import { memoryHealth, probeStorage, storageIssue } from './host/health.js'
 import { adaptiveInjectionBudget, classifyRecallHits, compileMemoryContext, conflictsRecallProject, hasContentMatch, isEffectiveAt, isFollowUpQuery, isHistoricalQuery, isPreferenceQuery, isQualifiedValueCandidate, matchesRecallAttribute, matchesRecallEntity, rankHits, recallAnchorTerms, recallDecisionAnswer, recallHasDecisionReasonEvidence, recallHasHandoffEvidence, recallNamedProjectTerms, recallSubjectTerms, recallQueryPlan, recallRelationAnswer, recallTimeIntent } from './host/recall.js'
-import { analyzeUserMessageControls } from './host/user-controls.js'
+import { analyzeUserMessageControls, isBareRemember } from './host/user-controls.js'
 import { sourceResolver } from './host/source-recall.js'
 import { SourceCandidateIndex } from './host/source-index.js'
 import { DEEP_RECALL_TOKEN_LIMIT, isRecallSourceStatement, SourcePassageIndex } from './host/source-passages.js'
@@ -469,6 +469,8 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       if (payload?.signal?.aborted === true) return withoutPrevious
       const session = sessionOf(ctx, payload?.agent)
       sessionId = typeof session?.id === 'string' ? session.id : undefined
+      const remembering = capture.waitForRemembering(session, payloadMessages)
+      if (remembering) await remembering
       if (!config.inject.enabled) return withoutPrevious
       recallAttempts++
       runtime.synchronize()
@@ -488,7 +490,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       }
     }
     const query = userTexts[0] ?? ''
-    if (query === '') return withoutPrevious
+    if (query === '' || isBareRemember(query)) return withoutPrevious
     const availableMemoryTokens = await memoryBudgetFor(ctx, {
       agent: payload.agent, session, selection: payload.modelSelection, messages: retained,
       maxTokens: config.inject.maxTokens, signal: payload.signal,

@@ -29,7 +29,7 @@ const permitted = source => source?.role === 'user' && source.sourceKind === 'us
   !/^\s*(?:>|```|引用(?:示例|内容)?[:：]|虚构(?:测试|验收)?(?:材料|资料))/u.test(source.text)
 
 /** Called only after turn-level opt-out checks, never merely because a file exists. */
-export function grantSourceRecall(root, source, projectKey) {
+export function grantSourceRecall(root, source, projectKey, { remembered = false } = {}) {
   if (!isValidProjectKey(projectKey) || source?.projectKey !== projectKey ||
       !sourcePattern.test(source?.id ?? '') || !permitted(source) || !canReadSource(root, source.id)) return false
   const dir = directory(root, projectKey)
@@ -38,10 +38,12 @@ export function grantSourceRecall(root, source, projectKey) {
   const textHash = hash(source.text)
   try {
     const existing = JSON.parse(readFileSync(file, 'utf8'))
-    if (existing.version === 1 && existing.sourceId === source.id && existing.projectKey === projectKey && existing.textHash === textHash) return true
+    if (existing.version === 1 && existing.sourceId === source.id && existing.projectKey === projectKey && existing.textHash === textHash &&
+        (!remembered || existing.remembered === true)) return true
   } catch {}
   atomicWritePrivate(file, JSON.stringify({
     version: 1, sourceId: source.id, projectKey, textHash, grantedAt: Date.now(),
+    ...(remembered ? { remembered: true } : {}),
   }) + '\n')
   return true
 }
@@ -52,13 +54,14 @@ function authorized(root, sourceId, projectKey, allowBlocked = false) {
     const grant = JSON.parse(readFileSync(join(directory(root, projectKey), sourceId + '.json'), 'utf8'))
     if (grant.version !== 1 || grant.sourceId !== sourceId || grant.projectKey !== projectKey) return null
     const source = readSource(root, sourceId)
-    return source?.projectKey === projectKey && permitted(source) && hash(source.text) === grant.textHash ? source : null
+    if (source?.projectKey !== projectKey || !permitted(source) || hash(source.text) !== grant.textHash) return null
+    return { ...source, remembered: grant.remembered === true || explicitRememberText(source.text) !== null }
   } catch { return null }
 }
 
 function passages(source) {
   const records = [], text = source.text, contentHash = hash(text)
-  const remembered = explicitRememberText(text) !== null
+  const remembered = source.remembered
   for (let from = 0; from < text.length;) {
     let to = Math.min(text.length, from + 420)
     if (to < text.length) {
@@ -114,7 +117,7 @@ export class SourcePassageIndex {
   validate(hit, projectKey) {
     return this.validateMany([hit], projectKey).length === 1
   }
-  validateMany(hits, projectKey) {
+  validateMany(hits, projectKey, { refreshRemembered = false } = {}) {
     const sources = new Map(), valid = []
     for (const hit of Array.isArray(hits) ? hits : []) {
       const record = hit?.record ?? hit, ref = record?.sourceRefs?.[0]
@@ -130,7 +133,11 @@ export class SourcePassageIndex {
       if (record.id !== `source:${source.id}:${ref.from}:${ref.to}` || record.sourceHash !== sourceHash ||
           ref.to > source.text.length || source.text.slice(ref.from, ref.to) !== record.content ||
           record.contentHash !== hash(record.content)) continue
-      valid.push(hit)
+      // Promotions keep the original passage ID and can occur after indexing.
+      if (refreshRemembered && record.remembered !== source.remembered) {
+        const refreshed = { ...record, remembered: source.remembered }
+        valid.push(hit.record ? { ...hit, record: refreshed } : refreshed)
+      } else valid.push(hit)
     }
     return valid
   }
@@ -144,7 +151,7 @@ export class SourcePassageIndex {
     const cached = this.#refresh(projectKey)
     return cached ? this.validateMany(cached.index.search(query, {
       projectKey, scopes: ['project'], statuses: ['active'], now, limit,
-    }), projectKey) : []
+    }), projectKey, { refreshRemembered: true }) : []
   }
 
   /** Inspect ranked passages round by round for unresolved questions only. */
@@ -170,8 +177,11 @@ export class SourcePassageIndex {
         tokens += cost
         const evidence = match(lane.query, hit)
         if (!evidence) continue
-        if (!matched.has(hit.record.id)) matched.set(hit.record.id, this.validate(hit, projectKey))
-        if (matched.get(hit.record.id)) lane.found = evidence
+        if (!matched.has(hit.record.id)) {
+          matched.set(hit.record.id, this.validateMany([hit], projectKey, { refreshRemembered: true })[0])
+        }
+        const verified = matched.get(hit.record.id)
+        if (verified) lane.found = { ...evidence, record: { ...evidence.record, remembered: verified.record.remembered } }
       }
       if (!pending) break
     }
