@@ -580,7 +580,8 @@ export function restoreMemory(backend, raw) {
   const current = backend.store.find(target.id, target.scopes)
   if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
   if (current.status !== 'deleted') throw new PanelInputError('only deleted memories can be restored')
-  const updated = backend.store.update(target.id, { status: 'active' }, target.scopes)
+  const updated = backend.store.update(target.id, { status: 'active' }, target.scopes, { restore: true, requireDeleted: true })
+  if (!updated) throw new PanelInputError('only deleted memories can be restored')
   backend.index.upsert(updated)
   return { record: projectRecord(updated) }
 }
@@ -601,7 +602,8 @@ export function restoreRevision(backend, raw) {
     importance: candidate.importance ?? 0.5,
     pinned: candidate.pinned === true,
     status: 'active',
-  }, target.scopes)
+  }, target.scopes, { restore: true })
+  if (!updated) throw new PanelInputError('memory not found in the requested scope')
   backend.index.upsert(updated)
   return { record: projectRecord(updated) }
 }
@@ -663,77 +665,53 @@ export function bulkAction(backend, raw) {
   const { scope, projectKey } = normalizeScope(input)
   if (scope === 'project' && projectKey === null) throw new PanelInputError('project key is required for a project-scoped bulk action')
   const scopes = [{ scope, projectKey }]
-  const previous = new Map()
   const updated = []
   const failed = []
+  const ids = new Set()
+  const patch = current => {
+    if (action === 'archive') return { status: 'archived' }
+    if (action === 'delete') return { status: 'deleted' }
+    if (action === 'tag') return { tags: [...new Set([...(current.tags ?? []), ...tags])] }
+    if (current.status !== 'deleted') throw new Error('only deleted memories can be restored')
+    return { status: 'active' }
+  }
+  const reflect = record => {
+    if (record.status === 'deleted') backend.index.remove(record.id)
+    else backend.index.upsert(record)
+    updated.push(record.id)
+  }
   for (const rawId of input.ids) {
     if (typeof rawId !== 'string' || rawId.trim() === '') {
       failed.push({ id: String(rawId), reason: 'id must be a non-empty string' })
       if (atomic) break
       continue
     }
-    const id = rawId.trim()
-    try {
-      const current = backend.store.find(id, scopes)
-      if (current === undefined) {
-        failed.push({ id, reason: 'memory not found in the requested scope' })
-        if (atomic) break
-        continue
-      }
-      let next
-      if (action === 'archive') next = backend.store.update(id, { status: 'archived' }, scopes)
-      else if (action === 'delete') next = backend.store.remove(id, scopes)
-      else if (action === 'restore') {
-        if (current.status !== 'deleted') {
-          failed.push({ id, reason: 'only deleted memories can be restored' })
-          if (atomic) break
-          continue
-        }
-        next = backend.store.update(id, { status: 'active' }, scopes)
-      } else {
-        const merged = [...new Set([...(Array.isArray(current.tags) ? current.tags : []), ...tags])]
-        next = backend.store.update(id, { tags: merged }, scopes)
-      }
-      if (next === undefined) {
-        failed.push({ id, reason: 'memory not found in the requested scope' })
-        if (atomic) break
-        continue
-      }
-      previous.set(id, current)
-      if (next.status === 'deleted') backend.index.remove(id)
-      else backend.index.upsert(next)
-      updated.push(id)
-    } catch (error) {
-      failed.push({ id, reason: error instanceof Error ? error.message : String(error) })
-      if (atomic) break
-    }
+    ids.add(rawId.trim())
   }
-
   let rolledBack = false
   let rollbackFailed = []
-  if (atomic && failed.length > 0 && updated.length > 0) {
-    rolledBack = true
-    for (const id of updated) {
-      const before = previous.get(id)
+  if (atomic) {
+    if (!failed.length) {
       try {
-        const next = backend.store.update(id, {
-          status: before.status,
-          tags: before.tags,
-          topic: before.topic ?? null,
-          importance: before.importance ?? 0.5,
-          pinned: before.pinned === true,
-        }, scopes)
-        if (next !== undefined) {
-          if (next.status === 'deleted') backend.index.remove(id)
-          else backend.index.upsert(next)
-        } else {
-          rollbackFailed.push(id)
-        }
-      } catch {
-        rollbackFailed.push(id)
+        const result = backend.store.updateBatch([...ids], scope, projectKey, patch, { restore: action === 'restore' })
+        for (const record of result.records) reflect(record)
+        if (result.revocationError) failed.push({ id: [...ids][0], reason: '记录已更新，但原文权限更新失败。请检查存储权限。' })
+      } catch (error) {
+        failed.push({ id: error.memoryId ?? [...ids][0], reason: error.message })
+        if (error.rollbackFailed) rollbackFailed = [...ids]
       }
     }
-    updated.length = 0
+    rolledBack = failed.length > 0 && updated.length === 0 && rollbackFailed.length === 0
+  } else {
+    for (const id of ids) {
+      try {
+        const record = backend.store.update(id, patch, scopes, { restore: action === 'restore' })
+        if (!record) throw new Error('memory missing or deleted in the requested scope')
+        reflect(record)
+      } catch (error) {
+        failed.push({ id, reason: error.message })
+      }
+    }
   }
   return { action, updated, failed, rolledBack, rollbackFailed, updatedCount: updated.length, failedCount: failed.length }
 }
@@ -1067,26 +1045,20 @@ export function applyUpdate(backend, raw) {
   const input = asObject(raw)
   const target = normalizeTarget(input)
   const patch = normalizePatch(input.patch)
-  const current = backend.store.find(target.id, target.scopes)
-  if (current === undefined) throw new PanelInputError('memory not found in the requested scope')
-
-  // User actions are feedback: approving a candidate raises its confidence,
-  // editing or pinning raises importance so the memory wins future recalls.
-  const next = { ...patch }
-  let importance = current.importance ?? 0.5
-  if (patch.status === 'active' && current.status === 'candidate') {
-    next.confidence = Math.min(1, (current.confidence ?? 0.5) + 0.1)
-    importance = Math.min(1, importance + 0.05)
-  }
-  if (patch.content !== undefined && patch.content !== current.content) {
-    importance = Math.min(1, importance + 0.05)
-  }
-  if (patch.pinned === true) importance = Math.max(importance, 0.9)
-  if (importance !== (current.importance ?? 0.5)) next.importance = importance
-
   let updated
   try {
-    updated = backend.store.update(target.id, next, target.scopes)
+    updated = backend.store.update(target.id, current => {
+      const next = { ...patch }
+      let importance = current.importance ?? 0.5
+      if (patch.status === 'active' && current.status === 'candidate') {
+        next.confidence = Math.min(1, (current.confidence ?? 0.5) + 0.1)
+        importance = Math.min(1, importance + 0.05)
+      }
+      if (patch.content !== undefined && patch.content !== current.content) importance = Math.min(1, importance + 0.05)
+      if (patch.pinned === true) importance = Math.max(importance, 0.9)
+      if (importance !== (current.importance ?? 0.5)) next.importance = importance
+      return next
+    }, target.scopes)
   } catch (error) {
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }

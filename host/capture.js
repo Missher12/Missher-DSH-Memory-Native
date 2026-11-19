@@ -17,7 +17,7 @@
 
 import { MAX_MEMORIES_PER_PASS, buildExtractionPrompt, parseExtraction } from './extract.js'
 import {
-  blockSourceRecall,
+  discardTurnSources,
   captureJournalHealth,
   captureStorageStatus,
   compressCaptureSources,
@@ -26,6 +26,7 @@ import {
   countCaptureTasks,
   readCaptureTasks,
   readTurnIntakes,
+  NO_SAVE_REASON,
   recoverCaptureTasks,
   reconcileReplacements,
   saveSource,
@@ -51,7 +52,7 @@ import { MIN_CONTINUATION_CHARS, MAX_CONTINUATION_DEPTH, MAX_COMPLETION_ROUNDS, 
 import { EXPLICIT_MEMORY_PATTERN, isOrdinaryDecision, memoryOptOut, sourceLabel, isDirectUserSource, isModelEvidenceSource, sourceIdLine } from './capture-evidence.js'
 import { CaptureApplyCoordinator } from './capture-apply.js'
 
-const NO_SAVE_REASON = '明确要求不保存当前问答，已跳过提炼'
+const SENSITIVE_REASON = '本轮含疑似凭据，未保存原文或请求提炼'
 const LOW_EFFORT_ORDER = ['off', 'none', 'minimal', 'low']
 
 function textOfContent(content) {
@@ -217,7 +218,10 @@ export class CapturePipeline {
     const root = this.#store?.root
     const sessionId = typeof input.session?.id === 'string' ? input.session.id : ''
     const id = recallSelectionId(sessionId, input.turnKey)
-    if (typeof root !== 'string' || id === null) return { state: 'not-sent', callState: 'not-sent', usage: null, resultText: '' }
+    if (typeof root !== 'string' || id === null || looksSensitive(input.query) ||
+        analyzeUserMessageControls(input.query).noSaveDirective) {
+      return { state: 'not-sent', callState: 'not-sent', usage: null, resultText: '' }
+    }
     const inflight = this.#selectionCalls.get(id)
     if (inflight) return inflight
     const request = this.#selectRecallOnce(root, id, input)
@@ -342,24 +346,26 @@ export class CapturePipeline {
     }
   }
 
-  /** Feed one session event. Full text is journaled before it can be lost. */
+  /** Keep ordinary sources provisional until the turn's privacy intent is known. */
   observe(session, event) {
     if (this.#disposed || session === undefined || event === undefined) return
     const sessionId = typeof session.id === 'string' ? session.id : undefined
     if (sessionId === undefined) return
     if (event.type === 'agent/inbox/spliced') {
       if (!this.#config.capture.enabled) return
-      for (const message of event.data?.inserted ?? []) {
-        if (!isNativeUserInput(message)) continue
-        const text = textOfContent(message.content)
+      const messages = (event.data?.inserted ?? []).filter(isNativeUserInput)
+        .map(message => ({ message, text: textOfContent(message.content) }))
+      if (messages.some(({ text }) => looksSensitive(text) || analyzeUserMessageControls(text).noSaveDirective)) return
+      for (const { message, text } of messages) {
         if (isBareRemember(text)) this.#startRemembering(session, event, message)
-        else if (explicitRememberText(text) !== null) this.#saveMessage(session, { data: message }, 'user', text)
+        else if (explicitRememberText(text) !== null) this.#persistMessage(this.#messageInput(session, { data: message }, 'user', text))
       }
       return
     }
     if (event.type === 'user/message') {
       const text = textOfContent(event.data?.content)
-      if (this.#config.capture.enabled && isNativeUserInput(event.data) && isBareRemember(text)) {
+      if (this.#config.capture.enabled && !this.#buffers.get(sessionId)?.privacy &&
+          isNativeUserInput(event.data) && isBareRemember(text)) {
         this.#startRemembering(session, event, event.data)
       }
       if (text !== '') this.#push(session, event, 'user', text)
@@ -374,9 +380,8 @@ export class CapturePipeline {
       const buffered = this.#buffers.get(sessionId)
       this.#buffers.delete(sessionId)
       if (buffered === undefined || buffered.sources.length === 0) return
-      if (event.data?.reason?.kind !== 'completed') return
       try {
-        this.#acceptTurn(session, buffered.sources)
+        this.#acceptTurn(session, buffered, event.data?.reason?.kind === 'completed')
       } catch (error) {
         this.#logger?.warn?.(`[dsh-memory] turn intake not persisted: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -425,7 +430,7 @@ export class CapturePipeline {
         message.id !== command.id && !isBareRemember(textOfContent(message.content)))
       if (data) previous = { data }
     }
-    if (!previous || this.#disposed || !this.#config.capture.enabled) return
+    if (!previous || this.#disposed || !this.#config.capture.enabled || this.#buffers.get(session.id)?.privacy) return
     const text = textOfContent(previous.data.content)
     if (!text || looksSensitive(text) || memoryOptOut({ role: 'user', sourceKind: 'user', text })) return
     const id = sourceIdOf({ sessionId: session.id, role: 'user', messageId: previous.data.id, text })
@@ -434,7 +439,7 @@ export class CapturePipeline {
     if (existing && (existing.sessionId !== session.id || existing.projectKey !== projectKey || existing.text !== text)) return
     if (readTurnIntakes(root).intakes.some(intake => intake.sessionId === session.id &&
         intake.reason === NO_SAVE_REASON && intake.sourceIds?.includes(id))) return
-    if (!existing && (!haveNativeHistory || !this.#saveMessage(session, previous, 'user', text))) return
+    if (!existing && (!haveNativeHistory || !this.#persistMessage(this.#messageInput(session, previous, 'user', text)))) return
     const source = existing ?? readSource(root, id)
     grantSourceRecall(root, source, projectKey, { remembered: true })
   }
@@ -698,33 +703,39 @@ export class CapturePipeline {
     return touched
   }
 
-  #saveMessage(session, event, role, text) {
-    const root = this.#store?.root
-    if (typeof root !== 'string') return
-    const now = this.#clock()
+  #messageInput(session, event, role, text) {
     const message = role === 'user' ? event.data : event.data?.message
     const messageId = typeof message?.id === 'string' ? message.id : null
     const sourceKind = typeof message?.source?.kind === 'string' ? message.source.kind : 'unknown'
     const sourceForm = typeof message?.source?.form === 'string' ? message.source.form : undefined
     const projectKey = typeof session.header?.cwd === 'string' ? projectIdentity(session.header.cwd).key : null
+    const input = {
+      sessionId: session.id,
+      messageId,
+      projectKey,
+      sourceKind,
+      sourceForm,
+      eventSeq: event.seq,
+      eventTime: event.time,
+      role,
+      at: this.#clock(),
+      text,
+    }
+    return { ...input, id: sourceIdOf(input) }
+  }
+
+  #persistMessage(input) {
+    const root = this.#store?.root
+    if (typeof root !== 'string' || !canReadSource(root, input.id) || looksSensitive(input.text)) return
     let source
     try {
-      source = saveSource(root, {
-        sessionId: session.id,
-        messageId,
-        projectKey,
-        sourceKind,
-        sourceForm,
-        eventSeq: event.seq,
-        eventTime: event.time,
-        role,
-        at: now,
-        text,
-      })
+      source = saveSource(root, input)
     } catch (error) {
       this.#logger?.warn?.(`[dsh-memory] source not persisted: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
+    const { role, sourceKind, text, projectKey } = input
+    if (source.projectKey !== projectKey) return
     if (role === 'user' && sourceKind === 'user' && explicitRememberText(text) !== null) {
       try { grantSourceRecall(root, { ...source, text, projectKey }, projectKey) }
       catch (error) { this.#logger?.warn?.(`[dsh-memory] explicit memory could not be enabled: ${error.message}`) }
@@ -734,44 +745,50 @@ export class CapturePipeline {
 
   #push(session, event, role, text) {
     if (!this.#config.capture.enabled) return
-    const source = this.#saveMessage(session, event, role, text)
-    if (!source) return
+    const source = this.#messageInput(session, event, role, text)
     let buffer = this.#buffers.get(session.id)
     if (buffer === undefined) {
-      buffer = { sources: [] }
+      buffer = { sources: [], privacy: null }
       this.#buffers.set(session.id, buffer)
     }
-    buffer.sources.push({ ...source, sourceId: source.id })
+    buffer.sources.push(source)
+    const reason = isDirectUserSource(source) && analyzeUserMessageControls(text).noSaveDirective ? NO_SAVE_REASON
+      : looksSensitive(text) ? SENSITIVE_REASON : null
+    const root = this.#store?.root
+    if (reason && typeof root === 'string' && (!buffer.privacy || reason === NO_SAVE_REASON)) {
+      buffer.privacy = reason
+      // Explicit commands may already have been made available before the reply.
+      discardTurnSources(root, buffer.sources.map(item => item.id))
+    } else if (!buffer.privacy && role === 'user' && source.sourceKind === 'user' && explicitRememberText(text) !== null) {
+      this.#persistMessage(source)
+    }
   }
 
-  #acceptTurn(session, sources) {
+  #acceptTurn(session, buffer, completed) {
     if (this.#disposed) return
     const root = this.#store?.root
     if (typeof root !== 'string') return
     const cwd = typeof session.header?.cwd === 'string' ? session.header.cwd : undefined
     if (cwd === undefined) return
-    const sourceRecords = sources.map((source) => readSource(root, source.sourceId)).filter((source) => source !== null)
+    const { sources, privacy } = buffer
+    const identity = projectIdentity(cwd)
+    const sourceRecords = privacy ? sources : sources.filter(source => source.projectKey === identity.key && this.#persistMessage(source))
     if (sourceRecords.length === 0) return
+    if (privacy) discardTurnSources(root, sourceRecords.map(source => source.id))
+    else if (!completed) return
     const chars = sourceRecords.reduce((sum, source) => sum + source.text.length, 0)
     const explicit = sourceRecords.some((source) => source.role === 'user' && source.sourceKind === 'user' && EXPLICIT_MEMORY_PATTERN.test(source.text))
-    const noSave = sourceRecords.some((source) =>
-      source.role === 'user' && source.sourceKind === 'user' && analyzeUserMessageControls(source.text).noSaveDirective)
     const userSources = sourceRecords.filter(isDirectUserSource)
     const bareOnly = userSources.length > 0 && userSources.every(source => isBareRemember(source.text))
-    if (noSave) {
-      blockSourceRecall(root, { sourceRefs: userSources.map(source => ({ sourceId: source.id })) })
-    }
-    const identity = projectIdentity(cwd)
     const id = turnIdOf({ sessionId: session.id, sourceIds: sourceRecords.map((source) => source.id) })
     const existing = readTurnIntakes(root).intakes.find((intake) => intake.id === id && intake.status !== 'failed')
     if (existing !== undefined) return
-    const skipped = !this.#config.capture.enabled
-      ? 'capture disabled'
-      : noSave
-        ? NO_SAVE_REASON
-        : bareOnly
-          ? '仅包含记住指令，原文按来源处理'
-          : chars < this.#config.capture.minTurnChars && !explicit && !sourceRecords.some(isOrdinaryDecision) ? 'turn shorter than capture.minTurnChars' : null
+    let skipped = privacy
+    if (!skipped && !this.#config.capture.enabled) skipped = 'capture disabled'
+    if (!skipped && bareOnly) skipped = '仅包含记住指令，原文按来源处理'
+    if (!skipped && chars < this.#config.capture.minTurnChars && !explicit && !sourceRecords.some(isOrdinaryDecision)) {
+      skipped = 'turn shorter than capture.minTurnChars'
+    }
     const intake = writeTurnIntake(root, {
       id,
       sessionId: session.id,
@@ -787,7 +804,7 @@ export class CapturePipeline {
     })
     // Source retrieval is independent of extraction quota, but uses the same
     // completed-turn consent. Never retroactively authorize old journal files.
-    if (this.#config.capture.enabled && !noSave) {
+    if (this.#config.capture.enabled && !privacy) {
       for (const source of sourceRecords) {
         try { if (!memoryOptOut(source)) grantSourceRecall(root, source, identity.key) }
         catch (error) { this.#logger?.warn?.(`[dsh-memory] source indexing grant failed: ${error.message}`) }
@@ -928,6 +945,20 @@ export class CapturePipeline {
         reason: '已有请求但没有可核验的完成回执，不自动重发' })
       return
     }
+    const taskSourceIds = new Set(task.sourceIds ?? task.segment?.entries?.map(ref => ref.sourceId) ?? [])
+    const intakes = readTurnIntakes(root).intakes
+    const intake = intakes.find(entry => entry.id === task.turnKey)
+    const denied = intakes.some(entry => [NO_SAVE_REASON, SENSITIVE_REASON].includes(entry.reason) &&
+      (entry === intake || entry.sourceIds?.some(id => taskSourceIds.has(id))))
+    if (denied || [...(intake?.sourceIds ?? taskSourceIds)].some(id => {
+      const source = readSource(root, id)
+      return source && (looksSensitive(source.text) ||
+        isDirectUserSource(source) && analyzeUserMessageControls(source.text).noSaveDirective)
+    })) {
+      updateCaptureTask(root, task.id, { status: 'skipped',
+        reason: '来源含疑似凭据或已明确禁存，未请求提炼或应用旧回执' })
+      return
+    }
     if (typeof task.resultText === 'string') {
       await this.#replayStoredResult(task)
       return
@@ -1029,7 +1060,8 @@ export class CapturePipeline {
     const seenExisting = new Set()
     const existing = []
     for (const record of [...sameSource, ...searched]) {
-      if (seenExisting.has(record.id)) continue
+      if (seenExisting.has(record.id) || looksSensitive(record.content) ||
+          record.sourceRefs?.some(ref => !canReadSource(root, ref.sourceId))) continue
       seenExisting.add(record.id)
       existing.push(record)
     }
@@ -1040,7 +1072,7 @@ export class CapturePipeline {
         existing,
         context,
         explicit: task.explicit === true,
-        applied: Array.isArray(task.appliedContents) ? task.appliedContents : [],
+        applied: Array.isArray(task.appliedContents) ? task.appliedContents.filter(content => !looksSensitive(content)) : [],
         now: this.#clock(),
       })
     } catch (error) {
@@ -1274,9 +1306,10 @@ export class CapturePipeline {
       rejected = appliedResult.rejected
     } catch (error) {
       updateCaptureTask(root, task.id, {
-        status: 'failed',
+        status: error?.code === 'source-revoked' ? 'skipped' : 'failed',
         callState: 'completed',
-        reason: `写入失败：${error instanceof Error ? error.message : String(error)}；旧记录保持有效，不会自动重试`,
+        reason: error?.code === 'source-revoked' ? '写入前原文已遗忘，保留已付费回执，不再写入'
+          : `写入失败：${error instanceof Error ? error.message : String(error)}；旧记录保持有效，不会自动重试`,
       })
       return
     }

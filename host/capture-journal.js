@@ -35,6 +35,7 @@ export const CAPTURE_DIR = 'capture'
 export const SOURCE_DIR = 'sources'
 export const TASKS_FILE = 'capture-tasks.jsonl'
 export const TURNS_FILE = 'capture-turns.jsonl'
+export const NO_SAVE_REASON = '明确要求不保存当前问答，已跳过提炼'
 export const REPLACEMENTS_FILE = 'capture-replacements.jsonl'
 export const TASK_STATUSES = Object.freeze(['pending', 'running', 'done', 'partial', 'failed', 'unknown', 'skipped'])
 export const CALL_STATES = Object.freeze(['not-sent', 'requested', 'completed', 'failed', 'unknown'])
@@ -188,7 +189,7 @@ export function saveSource(root, input) {
   }
   const back = readSource(root, id)
   if (back === null || back.text !== text) throw new Error('source read-back verification failed')
-  return { id, sessionId, messageId, role, sourceKind, at, chars: text.length, identityKind: identity.kind }
+  return { id, sessionId, messageId, role, sourceKind, at, chars: text.length, identityKind: identity.kind, projectKey: back.projectKey ?? null }
 }
 
 /** Read one source, or null when missing/corrupt. */
@@ -226,6 +227,20 @@ export function blockSourceRecall(root, record) {
     if (existsSync(file)) continue
     writeAtomic(file, '')
   }
+}
+
+/** A denied turn retains replay barriers and ids, without retaining originals. */
+export function discardTurnSources(root, ids) {
+  blockSourceRecall(root, { sourceRefs: ids.map(sourceId => ({ sourceId })) })
+  const dir = sourceDir(root)
+  for (const id of ids) {
+    if (!SOURCE_ID_PATTERN.test(id)) continue
+    for (const suffix of ['.json', '.json.gz']) {
+      try { unlinkSync(join(dir, id + suffix)) }
+      catch (error) { if (error?.code !== 'ENOENT') throw error }
+    }
+  }
+  if (ids.length) fsyncDir(dir)
 }
 
 export function recallTaskLookup(root) {
@@ -379,6 +394,11 @@ export function readTurnIntakes(root) {
     intakes: [...map.values()].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)),
     corrupt,
   }
+}
+
+export function noSaveSourceIds(intakes) {
+  return new Set(intakes.filter(intake => intake.reason === NO_SAVE_REASON || intake.noSave === true)
+    .flatMap(intake => Array.isArray(intake.sourceIds) ? intake.sourceIds : []))
 }
 
 /** Update one intake status durably. */

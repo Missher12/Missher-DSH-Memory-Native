@@ -404,6 +404,46 @@ export class MemoryStore {
       redundant >= Math.max(100, Math.ceil(state.records.size / 4))
   }
 
+  #revokeChanges(changes) {
+    const sourceIds = new Set(), recordRevisions = []
+    let deleted = false
+    for (const { record, previous, changed } of changes) {
+      if (changed === false) continue
+      const forget = record.status === 'deleted'
+      const revokePrevious = previous && (previous.content !== record.content ||
+        (previous.status === 'active' && record.status !== 'active') || forget)
+      if (revokePrevious) recordRevisions.push({ id: previous.id, revision: previous.revision })
+      if (forget) deleted = true
+      for (const entry of [revokePrevious ? previous : null, forget ? record : null]) {
+        if (!entry) continue
+        blockSourceRecall(this.#root, entry)
+        for (const ref of entry.sourceRefs ?? []) if (ref?.sourceId) sourceIds.add(ref.sourceId)
+      }
+    }
+    if (deleted || recordRevisions.length) {
+      this.#onRecallRevoke?.({ recordRevisions, sourceIds: [...sourceIds], ...(deleted ? { reason: 'delete' } : {}) })
+    }
+  }
+
+  #publishChanges(state, changes, compact) {
+    const changed = changes.filter(change => change.changed !== false)
+    if (changed.length) this.#notifyChange({ type: 'upsert', state, records: changed.map(change => change.record),
+      previous: changed.map(change => change.previous) })
+    if (compact) this.compact(state.scope, state.projectKey)
+  }
+
+  #requireReadableSources(sourceIds = []) {
+    if (sourceIds.some(id => !canReadSource(this.#root, id))) {
+      throw Object.assign(new Error('memory source was revoked before the write'), { code: 'source-revoked' })
+    }
+  }
+
+  /** Order source forgetting against pending writes derived from that source. */
+  revokeSource(sourceId) {
+    this.#beforeWrite?.()
+    this.#withLock(() => blockSourceRecall(this.#root, { sourceRefs: [{ sourceId }] }))
+  }
+
   /** Append a record revision under a cross-process lock; fsync before returning. */
   append(record, options = {}) {
     if (record === null || typeof record !== 'object') throw new Error('append requires a record')
@@ -411,13 +451,15 @@ export class MemoryStore {
     const state = this.#state(record.scope, record.projectKey)
     const outcome = this.#withLock(() => {
       this.#refreshState(state)
+      this.#requireReadableSources(options.sourceIds)
       const current = state.records.get(record.id)
+      const protectedDeleted = this.#currentPurgedIds().has(record.id) || current?.status === 'deleted' && record.status !== 'deleted'
       if (options.importOnly) {
-        const protectedDeleted = this.#currentPurgedIds().has(record.id) || current?.status === 'deleted' && record.status !== 'deleted'
         if (protectedDeleted || current && current.revision >= record.revision) {
           return { record: current, changed: false, compact: false, protectedDeleted }
         }
       }
+      if (protectedDeleted) throw new Error('cannot append over a deleted or purged memory')
       let next = record
       if (current !== undefined) {
         if (record.revision <= current.revision) {
@@ -427,19 +469,11 @@ export class MemoryStore {
           next = { ...record, revision: current.revision + 1 }
         }
       }
-      const revokesCurrent = current && (current.content !== next.content || (current.status === 'active' && next.status !== 'active') || next.status === 'deleted')
-      const revokesNext = next.status === 'deleted'
-      if (revokesCurrent || revokesNext) {
-        const revoked = [revokesCurrent ? current : null, revokesNext ? next : null].filter(Boolean)
-        this.#onRecallRevoke?.({ recordRevisions: revokesCurrent ? [{ id: current.id, revision: current.revision }] : [], sourceIds: [...new Set(revoked.flatMap(record =>
-          (record.sourceRefs ?? []).map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '')))],
-          ...(next.status === 'deleted' ? { reason: 'delete' } : {}) })
-      }
-      if (revokesCurrent) blockSourceRecall(this.#root, current)
-      if (revokesNext) blockSourceRecall(this.#root, next)
+      const change = { record: next, previous: current, changed: true }
+      this.#revokeChanges([change])
       // A large live set stays above the old size threshold even immediately
       // after compaction. Rewrite only when enough obsolete revisions exist.
-      const compact = this.#appendCommitted(state, [{ record: next, previous: current, changed: true }])
+      const compact = this.#appendCommitted(state, [change])
       return { record: next, previous: current, changed: true, compact }
     })
     if (outcome.changed) this.#notifyChange({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
@@ -461,17 +495,15 @@ export class MemoryStore {
     const state = this.#state(first.scope, first.projectKey)
     const outcome = this.#withLock(() => {
       this.#refreshState(state)
-      for (const sourceId of new Set(records.flatMap(record => (record.sourceRefs ?? [])
-        .map(ref => ref?.sourceId).filter(value => typeof value === 'string' && value !== '')))) {
-        if (!canReadSource(this.#root, sourceId)) {
-          const error = new Error('memory source was revoked before the record batch could commit')
-          error.code = 'source-revoked'
-          throw error
-        }
-      }
+      this.#requireReadableSources([...new Set(records.flatMap(record => (record.sourceRefs ?? [])
+        .map(ref => ref?.sourceId).filter(value => typeof value === 'string' && value !== '')))])
       const changes = []
+      const purged = this.#currentPurgedIds()
       for (const input of records) {
         const current = state.records.get(input.id)
+        if (purged.has(input.id) || current?.status === 'deleted' && input.status !== 'deleted') {
+          throw new Error('cannot append over a deleted or purged memory')
+        }
         if (current && input.content === current.content && input.status === current.status) {
           changes.push({ record: current, previous: current, changed: false })
           continue
@@ -479,27 +511,13 @@ export class MemoryStore {
         const next = current && input.revision <= current.revision
           ? { ...input, revision: current.revision + 1 }
           : input
-        const revokesCurrent = current && (current.content !== next.content ||
-          (current.status === 'active' && next.status !== 'active') || next.status === 'deleted')
-        const revokesNext = next.status === 'deleted'
-        if (revokesCurrent || revokesNext) {
-          const revoked = [revokesCurrent ? current : null, revokesNext ? next : null].filter(Boolean)
-          this.#onRecallRevoke?.({ recordRevisions: revokesCurrent ? [{ id: current.id, revision: current.revision }] : [],
-            sourceIds: [...new Set(revoked.flatMap(record => (record.sourceRefs ?? [])
-              .map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '')))],
-            ...(next.status === 'deleted' ? { reason: 'delete' } : {}) })
-        }
-        if (revokesCurrent) blockSourceRecall(this.#root, current)
-        if (revokesNext) blockSourceRecall(this.#root, next)
         changes.push({ record: next, previous: current, changed: true })
       }
+      this.#revokeChanges(changes)
       const compact = this.#appendCommitted(state, changes)
       return { changes, compact }
     })
-    const changed = outcome.changes.filter(item => item.changed)
-    if (changed.length) this.#notifyChange({ type: 'upsert', records: changed.map(item => item.record),
-      previous: changed.map(item => item.previous), state })
-    if (outcome.compact) this.compact(first.scope, first.projectKey)
+    this.#publishChanges(state, outcome.changes, outcome.compact)
     return outcome.changes.map(item => item.record)
   }
 
@@ -516,21 +534,65 @@ export class MemoryStore {
   }
 
   /** Append the next revision for an existing record. */
-  update(id, patch, scopes) {
+  update(id, patch, scopes = [{ scope: 'global', projectKey: null }], options = {}) {
     this.#beforeWrite?.()
-    const record = this.find(id, scopes)
-    if (record === undefined) return undefined
-    const next = nextRevision(record, patch, this.#clock())
-    return this.append(next)
+    const result = this.#withLock(() => {
+      this.#requireReadableSources(options.sourceIds)
+      for (const { scope, projectKey } of scopes) {
+        const state = this.#state(scope, projectKey)
+        this.#refreshState(state)
+        const current = state.records.get(id)
+        if (current === undefined) continue
+        if (options.requireDeleted && current.status !== 'deleted') return null
+        const fields = typeof patch === 'function' ? patch(current) : patch
+        if (current.status === 'deleted' && !options.restore && fields.status !== 'deleted') return null
+        if (current.status === 'deleted' && fields.status === 'deleted') return { record: current }
+        const record = nextRevision(current, fields, this.#clock())
+        const change = { record, previous: current }
+        this.#revokeChanges([change])
+        return { record, state, change, compact: this.#appendCommitted(state, [change]) }
+      }
+      return null
+    })
+    if (result?.change) this.#publishChanges(result.state, [result.change], result.compact)
+    return result?.record
+  }
+
+  /** Validate and commit one scope before applying any irreversible side effects. */
+  updateBatch(ids, scope, projectKey, patch, { restore = false } = {}) {
+    this.#beforeWrite?.()
+    const state = this.#state(scope, projectKey)
+    const outcome = this.#withLock(() => {
+      this.#refreshState(state)
+      const changes = ids.map(id => {
+        try {
+          const current = state.records.get(id)
+          if (!current) throw new Error('memory not found in the requested scope')
+          const fields = patch(current)
+          if (current.status === 'deleted' && !restore && fields.status !== 'deleted') throw new Error('memory is deleted')
+          if (current.status === 'deleted' && fields.status === 'deleted') return { record: current, changed: false }
+          return { previous: current, record: nextRevision(current, fields, this.#clock()) }
+        } catch (error) {
+          throw Object.assign(error, { memoryId: id })
+        }
+      })
+      const compact = this.#appendCommitted(state, changes)
+      try { this.#revokeChanges(changes) }
+      catch (error) { return { changes, compact, revocationError: error } }
+      return { changes, compact }
+    })
+    this.#publishChanges(state, outcome.changes, outcome.compact)
+    return { records: outcome.changes.map(change => change.record), revocationError: outcome.revocationError }
   }
 
   /** Publish a replacement and the old record's retirement as one file commit. */
-  replace(oldId, replacement) {
+  replace(oldId, replacement, options = {}) {
     if (!isRecordRevision(replacement) || replacement.id === oldId) throw new Error('invalid replacement record')
     this.#beforeWrite?.()
     const state = this.#state(replacement.scope, replacement.projectKey)
     const result = this.#withLock(() => {
       this.#refreshState(state)
+      this.#requireReadableSources(options.sourceIds)
       const old = state.records.get(oldId)
       if (old === undefined || (old.status !== 'active' && old.status !== 'candidate')) {
         throw new Error('replacement target is no longer active in this scope')
@@ -589,10 +651,7 @@ export class MemoryStore {
 
   /** Soft-delete one record (writes a tombstone revision). */
   remove(id, scopes) {
-    this.#beforeWrite?.()
-    const record = this.find(id, scopes)
-    if (record === undefined) return undefined
-    return this.append(nextRevision(record, { status: 'deleted' }, this.#clock()))
+    return this.update(id, { status: 'deleted' }, scopes)
   }
 
   /** Rewrite one authority file with only the latest revision per id (locked, re-reads first). */

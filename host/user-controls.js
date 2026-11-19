@@ -1,11 +1,13 @@
 /** Shared parsing for factual queries and explicit user-turn controls. */
 
 const SAVE_ACTION = String.raw`(?:保存|记录|提炼|写入|记入)(?:\s*(?:或|和|并且?|、)\s*(?:保存|记录|提炼|写入|记入))*`
+const TURN_SCOPE = '(?:这次|这一?轮|本次|本轮|当前|此次|这段|这条)'
 const CURRENT_NO_SAVE_PATTERN = new RegExp(
-  String.raw`(?:不要|不得|不必|无需|不需要|禁止|请勿|别|不)\s*(?:把|将)?\s*${SAVE_ACTION}(?:到|进|入)?(?:这次|本次|本轮|当前|此次|这段|这条)?(?:问答|对话|聊天|消息|内容)(?:到|进|入)?(?:长期)?(?:记忆)?|(?:不要|不得|不必|无需|不需要|禁止|请勿|别|不)\s*(?:把|将)?\s*(?:这次|本次|本轮|当前|此次|这段|这条)(?:问答|对话|聊天|消息|内容)(?:.{0,8})?${SAVE_ACTION}(?:到|进|入)?(?:长期)?(?:记忆)?|(?:这次|本次|本轮|当前|此次|这段|这条)(?:问答|对话|聊天|消息|内容)(?:.{0,8})?(?:不要|不得|不必|无需|禁止|请勿|别)${SAVE_ACTION}(?:到|进|入)?(?:长期)?(?:记忆)?`,
+  String.raw`(?:不要|不得|不必|无需|不需要|禁止|请勿|别|不)\s*(?:把|将)?\s*${SAVE_ACTION}(?:到|进|入)?${TURN_SCOPE}?(?:问答|对话|聊天|消息|内容)(?:到|进|入)?(?:长期)?(?:记忆)?|(?:不要|不得|不必|无需|不需要|禁止|请勿|别|不)\s*(?:把|将)?\s*${TURN_SCOPE}(?:问答|对话|聊天|消息|内容)(?:.{0,8})?${SAVE_ACTION}(?:到|进|入)?(?:长期)?(?:记忆)?|${TURN_SCOPE}(?:问答|对话|聊天|消息|内容)(?:.{0,8})?(?:不要|不得|不必|无需|禁止|请勿|别)${SAVE_ACTION}(?:到|进|入)?(?:长期)?(?:记忆)?`,
   'giu',
 )
 const GENERAL_NO_SAVE_PATTERN = /(?:不要|不得|不必|无需|禁止|不)(?:保存|记录|提炼|写入)(?:到)?(?:长期)?记忆|do not (?:save|store|remember) (?:this|these)|don['’]t (?:save|store|remember) (?:this|these)/giu
+const SHORT_NO_SAVE_PATTERN = /(?:^|(?<=[，,。！？!?；;\n]))\s*(?:请\s*)?(?:不要|不得|别|请勿|禁止)\s*(?:保存|记录|提炼|记住|存下)\s*(?=$|[，,。！？!?；;\n])/gu
 const ANSWER_CONTROL_PATTERN = /^(?:(?:只|仅)?根据.{0,40}(?:记忆|已有资料|现有信息)|(?:每项|每个|每条)(?:都)?(?:用|按).{0,80}(?:回答|输出)|(?:没有|若无|如果没有|缺少)依据.{0,50}(?:不记得|不知道|写|回答)|(?:请)?(?:不要|别|请勿|不必|无需)(?:调用|使用)工具|(?:只|仅)(?:输出|回答).{0,50}|(?:回答|输出)(?:格式|要求)|工具名\s*[:：])/iu
 const ANSWER_PRESENTATION_PATTERN = /^(?:请)?(?:(?:(?:按照|按|用)(?:原话|原文|表格|列表|要点|分点|编号|JSON|Markdown)(?:(?:逐项|逐条|分别|简短|简洁|简要)\s*)*(?:格式)?(?:回答|作答|输出|列出))|(?:(?:只|仅)(?:给(?:出)?|输出|回答)(?:结论|摘要|要点|答案|结果|原话|原文|表格|列表)(?:即可|就行)?)|(?:(?:分点|逐项|逐条|分别)(?:回答|作答)))$/iu
 const VALUE_ONLY_CONTROL_PATTERN = /^(?:请)?(?:只|仅)(?:给(?:出)?|输出|回答)(?:单位|数值|数字|名称|时间|日期|版本号|结果|答案)(?:即可|就行)?$/u
@@ -41,6 +43,9 @@ function containsUnquotedDirective(text, pattern) {
   return false
 }
 
+const noSave = text => [CURRENT_NO_SAVE_PATTERN, GENERAL_NO_SAVE_PATTERN, SHORT_NO_SAVE_PATTERN]
+  .some(pattern => containsUnquotedDirective(text, pattern))
+
 function stripLeadingControlPrefix(clause) {
   let remaining = String(clause ?? '').trim()
   while (remaining !== '') {
@@ -56,8 +61,7 @@ function stripLeadingControlPrefix(clause) {
 function isControlClause(clause) {
   const normalized = stripLeadingControlPrefix(clause).replace(/^[“"「『(（\s]+/u, '')
   return /^(?:请)?(?:(?:简短|简洁|简要|逐项|分别)\s*){1,2}(?:回答|作答)/u.test(normalized) || ANSWER_CONTROL_PATTERN.test(normalized) || ANSWER_PRESENTATION_PATTERN.test(normalized) || VALUE_ONLY_CONTROL_PATTERN.test(normalized) ||
-    containsUnquotedDirective(normalized, CURRENT_NO_SAVE_PATTERN) ||
-    containsUnquotedDirective(normalized, GENERAL_NO_SAVE_PATTERN)
+    noSave(normalized)
 }
 
 function removeQuestionEnding(clause) {
@@ -80,8 +84,7 @@ export function analyzeUserMessageControls(value) {
     .filter(Boolean)
   return {
     retrievalQuery: retrieval.join('，'),
-    noSaveDirective: containsUnquotedDirective(text, CURRENT_NO_SAVE_PATTERN) ||
-      containsUnquotedDirective(text, GENERAL_NO_SAVE_PATTERN),
+    noSaveDirective: noSave(text),
   }
 }
 

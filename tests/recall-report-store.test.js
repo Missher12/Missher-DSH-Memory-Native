@@ -9,6 +9,7 @@ import { exportToObsidian } from '../host/obsidian.js'
 import { createRecallReportStore } from '../host/recall-reports.js'
 import { createPanelBackend } from '../host/remote.js'
 import { MemoryStore } from '../host/store.js'
+import { canReadSource } from '../host/capture-journal.js'
 
 const PROFILE = 'a'.repeat(64)
 const PROJECT = 'b'.repeat(64)
@@ -331,7 +332,7 @@ test('bulk deletion invalidates reports tied to the revoked source and leaves ot
   assert.ok(cold.get('session-b', PROJECT))
 })
 
-test('a rolled-back batch keeps report revocation when the source barrier remains in effect', t => {
+test('a rejected atomic batch leaves the revision, source grant and recall report intact', t => {
   const root = rootFor(t)
   const memories = new MemoryStore({ root }).open()
   const reports = createRecallReportStore(root, PROFILE)
@@ -343,8 +344,37 @@ test('a rolled-back batch keeps report revocation when the source barrier remain
 
   const result = backend.bulkAction({ action: 'delete', ids: ['mem_rollback', 'missing'], scope: 'project', projectKey: PROJECT })
   assert.equal(result.rolledBack, true)
-  assert.equal(memories.find('mem_rollback', [{ scope: 'project', projectKey: PROJECT }]).status, 'active')
-  assert.equal(createRecallReportStore(root, PROFILE).get('session-rollback', PROJECT), null)
+  const current = memories.find('mem_rollback', [{ scope: 'project', projectKey: PROJECT }])
+  assert.equal(current.status, 'active')
+  assert.equal(current.revision, 1)
+  assert.equal(canReadSource(root, SOURCE_A), true)
+  assert.ok(createRecallReportStore(root, PROFILE).get('session-rollback', PROJECT))
+})
+
+test('an atomic delete that cannot commit to disk leaves its evidence readable', t => {
+  const root = rootFor(t)
+  const memories = new MemoryStore({ root }).open()
+  const reports = createRecallReportStore(root, PROFILE)
+  const { record } = memories.write({ kind: 'fact', scope: 'project', projectKey: PROJECT,
+    sourceRefs: [{ sourceId: SOURCE_A }], content: '写入失败仍要保留原文依据。', confidence: .9 })
+  reports.write('session-io', PROJECT, report('io-error', record.id, SOURCE_A))
+  memories.setLifecycle({ onRecallRevoke: targets => reports.invalidateReferences(targets) })
+  const backend = createPanelBackend({ root, store: memories, index: { upsert() {}, remove() {} }, config: {} })
+  const authority = join(root, 'projects', PROJECT, 'memories.jsonl')
+  const open = fs.openSync
+  fs.openSync = (path, flags, ...args) => {
+    if (path === authority && flags === 'a+') throw Object.assign(new Error('test disk is full'), { code: 'ENOSPC' })
+    return open(path, flags, ...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    const result = backend.bulkAction({ action: 'delete', ids: [record.id], scope: 'project', projectKey: PROJECT })
+    assert.equal(result.rolledBack, true)
+    assert.equal(result.updatedCount, 0)
+  } finally { fs.openSync = open; syncBuiltinESMExports() }
+  assert.equal(memories.find(record.id, [{ scope: 'project', projectKey: PROJECT }]).revision, 1)
+  assert.equal(canReadSource(root, SOURCE_A), true)
+  assert.ok(createRecallReportStore(root, PROFILE).get('session-io', PROJECT))
 })
 
 test('permanent deletion removes a stale same-source report file before cold reads', t => {
@@ -399,7 +429,7 @@ test('editing a recoverable record retires its old report revision but permits t
   const deleted = memories.remove(record.id, [{ scope: 'project', projectKey: PROJECT }])
   assert.equal(deleted.revision, 3)
   assert.equal(reports.get('session-editable', PROJECT), null)
-  const restored = memories.update(record.id, { status: 'active' }, [{ scope: 'project', projectKey: PROJECT }])
+  const restored = memories.update(record.id, { status: 'active' }, [{ scope: 'project', projectKey: PROJECT }], { restore: true })
   assert.equal(restored.revision, 4)
   assert.equal(reports.write('session-editable', PROJECT, makeReport(restored.revision, restored.content)), true)
 

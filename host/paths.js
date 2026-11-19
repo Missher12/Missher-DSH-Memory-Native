@@ -10,6 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
@@ -40,7 +41,10 @@ export function resolveMemoryRoot(options = {}) {
  * @returns {{ key: string, name: string, cwd: string }}
  */
 export function projectIdentity(cwd) {
-  const canonical = resolve(String(cwd || process.cwd()))
+  const absolute = resolve(String(cwd || process.cwd()))
+  let canonical = absolute
+  try { canonical = realpathSync.native(absolute) }
+  catch { /* Unavailable directories keep their existing path-based identity. */ }
   const rawBase = basename(canonical) || 'project'
   const base = rawBase.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '') || 'project'
   const hash = createHash('sha256').update(canonical).digest('hex').slice(0, 12)

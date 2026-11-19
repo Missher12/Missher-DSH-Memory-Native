@@ -126,6 +126,8 @@ function setRecallReport(reports, sessionId, report) {
   while (reports.size > RECALL_REPORT_SESSION_LIMIT) reports.delete(reports.keys().next().value)
 }
 
+const privateRecallQuery = query => looksSensitive(query) || analyzeUserMessageControls(query).noSaveDirective
+
 function beginRecallTurn(reports, turns, generations, sessionId, { turnKey, projectKey, query, startSeq, turnId }) {
   if (typeof sessionId !== 'string' || sessionId === '') return null
   const current = turns.get(sessionId)
@@ -134,6 +136,7 @@ function beginRecallTurn(reports, turns, generations, sessionId, { turnKey, proj
   if (sameTurn) {
     current.turnKey = turnKey
     current.query = query
+    current.private ||= privateRecallQuery(query)
     if (Number.isSafeInteger(startSeq) && (!Number.isSafeInteger(current.startSeq) || startSeq < current.startSeq)) current.startSeq = startSeq
     current.turnId ??= turnId
     return current
@@ -142,7 +145,7 @@ function beginRecallTurn(reports, turns, generations, sessionId, { turnKey, proj
   generations.delete(sessionId)
   generations.set(sessionId, generation)
   while (generations.size > RECALL_REPORT_SESSION_LIMIT) generations.delete(generations.keys().next().value)
-  const next = { generation, turnKey, projectKey, query, assistantText: null,
+  const next = { generation, turnKey, projectKey, query, assistantText: null, private: privateRecallQuery(query),
     ...(Number.isSafeInteger(startSeq) ? { startSeq } : {}), ...(turnId === undefined ? {} : { turnId }) }
   turns.set(sessionId, next)
   setRecallReport(reports, sessionId, null)
@@ -172,11 +175,12 @@ function completeRecallTurn(reports, turns, generations, session, event, persist
       const key = turnKeyOf(latest, messages, text, undefined)
       const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : undefined
       const projectKey = cwd ? projectIdentity(cwd).key : null
-      beginRecallTurn(reports, turns, generations, sessionId, {
+      const observed = beginRecallTurn(reports, turns, generations, sessionId, {
         turnKey: key, projectKey, query: text,
         startSeq: Number.isSafeInteger(event.seq) ? event.seq : latest.seq,
         turnId: event.data?.turnId ?? event.turnId,
       })
+      if (observed) observed.private ||= messages.filter(isUserQuestionMessage).some(message => privateRecallQuery(textOf(message)))
     }
     return
   }
@@ -185,6 +189,7 @@ function completeRecallTurn(reports, turns, generations, session, event, persist
     if (turn && text !== null && generations.get(sessionId) === turn.generation &&
         (!Number.isSafeInteger(turn.startSeq) || !Number.isSafeInteger(event.seq) || event.seq >= turn.startSeq)) {
       turn.assistantText = text
+      turn.private ||= looksSensitive(text)
       turn.turnId ??= event.data?.turnId ?? event.turnId
     }
     return
@@ -207,7 +212,7 @@ function completeRecallTurn(reports, turns, generations, session, event, persist
         : { ...question, answerObserved, answerCoverage: 'aborted', answerExcerpt: null })
       const finalized = { ...report, outcome: completed ? 'completed' : 'aborted', questions }
       let persisted
-      try { persisted = persistReport?.(sessionId, finalized) }
+      try { if (!turn.private) persisted = persistReport?.(sessionId, finalized) }
       catch (error) { logger?.warn?.(`[dsh-memory] recall report save failed: ${error instanceof Error ? error.message : String(error)}`) }
       if (persisted === false) reports.delete(sessionId)
       else setRecallReport(reports, sessionId, finalized)
@@ -220,7 +225,7 @@ function isRecallQuestion(query) {
   return RECALL_QUESTION_PATTERN.test(String(query ?? ''))
 }
 
-function isSafeRecallRecord(record, projectKey, timeIntent, now) {
+export function isSafeRecallRecord(record, projectKey, timeIntent, now) {
   if (!record || typeof record.id !== 'string' || record.quoted === true || looksSensitive(record.content)) return false
   if (record.scope === 'project' ? record.projectKey !== projectKey : record.scope !== 'global') return false
   return matchesRecallTime(record, timeIntent, now)
@@ -287,7 +292,7 @@ function recallCandidatePool({ attempts, index, knowledgeIndex, passageIndex, se
   return result
 }
 
-function slotEvidence(slot, hits, hasSubquestions) {
+export function slotEvidence(slot, hits, hasSubquestions) {
   return hits.filter(hit => {
     if (hit.candidateSlots?.includes(slot.query)) return false
     if (slot.timeIntent && !matchesRecallTime(hit.record, slot.timeIntent)) return false
@@ -348,7 +353,7 @@ function selectionFitsSlot(slot, candidate, quote) {
   return matchesRecallAttribute(hit, slot.query, slot.detail, [])
 }
 
-function directPassageEvidence(plan, hit, hasSubquestions) {
+export function directPassageEvidence(plan, hit, hasSubquestions) {
   const whole = hit.record.content
   const matches = text => slotEvidence(plan, [{ ...hit, record: { ...hit.record, recallQuote: text } }], hasSubquestions).length > 0
   const sentences = whole.split(/(?<=[。！？!?])\s*|(?<!\d)\.(?=\s|$)/u)
@@ -510,7 +515,7 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
       }
     }
     const query = userTexts[0] ?? ''
-    if (query === '' || isBareRemember(query)) return withoutPrevious
+    if (query === '' || isBareRemember(query) || looksSensitive(query)) return withoutPrevious
     const identity = projectIdentity(cwd)
     const availableMemoryTokens = await memoryBudgetFor(ctx, {
       agent: payload.agent, session, selection: payload.modelSelection, messages: retained,
@@ -518,7 +523,7 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
     })
     contextBudget = availableMemoryTokens
     if (availableMemoryTokens === 0 || payload.signal?.aborted) return withoutPrevious
-    const previousQuery = userTexts[1]
+    const previousQuery = privateRecallQuery(userTexts[1]) ? undefined : userTexts[1]
     const turnKey = turnKeyOf(latestUserMessage, payloadMessages, query, previousQuery)
     const activeTurn = sessionId === undefined ? null : beginRecallTurn(lastRecallBySession, recallTurnBySession, recallGenerationBySession, sessionId, {
       turnKey, projectKey: identity.key, query, startSeq: latestUserMessage?.seq, turnId: payload?.turnId,
@@ -896,7 +901,7 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
         missingSlots = slotPlans.map((plan, index) => ({ plan, index })).filter(entry => coverage[entry.index].length === 0)
       }
       const selectionSlots = missingSlots.slice(0, MAX_RECALL_LOOKUPS).filter(entry => !localPassages.has(entry.plan.query))
-      if (selectionSlots.length > 0 && isRecallQuestion(query)) {
+      if (selectionSlots.length > 0 && isRecallQuestion(query) && !activeTurn?.private && !privateRecallQuery(query)) {
         const missingPlans = selectionSlots.map(entry => entry.plan)
         completionReceipt = await capture.selectRecall({
           session,

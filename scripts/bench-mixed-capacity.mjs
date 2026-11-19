@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildRecord } from '../host/records.js'
 import { projectIdentity } from '../host/paths.js'
@@ -308,16 +308,39 @@ async function syncFirstPhase(root, vault) {
 
 async function syncIncrementalPhase(root, vault) {
   const runtime = openMemoryRuntime({ root, clock: () => NOW }), config = { vaultPath: vault, folder: 'DSH Memory', autoSync: true }
+  const dir = join(vault, config.folder)
   const sync = new ObsidianSync({ root, store: runtime.store, index: runtime.index, getConfig: () => config, synchronize: runtime.synchronize })
-  const reopenStart = performance.now(), reopened = await sync.run(), reopenMs = elapsed(reopenStart)
+  const reopenStart = performance.now(), reopened = await sync.run({ fullScan: false }), reopenMs = elapsed(reopenStart)
+  assert.equal(reopened.mode, 'incremental')
   assert.equal(reopened.errors.length, 0)
+  const unchanged = join(dir, 'mem_p00001.md')
+  const before = statSync(unchanged)
+  const openedNotes = new Set()
+  const openedKnowledge = new Set()
+  const openedReading = new Set()
+  const existingText = sync.existingText.bind(sync)
+  sync.existingText = file => {
+    if (file.startsWith(dir) && /^mem_[^/\\]+\.md$/u.test(file.slice(dir.length + 1))) openedNotes.add(file.slice(dir.length + 1))
+    if (file.startsWith(join(root, 'knowledge') + sep)) openedKnowledge.add(file)
+    if (file.startsWith(join(dir, '阅读') + sep)) openedReading.add(file)
+    return existingText(file)
+  }
   const scopes = [{ scope: 'project', projectKey: PROJECT }]
   const mutationStart = performance.now()
   runtime.store.update('mem_p29991', { content: '更新后的完整原句：BENCH_UPDATE_NEW；确认此次变更应进入增量阅读索引。' }, scopes)
   runtime.store.remove('mem_p29992', scopes)
   const mutationMs = elapsed(mutationStart)
-  const incrementalStart = performance.now(), result = await sync.run(), incrementalMs = elapsed(incrementalStart)
+  const incrementalStart = performance.now()
+  const result = await sync.run({ fullScan: false, recordIds: ['mem_p29991', 'mem_p29992'] })
+  const incrementalMs = elapsed(incrementalStart)
+  assert.equal(result.mode, 'incremental')
   assert.equal(result.errors.length, 0)
+  assert.deepEqual([...openedNotes].sort(), ['mem_p29991.md', 'mem_p29992.md'])
+  assert.equal(openedKnowledge.size, 0)
+  assert.ok(openedReading.size > 0 && openedReading.size < allMarkdown(join(dir, '阅读')).length)
+  const after = statSync(unchanged)
+  assert.equal(after.mtimeMs, before.mtimeMs)
+  assert.equal(after.ino, before.ino)
   const readingText = allMarkdown(join(vault, 'DSH Memory', '阅读')).map(file => readFileSync(file, 'utf8')).join('\n')
   assert.ok(readingText.includes('BENCH_UPDATE_NEW'))
   assert.equal(readingText.includes('BENCH_UPDATE_OLD'), false)
@@ -326,6 +349,8 @@ async function syncIncrementalPhase(root, vault) {
   assert.ok(runtime.index.searchPage('BENCH_UPDATE_NEW', { projectKey: PROJECT, now: NOW }).hits.some(hit => hit.record.id === 'mem_p29991'))
   assert.equal(runtime.index.searchPage('BENCH_FORGET_OLD', { projectKey: PROJECT, now: NOW }).hits.some(hit => hit.record.id === 'mem_p29992'), false)
   const output = { reopenMs, reopenedErrors: reopened.errors.length, mutationMs, incrementalMs,
+    mode: result.mode, sourceNotesRead: openedNotes.size, knowledgeNotesRead: openedKnowledge.size,
+    readingPagesRead: openedReading.size, exported: result.exported, imported: result.imported,
     updateAndForgetErrors: result.errors.length, oldUpdateTextRemoved: true, forgottenTextRemoved: true,
     forgottenSourceNoteRemoved: true, indexUpdatedAndForgotten: true, memory: memorySnapshot() }
   sync.dispose(); runtime.dispose()
@@ -392,6 +417,7 @@ if (process.argv[2] === '--worker') {
       semanticModel: 'real LocalEmbedding with allowDownload=false; four-passage sample and 75-record semantic index sample; full corpus embedding is excluded',
       queryPercentile: 'nearest-rank p95 over the listed repeated queries', updateForget: 'one project memory updated and one forgotten after Obsidian state reopen' }
     save()
+    if (Object.values(report.phases).some(result => result.error)) process.exitCode = 2
     process.stdout.write(`${JSON.stringify({ outputFile, phases: Object.keys(report.phases), corpus: report.corpus }, null, 2)}\n`)
   } finally { rmSync(root, { recursive: true, force: true }) }
 }

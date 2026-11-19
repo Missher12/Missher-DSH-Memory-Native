@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { canReadSource, readSource, blockSourceRecall, readCaptureTasks, updateCaptureTask } from './capture-journal.js'
+import { canReadSource, readSource, readCaptureTasks, updateCaptureTask } from './capture-journal.js'
 import { atomicWritePrivate, withFileLock } from './persistence.js'
 import { isValidProjectKey } from './paths.js'
 import { looksSensitive } from './records.js'
@@ -219,12 +219,12 @@ export function forgetSourcePassage(root, id, projectKey, store, index, invalida
   if (!match) return null
   return withSourceRecallLock(root, match[1], () => {
     if (!authorized(root, match[1], projectKey, true)) return null
+    store.revokeSource(match[1])
     store.refreshScope?.('project', projectKey)
     store.refreshScope?.('global', null)
     const derived = [...store.list('project', projectKey), ...store.list('global', null)]
       .filter(record => record.sourceRefs?.some(ref => ref.sourceId === match[1]))
     invalidateRecallReferences?.({ sourceIds: [match[1]] })
-    blockSourceRecall(root, { sourceRefs: [{ sourceId: match[1] }] })
     for (const record of derived) {
       store.remove(record.id, [{ scope: record.scope, projectKey: record.projectKey ?? null }]); index.remove(record.id)
     }

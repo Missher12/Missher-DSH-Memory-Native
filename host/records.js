@@ -24,8 +24,9 @@ export const EVIDENCE_ROLES = Object.freeze(['user', 'assistant', 'unknown'])
 const SENSITIVE_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/u,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
-  /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+/iu,
-  /\bBearer\s+[A-Za-z0-9._-]{16,}/u,
+  /(?:\b(?:password|passwd|secret|api[\s_-]?key|(?:access|refresh)[\s_-]?token)|密码|密钥|私钥|访问令牌)["']?\s*[:=：]\s*["']?[^\s"']+/iu,
+  /\bBearer\s+[A-Za-z0-9._-]{16,}/iu,
+  /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}\b/u,
 ]
 
 /** Normalize a memory statement: single line, collapsed whitespace. */

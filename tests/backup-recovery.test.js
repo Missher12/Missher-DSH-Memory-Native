@@ -10,7 +10,8 @@ import { CapturePipeline } from '../host/capture.js'
 import { MemoryIndex } from '../host/search.js'
 import { resolveConfig } from '../host/config.js'
 import { MemoryStore } from '../host/store.js'
-import { readCaptureTasks, writeCaptureTask } from '../host/capture-journal.js'
+import { readCaptureTasks, saveSource, turnIdOf, writeCaptureTask, writeTurnIntake } from '../host/capture-journal.js'
+import { verifyBackup } from '../host/backup.js'
 import { writeSettings, readSettings } from '../host/settings.js'
 
 function setup(t) {
@@ -66,6 +67,20 @@ test('complete backup preserves the ID-only Obsidian purge ledger', async t => {
   const fresh = new MemoryStore({ root: restored }).open()
   assert.deepEqual(fresh.purgedIds(), new Set([row.id]))
   assert.deepEqual(JSON.parse(fs.readFileSync(join(restored, 'obsidian-purged-ids.json'), 'utf8')), [row.id])
+})
+
+test('new backups exclude every raw source of a legacy opted-out turn and preserve other sources', async t => {
+  const { root, store } = setup(t)
+  const sessionId = 'legacy-private-turn'
+  const save = (role, messageId, text) => saveSource(root, { role, sourceKind: role, sessionId, messageId, text })
+  const denied = [save('user', 'u', '不要保存这次问答。'), save('assistant', 'a', '这是临时答复。')]
+  const kept = save('user', 'other', '这条来自另一次正常问答。')
+  const sourceIds = denied.map(item => item.id)
+  writeTurnIntake(root, { id: turnIdOf({ sessionId, sourceIds }), sessionId, sourceIds, status: 'skipped',
+    reason: '明确要求不保存当前问答，已跳过提炼' })
+  const { files } = await verifyBackup(await store.backup())
+  assert.ok(files.every(file => !sourceIds.some(id => file.path.includes(`${id}.json`))))
+  assert.ok(files.some(file => file.path.endsWith(`${kept.id}.json.gz`)))
 })
 
 test('same-clock backups remain distinct and an existing target is never replaced', async t => {

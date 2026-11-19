@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -92,6 +92,47 @@ test('project bindings reject attempts to read or mutate a different project', t
   t.after(() => service.close())
   assert.throws(() => service.search('secret', PROJECT_B), /bound project/u)
   assert.throws(() => service.forget('mem_missing', PROJECT_B), /bound project/u)
+})
+
+test('Claude and Codex reject lexical evidence for a different attribute', async t => {
+  const { root, owner } = fixture(t)
+  const cwd = join(root, 'gateway')
+  mkdirSync(cwd)
+  const key = projectIdentity(cwd).key
+  const service = createLocalSharingService({ root, profileIdentity: owner.identity, projectKey: key })
+  t.after(() => service.close())
+  service.remember({ client: 'codex', sessionId: 'record', messageId: 'test-port',
+    text: '记住：网关监听端口是 4731。' })
+  for (const [client, hook] of [['codex', handleCodexHook], ['claude-code', handleClaudeHook]]) {
+    const base = { hook_event_name: 'UserPromptSubmit', cwd, session_id: 'attribute',
+      turn_id: 'missing', prompt_id: 'missing' }
+    const ask = input => hook({ service, root, input: { ...base, ...input } })
+    assert.deepEqual(await ask({ prompt: '网关请求超时是多少？' }), {})
+    const missing = service.reports.get(`${client}:attribute`, key)
+    assert.equal(missing.covered.length, 0)
+    assert.equal(missing.missing.length, 1)
+    const positive = await ask({ turn_id: 'present', prompt_id: 'present', prompt: '网关监听端口是多少？' })
+    assert.match(positive.hookSpecificOutput.additionalContext, /4731/u)
+  }
+})
+
+test('a directory alias shares its real project and retargeting the alias cannot leak the old project', async t => {
+  const { root, owner } = fixture(t)
+  const original = join(root, 'work'), alias = join(root, 'shortcut'), isolated = join(root, 'other')
+  mkdirSync(original)
+  mkdirSync(isolated)
+  symlinkSync(original, alias, 'junction')
+  const key = projectIdentity(original).key
+  const service = createLocalSharingService({ root, profileIdentity: owner.identity, projectKey: key })
+  t.after(() => service.close())
+  const hook = input => handleCodexHook({ service, root, input: { cwd: alias, hook_event_name: 'UserPromptSubmit',
+    session_id: 'path-alias', turn_id: 'remember', ...input } })
+  await hook({ prompt: '记住：网关监听端口是 4731。' })
+  const readUsingRealPath = await hook({ cwd: original, turn_id: 'recall', prompt: '网关监听端口是多少？' })
+  assert.match(readUsingRealPath.hookSpecificOutput.additionalContext, /4731/u)
+  rmSync(alias)
+  symlinkSync(isolated, alias, 'junction')
+  await assert.rejects(hook({ turn_id: 'unrelated', prompt: '网关监听端口是多少？' }), /project binding/u)
 })
 
 test('the project directory includes authorized L0-only projects without reading source bodies', t => {

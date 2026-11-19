@@ -285,13 +285,27 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
     if ((await lstat(target)).isSymbolicLink()) throw new Error('阅读文件夹不能是符号链接')
   }
   const notes = [], files = new Map()
+  const previousNotes = sync.state.readingNotes ?? {}
+  const readingNotes = {}
   for (const [key, entry] of Object.entries(sync.state.entries)) {
     if (key.startsWith('memory:')) files.set(key.slice(7), entry.file)
     else if (key.startsWith('knowledge:')) {
+      const cached = previousNotes[key]
+      // Only metadata is cached. Alias proofs still reopen their original note.
+      if (!force && cached?.hash === entry.left && cached.path === entry.file && cached.hasAlias === false) {
+        readingNotes[key] = cached
+        notes.push(cached.note)
+        continue
+      }
       const text = await sync.existingText(join(sync.root, entry.file))
       if (text === null) continue
       const parsed = parseKnowledgeNote(text), body = splitNoteBody(parsed.body)
-      notes.push({ ...parsed.data, title: body.title || posix.basename(entry.file), file: posix.basename(entry.file), content: parsed.body })
+      const { scope, projectKey, topic, memoryId, quoted, status, validFrom, validTo } = parsed.data
+      const note = { scope, projectKey, topic, memoryId, quoted, status, validFrom, validTo,
+        title: body.title || posix.basename(entry.file), file: posix.basename(entry.file) }
+      const hasAlias = ALIAS_CUE_PATTERN.test(parsed.body)
+      readingNotes[key] = { hash: digest(text), path: entry.file, hasAlias, note }
+      notes.push(hasAlias ? { ...note, content: parsed.body } : note)
     }
   }
   const { pages, sources, aliasProofs } = buildReadingPages({ records, notes, files, folder: config.folder || 'DSH Memory', now })
@@ -305,8 +319,10 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
   let clean = true
   for (const [file, body] of pages) {
     try {
-      const target = join(dir, file), before = await sync.existingText(target)
       const generated = START + '\n' + body + '\n' + END
+      const generatedHash = digest(generated)
+      if (!force && previous[file] === generatedHash && !aliasProofs.has(file)) continue
+      const target = join(dir, file), before = await sync.existingText(target)
       let after
       if (before === null) {
         after = generated + '\n\n## 我的补充\n\n此处可自由记录。上方内容随同步整理；在上方直接修改的内容会另存为手动版本。\n'
@@ -350,9 +366,10 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
         }
       }
       await sync.replace(target, before, after, dir)
-      previous[file] = digest(generated)
+      previous[file] = generatedHash
     } catch (error) { clean = false; result.errors.push({ file, message: error.message }) }
   }
   sync.state.readingPages = previous
+  sync.state.readingNotes = readingNotes
   if (clean) sync.readingSignature = signature
 }

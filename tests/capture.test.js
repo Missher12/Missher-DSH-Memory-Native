@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { CapturePipeline } from '../host/capture.js'
-import { readTurnIntakes, readCaptureTasks } from '../host/capture-journal.js'
+import { readTurnIntakes, readCaptureTasks, readSource } from '../host/capture-journal.js'
+import { verifyBackup } from '../host/backup.js'
 import { resolveConfig } from '../host/config.js'
 import { projectIdentity } from '../host/paths.js'
 import { MemoryIndex } from '../host/search.js'
@@ -21,9 +22,9 @@ function fakeLlm(reply, finishKind = 'stop') {
     async resolveModelInfo() {
       return { reasoning: { efforts: [{ id: 'max' }, { id: 'low' }] } }
     },
-    async *stream() {
+    async *stream(request) {
       calls += 1
-      const text = typeof reply === 'function' ? reply() : reply
+      const text = typeof reply === 'function' ? reply(request) : reply
       yield { type: 'text-delta', index: 0, text }
       yield { type: 'finish', reason: { kind: finishKind } }
     },
@@ -481,7 +482,53 @@ test('an explicit current-turn no-save clause skips extraction before the paid m
   assert.equal(llm.calls(), 0)
   assert.equal(readTurnIntakes(root).intakes[0].status, 'skipped')
   assert.match(readTurnIntakes(root).intakes[0].reason, /明确要求不保存/u)
+  const ids = readTurnIntakes(root).intakes[0].sourceIds
+  assert.ok(ids.length > 0)
+  assert.ok(ids.every(id => readSource(root, id) === null))
+  const manifest = await verifyBackup(await store.backup())
+  assert.ok(manifest.files.every(file => !ids.some(id => file.path.includes(`${id}.json`))))
   assert.equal(store.listAll().length, 0)
+})
+
+test('a late no-save instruction drops earlier user and assistant originals from the same turn', async t => {
+  const { root, capture, session, llm } = setup(t, { reply: '{"memories":[]}' })
+  const user = (id, content) => capture.observe(session, { type: 'user/message',
+    data: { id, role: 'user', source: { kind: 'user' }, content } })
+  user('first', '请记住：普通的临时记忆示例。')
+  capture.observe(session, { type: 'assistant/message',
+    data: { message: { id: 'reply', role: 'assistant', content: '同一轮生成的答复。' } } })
+  user('opt-out', '不要保存')
+  capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await capture.flush()
+  const [intake] = readTurnIntakes(root).intakes
+  assert.equal(intake.status, 'skipped')
+  assert.equal(intake.sourceIds.length, 3)
+  assert.ok(intake.sourceIds.every(id => readSource(root, id) === null))
+  assert.equal(llm.calls(), 0)
+})
+
+test('credential-like user and assistant originals never enter the extraction request', async t => {
+  const sent = []
+  const { capture, session, root } = setup(t, { reply: request => {
+    sent.push(request.messages.map(message => message.content).flat().map(part => part.text).join('\n'))
+    return '{"memories":[]}'
+  } })
+  const user = (id, content) => capture.observe(session, { type: 'user/message',
+    data: { id, role: 'user', source: { kind: 'user' }, content } })
+  user('secret', 'password: fictional-review-value-8472')
+  user('mixed', '青岚快照每天 02:10 执行。')
+  capture.observe(session, { type: 'assistant/message',
+    data: { message: { role: 'assistant', content: 'access_token = fictional-assistant-value-19' } } })
+  capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await capture.flush()
+  assert.equal(sent.length, 0)
+  assert.ok(readTurnIntakes(root).intakes[0].sourceIds.every(id => readSource(root, id) === null))
+  feed(capture, session, '青岚快照每天 02:10 执行。')
+  await capture.flush()
+  assert.equal(sent.length, 1)
+  assert.match(sent[0], /青岚快照/u)
+  assert.equal(sent[0].includes('fictional-review-value'), false)
+  assert.equal(sent[0].includes('fictional-assistant-value'), false)
 })
 
 test('a quoted no-save example in a discussion is not treated as a current-turn opt-out', async (t) => {

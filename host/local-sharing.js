@@ -7,13 +7,15 @@ import { createPanelBackend } from './remote.js'
 import { deriveProjectBrief } from './project-brief.js'
 import { isValidProjectKey } from './paths.js'
 import { openMemoryRuntime } from './startup.js'
-import { buildRecord, CONTENT_LIMITS } from './records.js'
+import { buildRecord, CONTENT_LIMITS, looksSensitive } from './records.js'
 import { formatSceneBlock } from './scene-format.js'
 import { canReadSource } from './capture-journal.js'
 import { grantSourceRecall, hasSourceRecallGrant, isRecallSourceStatement, revokeSourceRecallGrant, SourcePassageIndex, withSourceRecallLock } from './source-passages.js'
 import { saveSource, sourceIdOf } from './capture-journal.js'
-import { explicitRememberText } from './user-controls.js'
+import { analyzeUserMessageControls, explicitRememberText } from './user-controls.js'
 import { clearLastUsersForSources } from './local-sharing-hook-state.js'
+import { recallTimeIntent } from './recall.js'
+import { directPassageEvidence, isSafeRecallRecord, slotEvidence } from './recall-flow.js'
 
 const isProfileIdentity = value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
 const hash = value => createHash('sha256').update(value).digest('hex')
@@ -131,6 +133,9 @@ export function createLocalSharingService({ root, profileIdentity = null, projec
 
   function saveRemembered({ text, remembered, client, sessionId, messageId, key }) {
     if (typeof text !== 'string' || text.length > 20_000) throw new TypeError('original user message is required')
+    if (looksSensitive(text) || analyzeUserMessageControls(text).noSaveDirective) {
+      throw new Error('the user message is private or contains likely credentials')
+    }
     if (typeof remembered !== 'string' || !isRecallSourceStatement(remembered)) {
       throw new Error('remembered content is not an eligible user statement')
     }
@@ -165,6 +170,7 @@ export function createLocalSharingService({ root, profileIdentity = null, projec
         return built.record
       })
       const source = saveSource(dataRoot, sourceInput)
+      if (source.projectKey !== key) throw new Error('source belongs to a different project')
       const sourceForGrant = { ...source, projectKey: key, role: 'user', sourceKind: 'user', sourceForm: clientName, text }
       if (!grantSourceRecall(dataRoot, sourceForGrant, key, { remembered: true, locked: true })) {
         throw new Error('original message did not pass the source authorization checks')
@@ -233,18 +239,27 @@ export function createLocalSharingService({ root, profileIdentity = null, projec
         sourceRefs: filteredRefs(record.sourceRefs, reports),
       }))
     },
-    search(query, requestedProjectKey, limit = 12) {
+    search(query, requestedProjectKey, limit = 12, recall = null) {
       const key = assertProject(requestedProjectKey)
       if (typeof query !== 'string' || query.trim() === '' || query.length > 1000) throw new TypeError('query must contain 1-1000 characters')
       if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new TypeError('limit must be from 1 to 50')
       refresh(key)
+      const now = clock()
+      const timeIntent = recall ? recallTimeIntent(query, now) : null
+      const historical = timeIntent !== null && timeIntent.kind !== 'current'
+      const fetchLimit = recall ? 40 : limit
       const memoryHits = runtime.index.search(query, { projectKey: key, scopes: ['project', 'global'],
-        statuses: ['active'], now: clock(), limit })
-      const sourceHits = passages.search(query, { projectKey: key, now: clock(), limit })
+        statuses: historical ? ['active', 'superseded'] : ['active'], includeExpired: historical, now, limit: fetchLimit })
+      const sourceHits = historical ? [] : passages.search(query, { projectKey: key, now, limit: fetchLimit })
       const unique = new Map()
       for (const hit of [...memoryHits, ...sourceHits]) unique.set(hit.record.id, hit)
       const hits = []
-      for (const hit of [...unique.values()].sort((a, b) => b.score - a.score).slice(0, limit)) {
+      const slot = recall ? { ...recall.slot, query, timeIntent } : null
+      for (const hit of [...unique.values()].sort((a, b) => b.score - a.score)) {
+        if (hits.length >= limit) break
+        if (slot && (!isSafeRecallRecord(hit.record, key, timeIntent, now) ||
+            (hit.record.kind === 'source' ? !directPassageEvidence(slot, hit, recall.hasSubquestions)
+              : slotEvidence(slot, [hit], recall.hasSubquestions).length === 0))) continue
         const sourceRefs = filteredRefs(hit.record.sourceRefs, reports)
         if (hit.record.kind === 'source' && sourceRefs.length === 0) continue
         hits.push({ ...asResult(hit), sourceRefs })

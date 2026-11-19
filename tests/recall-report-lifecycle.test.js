@@ -84,6 +84,20 @@ function complete(handlers, session, text, sequence) {
     data: { reason: { kind: 'completed' } } })
 }
 
+test('a no-save turn can show live evidence without replacing the durable report', async t => {
+  const host = createHost(t)
+  const running = await host.start()
+  const question = '青岚快照每天几点运行？'
+  const ordinary = await running.prepare('session-a', host.cwdA, 'allowed', question)
+  complete(ordinary.handlers, ordinary.session, '每天 04:20。')
+  const reports = createRecallReportStore(host.dataRoot, host.profileIdentity)
+  assert.equal(reports.get('session-a', host.keyA)?.turnKey, 'id:allowed')
+  const denied = await running.prepare('session-a', host.cwdA, 'do-not-save', question + '不要保存这一轮问答。')
+  assert.ok(denied.result.messages.some(message => message.source?.kind === 'memory'))
+  complete(denied.handlers, denied.session, '每天 04:20。')
+  assert.equal(reports.get('session-a', host.keyA)?.turnKey, 'id:allowed')
+})
+
 test('completed reports survive restart per cold host session and remain project/profile bound', async t => {
   const host = createHost(t)
   const first = await host.start()

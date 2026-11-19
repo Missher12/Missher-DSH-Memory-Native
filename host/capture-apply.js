@@ -196,6 +196,7 @@ export class CaptureApplyCoordinator {
       // Forgetting is source-aware: a paraphrase from the same deleted source
       // must not be revived by a pending task. Other sources stay independent.
       if (evidence.refs.some((ref) => deletedSources.has(ref.sourceId) || !canReadSource(this.#store.root, ref.sourceId))) continue
+      const sourceGuard = { sourceIds: evidence.refs.map(ref => ref.sourceId) }
       // Observation time comes from the selected user evidence, not from the
       // recovery/processing clock. A missing time is conservative.
       const userTimes = evidence.refs
@@ -222,7 +223,7 @@ export class CaptureApplyCoordinator {
         }, { now, observedAt, autoApproveConfidence: this.#config.capture.autoApproveConfidence })
         if (historical.ok !== true) return false
         if (seen.has(historical.record.contentHash) || captureKeys.has(itemKey)) return true
-        this.#store.append(historical.record)
+        this.#store.append(historical.record, sourceGuard)
         this.#index.upsert(historical.record)
         seen.set(historical.record.contentHash, historical.record)
         captureKeys.add(itemKey)
@@ -270,7 +271,7 @@ export class CaptureApplyCoordinator {
           captureTaskId: task.id,
           quoted: item.quoted === true,
           observedAt,
-        }, scopes)
+        }, scopes, sourceGuard)
         if (updated !== undefined) {
           publish(updated)
           seen.set(updated.contentHash, updated)
@@ -293,7 +294,7 @@ export class CaptureApplyCoordinator {
           this.#logger?.warn?.(`[dsh-memory] supersede replacement rejected: ${built.reason}`)
           continue
         }
-        const committed = this.#store.replace(safeTarget.id, built.record)
+        const committed = this.#store.replace(safeTarget.id, built.record, sourceGuard)
         this.#index.upsert(committed.previous)
         publish(committed.record)
         seen.set(built.record.contentHash, built.record)
@@ -327,7 +328,7 @@ export class CaptureApplyCoordinator {
           rejected += 1
           continue
         }
-        const committed = this.#store.replace(similar.record.id, builtReplacement.record)
+        const committed = this.#store.replace(similar.record.id, builtReplacement.record, sourceGuard)
         this.#index.upsert(committed.previous)
         publish(committed.record)
         captureKeys.add(itemKey)
@@ -345,7 +346,7 @@ export class CaptureApplyCoordinator {
           captureKey: itemKey,
           captureTaskId: task.id,
           observedAt: Math.max(observedAt, similar.record.observedAt ?? 0),
-        }, scopes)
+        }, scopes, sourceGuard)
         if (merged !== undefined) {
           publish(merged)
           seen.set(merged.contentHash, merged)
@@ -354,7 +355,7 @@ export class CaptureApplyCoordinator {
           continue
         }
       }
-      this.#store.append(built.record)
+      this.#store.append(built.record, sourceGuard)
       publish(built.record)
       captureKeys.add(itemKey)
       seen.set(built.record.contentHash, built.record)

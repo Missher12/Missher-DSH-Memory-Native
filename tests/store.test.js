@@ -81,6 +81,20 @@ test('remove writes a tombstone that hides the record but survives reload', (t) 
   assert.equal(reopened.list('project', KEY, { includeDeleted: true }).length, 1)
 })
 
+test('a stale writer merges changes from the current revision and cannot undo a forget', t => {
+  const root = tempRoot(t)
+  const editor = makeStore(root), other = makeStore(root)
+  const { record } = writeFact(editor)
+  const scopes = [{ scope: 'project', projectKey: KEY }]
+  other.update(record.id, { tags: ['new-tag'] }, scopes)
+  const edited = editor.update(record.id, { content: '更新后的部署规则使用 Node 24。' }, scopes)
+  assert.deepEqual(edited.tags, ['new-tag'])
+  other.remove(record.id, scopes)
+  assert.equal(editor.update(record.id, { content: '一个忘记前打开的编辑框。' }, scopes), undefined)
+  assert.throws(() => editor.append({ ...edited, revision: edited.revision + 3 }), /deleted|forgotten/u)
+  assert.equal(makeStore(root).find(record.id, scopes).status, 'deleted')
+})
+
 test('compact rewrites one line per record', (t) => {
   const root = tempRoot(t)
   const store = makeStore(root)

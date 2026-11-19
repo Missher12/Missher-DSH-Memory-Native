@@ -1,5 +1,6 @@
 import { analyzeUserMessageControls } from './user-controls.js'
 import { tokenize } from './tokenize.js'
+import { looksSensitive } from './records.js'
 
 export const EXPLICIT_MEMORY_PATTERN = /记住|记一下|记下这个|别忘|以后都|从现在起|remember (?:this|that)|don'?t forget|from now on/iu
 const MAX_EVIDENCE_EXCERPT = 240
@@ -127,7 +128,8 @@ export function isDirectUserSource(source) {
 }
 
 export function isModelEvidenceSource(entry) {
-  return !memoryOptOut(entry.source) && (isDirectUserSource(entry.source) || entry.source.role === 'assistant')
+  return !looksSensitive(entry.source.text) && !memoryOptOut(entry.source) &&
+    (isDirectUserSource(entry.source) || entry.source.role === 'assistant')
 }
 
 export function sourceIdLine(entry) {

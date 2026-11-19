@@ -22,11 +22,14 @@ function injectedContext(projectKey, hits) {
 }
 
 function reportFor({ service, projectKey, turnKey, prompt, at }) {
-  const planned = recallQueryPlan(prompt).filter(item => item.role === 'subquestion')
-  const slots = (planned.length ? planned : recallQueryPlan(prompt).filter(item => item.role === 'root')).slice(0, 32)
-  const bySlot = slots.map(slot => ({ slot, hits: service.search(slot.query.slice(0, 1000), projectKey, 12).hits }))
+  const plan = recallQueryPlan(prompt)
+  const questionsPlanned = plan.filter(item => item.role === 'subquestion')
+  const hasSubquestions = questionsPlanned.length > 0
+  const slots = (hasSubquestions ? questionsPlanned : plan.filter(item => item.role === 'root')).slice(0, 32)
+  const bySlot = slots.map(slot => ({ slot,
+    hits: service.search(slot.query.slice(0, 1000), projectKey, 12, { slot, hasSubquestions }).hits }))
   const selected = new Map()
-  for (const { hits } of bySlot) if (hits[0]) selected.set(hits[0].id, hits[0])
+  for (const { hits } of bySlot) if (hits[0] && selected.size < 12) selected.set(hits[0].id, hits[0])
   for (const { hits } of bySlot) for (const hit of hits) {
     if (selected.has(hit.id)) continue
     if (selected.size >= 12) break
@@ -65,6 +68,8 @@ async function handleHook({ service, root, input, provider }) {
   if (event === 'UserPromptSubmit') {
     const prompt = typeof input.prompt === 'string' ? input.prompt : ''
     if (!prompt) return {}
+    const sensitive = looksSensitive(prompt)
+    const privateTurn = sensitive || analyzeUserMessageControls(prompt).noSaveDirective
     let saveError = null
     if (eventId !== null && isBareRemember(prompt)) {
       const previous = readLastUser(root, provider, input.session_id, projectKey)
@@ -87,7 +92,7 @@ async function handleHook({ service, root, input, provider }) {
             messageId: eventId, text: prompt, requestedProjectKey: projectKey }).sourceId
         } catch (error) { saveError = error.message }
       }
-      if (analyzeUserMessageControls(prompt).noSaveDirective || looksSensitive(prompt) || prompt.length > 20_000) {
+      if (privateTurn || prompt.length > 20_000) {
         clearLastUser(root, provider, input.session_id)
       } else {
         writeLastUser(root, { client: provider, sessionId: input.session_id, projectKey,
@@ -95,9 +100,10 @@ async function handleHook({ service, root, input, provider }) {
       }
     }
 
-    const prepared = eventId === null ? null : reportFor({ service, projectKey, turnKey, prompt, at: Date.now() })
-    const reportSaved = prepared ? service.reports.writePending(sessionId, projectKey, prepared.report) : false
-    const details = [reportSaved ? prepared.context : '', saveError ? `本轮明确记住未保存：${saveError}` : ''].filter(Boolean).join('\n')
+    const prepared = eventId === null || sensitive ? null : reportFor({ service, projectKey, turnKey, prompt, at: Date.now() })
+    const usable = prepared && (privateTurn ? !service.reports.isInvalidated(prepared.report)
+      : service.reports.writePending(sessionId, projectKey, prepared.report))
+    const details = [usable ? prepared.context : '', saveError ? `本轮明确记住未保存：${saveError}` : ''].filter(Boolean).join('\n')
     return details ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: details } } : {}
   }
 

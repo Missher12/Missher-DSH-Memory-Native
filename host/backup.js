@@ -4,6 +4,7 @@ import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdi
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { setImmediate as yieldToHost } from 'node:timers/promises'
 import { atomicWritePrivate, syncDirectory, writeAll } from './persistence.js'
+import { CAPTURE_DIR, noSaveSourceIds, readTurnIntakes, TURNS_FILE } from './capture-journal.js'
 
 const FORMAT = 'dsh-memory-backup'
 const DIRECTORIES = new Set(['global', 'projects', 'capture', 'knowledge', 'recall'])
@@ -30,11 +31,13 @@ function plainPath(root, relative) {
 
 async function inventory(root) {
   const result = []
+  const denied = noSaveSourceIds(readTurnIntakes(root).intakes)
   let scanned = 0
   const visit = async (dir, prefix) => {
     for (const name of readdirSync(dir).sort()) {
       if (name.endsWith('.tmp') || name.endsWith('.lock')) continue
       const path = join(dir, name), relative = prefix ? `${prefix}/${name}` : name
+      if (isDeniedSourceFile(relative, denied)) continue
       if (!prefix && !DIRECTORIES.has(name) && !allowedFile(name)) continue
       const stat = lstatSync(path, { bigint: true })
       if (stat.isSymbolicLink()) throw new Error('备份不能包含符号链接。')
@@ -46,6 +49,11 @@ async function inventory(root) {
   }
   await visit(root, '')
   return result
+}
+
+function isDeniedSourceFile(path, denied) {
+  const match = /^capture\/(?:sources|recall-grants\/[^/]+)\/(src_[a-f0-9]{24})\.json(?:\.gz)?$/u.exec(path)
+  return match !== null && denied.has(match[1])
 }
 
 /** Bounded-memory copy/hash with complete writes and same-file mutation checks. */
@@ -136,11 +144,14 @@ export async function restoreBackup(backup, target) {
   const destination = resolve(target)
   if (existsSync(destination)) throw new Error('恢复目标已存在；请选择新的空目录路径。')
   const manifest = await verifyBackup(backup), parent = dirname(destination)
+  const denied = manifest.files.some(file => file.path === `${CAPTURE_DIR}/${TURNS_FILE}`)
+    ? noSaveSourceIds(readTurnIntakes(join(backup, 'files')).intakes) : new Set()
+  const restorable = manifest.files.filter(file => !isDeniedSourceFile(file.path, denied))
   const stage = join(parent, `.memory-restore-${randomUUID()}.tmp`)
   mkdirSync(stage, { mode: 0o700 })
   let reserved = false
   try {
-    for (const file of manifest.files) {
+    for (const file of restorable) {
       const copied = await copyAndHash(plainPath(backup, `files/${file.path}`), join(stage, file.path))
       if (copied.bytes !== file.bytes || copied.sha256 !== file.sha256) throw new Error('恢复期间备份校验发生变化，未应用。')
     }
@@ -154,7 +165,7 @@ export async function restoreBackup(backup, target) {
       renameSync(stage, destination); reserved = false
     }
     syncDirectory(parent)
-    return { files: manifest.files.length, bytes: manifest.files.reduce((n, f) => n + f.bytes, 0) }
+    return { files: restorable.length, bytes: restorable.reduce((n, f) => n + f.bytes, 0) }
   } catch (error) {
     rmSync(stage, { recursive: true, force: true })
     if (reserved) { try { rmdirSync(destination) } catch {} }
