@@ -13,6 +13,8 @@
       const [topic, setTopic] = React.useState('')
       const [queryInput, setQueryInput] = React.useState('')
       const [query, setQuery] = React.useState('')
+      const [filtersOpen, setFiltersOpen] = React.useState(false)
+      const filterId = React.useId()
       const [page, setPage] = React.useState(0)
       const [pageSize, setPageSize] = React.useState(10)
       const [view, setView] = React.useState('activity')
@@ -446,10 +448,11 @@
         return h('div', { className: 'dsh-memory-root' }, pageTop,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
           stats ? h('div', { className: 'dsh-memory-activity-view' },
-            h(ContextUsage, { sessionId,
-              sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
-              enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale }),
-            h(MemoryTotals, { stats, t, locale }),
+            h('div', { className: 'dsh-memory-activity-overview' },
+              h(MemoryTotals, { stats, t, locale }),
+              h(ContextUsage, { sessionId,
+                sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
+                enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale })),
             h(ActivityTrends, { stats, activity: data?.activity, t, locale }),
             h('section', { className: 'dsh-memory-activity-operations' },
               h('h3', { className: 'dsh-memory-section-title' }, t('activity.operations')),
@@ -562,19 +565,49 @@
 
       const topics = Object.keys(topicCounts).filter(key => key !== '__none__').sort()
       const filterCount = Number(status !== '') + Number(topic !== '')
+      const showSelection = error === '' && items.length > 0 && selected.length > 0
+      const selectionToolbar = h('div', { className: 'dsh-memory-bulk', 'data-inactive': !showSelection },
+        h('span', { className: 'dsh-memory-bulk-count', role: 'status' }, t('bulk.selected', { count: String(selected.length) })),
+        h('div', { className: 'dsh-memory-bulk-actions' },
+          h('button', {
+            type: 'button', className: 'dsh-memory-button',
+            disabled: items.every(record => selected.includes(record.id)),
+            onClick: () => setSelected(items.map(record => record.id)),
+          }, t('bulk.selectAll')),
+          status === 'deleted'
+            ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('restore') }, t('bulk.restore'))
+            : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('archive') }, t('bulk.archive')),
+          status === 'deleted'
+            ? null
+            : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: event => {
+            const firstSelected = event.currentTarget.closest('.dsh-memory-root')
+              ?.querySelector('.dsh-memory-row[data-selected="true"] .dsh-memory-select-box')
+            setSelected([])
+            firstSelected?.focus({ preventScroll: true })
+          } }, t('bulk.clear')),
+          status === 'deleted' ? null : h('div', { className: 'dsh-memory-danger-actions' },
+            h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete')))))
 
       return h('div', { className: 'dsh-memory-root' },
         pageTop,
         h('div', { className: 'dsh-memory-toolbar' },
           h('div', { className: 'dsh-memory-search-row' },
-            h('input', {
-              className: 'dsh-memory-input',
-              type: 'search',
-              value: queryInput,
-              placeholder: t('filter.searchPlaceholder'),
-              onChange: event => setQueryInput(event.target.value),
-              'aria-label': t('filter.search'),
-            }),
+            h('div', { className: 'dsh-memory-search' },
+              h('span', { className: 'dsh-memory-search-icon', 'aria-hidden': true }),
+              h('input', {
+                className: 'dsh-memory-input',
+                type: 'search',
+                value: queryInput,
+                placeholder: t('filter.searchPlaceholder'),
+                onChange: event => setQueryInput(event.target.value),
+                'aria-label': t('filter.search'),
+              })),
+            h('button', {
+              type: 'button', className: 'dsh-memory-button dsh-memory-filter-toggle',
+              'aria-expanded': filtersOpen, 'aria-controls': filterId,
+              onClick: () => setFiltersOpen(!filtersOpen),
+            }, t('filter.more'), filterCount > 0 ? ' · ' + filterCount : ''),
             h('button', {
               type: 'button',
               className: 'dsh-memory-button',
@@ -618,8 +651,7 @@
               'aria-label': t('filter.project'),
               title: currentProjectKey ?? '',
             }, projectOptions.map(key => h('option', { key, value: key, title: key }, key)))) : null),
-          h('details', { className: 'dsh-memory-filter-details dsh-memory-disclosure' },
-            h('summary', { className: 'dsh-memory-disclosure-head' }, t('filter.more'), filterCount > 0 ? ' · ' + filterCount : ''),
+          h('div', { className: 'dsh-memory-filter-details', id: filterId, hidden: !filtersOpen },
             h(Field, { label: t('filter.status') },
             h(Select, {
               className: 'dsh-memory-select',
@@ -651,7 +683,8 @@
             className: 'dsh-memory-button',
             onClick: () => load(),
           }, t('list.error.retry')))),
-        data === null ? null : h('div', { className: 'dsh-memory-list-head' },
+        data === null ? null : h('div', { className: 'dsh-memory-list-context' },
+          h('div', { className: 'dsh-memory-list-head', 'data-inactive': showSelection },
           h('div', { className: 'dsh-memory-kind-tabs', role: 'tablist', 'aria-label': t('filter.kind') },
             h('button', {
               type: 'button',
@@ -678,6 +711,7 @@
             }, t('kind.' + value), h('span', { className: 'dsh-memory-kind-count' }, String(kindCounts[value] ?? 0))))),
           kind === '' && total === kindCountsTotal ? null
             : h('span', { className: 'dsh-memory-list-total' }, t('pager.total', { total: String(total) }))),
+          selectionToolbar),
         loading && data === null ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('list.loading')) : null,
         error !== '' || (loading && data === null) ? null : items.length === 0
           ? h('div', { className: 'dsh-memory-empty' },
@@ -686,26 +720,7 @@
               ? null
               : h('p', { className: 'dsh-memory-empty-body' }, t('list.empty.body')),
             showMissingProject ? h('p', { className: 'dsh-memory-empty-body' }, t('error.missingProject')) : null)
-          : [
-            selected.length === 0 ? null : h('div', { key: 'bulk', className: 'dsh-memory-bulk' },
-              h('span', null, t('bulk.selected', { count: String(selected.length) })),
-              h('div', { className: 'dsh-memory-bulk-actions' },
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-memory-button',
-                  onClick: () => setSelected(selected.length === items.length ? [] : items.map((record) => record.id)),
-                }, t('bulk.selectAll')),
-                status === 'deleted'
-                  ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('restore') }, t('bulk.restore'))
-                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('archive') }, t('bulk.archive')),
-                status === 'deleted'
-                  ? null
-                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
-                h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setSelected([]) }, t('bulk.clear')),
-                status === 'deleted'
-                  ? null
-                  : h('div', { className: 'dsh-memory-danger-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete'))))),
-            h('ul', { key: 'list', className: 'dsh-memory-list' },
+          : h('ul', { className: 'dsh-memory-list' },
             items.map((record) => {
               const deleted = record.status === 'deleted'
               const isConfirming = (deleted ? purgingId : confirmingId) === record.id
@@ -729,79 +744,80 @@
                   })),
                   h('span', { className: 'dsh-memory-kind', 'data-kind': record.kind }, t('kind.' + record.kind)),
                   h('span', { className: 'dsh-memory-status-pill', 'data-status': record.status }, t('status.' + record.status)),
-                  record.pinned === true ? h('span', { className: 'dsh-memory-pin' }, t('row.pinned')) : null,
-                  h('span', { className: 'dsh-memory-row-meta' },
-                    h('span', null, t('row.confidence', { value: Number(record.confidence).toFixed(2) })),
-                    h('span', null, t('row.updated', { value: formatTime(record.updatedAt, locale) })))),
+                  record.pinned === true ? h('span', { className: 'dsh-memory-pin' }, t('row.pinned')) : null),
                 h('p', { className: 'dsh-memory-content' }, record.content),
+                Array.isArray(record.tags) && record.tags.length > 0
+                  ? h('ul', { className: 'dsh-memory-tags' }, record.tags.map((tag, index) => h('li', { key: tag + ':' + index, className: 'dsh-memory-tag' }, tag)))
+                  : null,
                 h('div', { className: 'dsh-memory-row-foot' },
-                  Array.isArray(record.tags) && record.tags.length > 0
-                    ? h('ul', { className: 'dsh-memory-tags' }, record.tags.map((tag, index) => h('li', { key: tag + ':' + index, className: 'dsh-memory-tag' }, tag)))
-                    : null,
-                  h('div', { className: 'dsh-memory-row-actions' },
-                    deleted
-                    ? [
-                      h('button', {
-                        key: 'restore',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => restore(record),
-                        disabled: actionBusy,
-                      }, t('actions.restore')),
-                      h('button', {
-                        key: 'history',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => openHistory(record),
-                        disabled: actionBusy,
-                      }, t('actions.history')),
-                    ]
-                    : [
-                      h('button', {
-                        key: 'edit',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => {
-                          setEditError('')
-                          setEditing(record)
-                        },
-                        disabled: actionBusy,
-                      }, t('actions.edit')),
-                      record.status === 'candidate'
-                        ? h('button', {
-                          key: 'approve',
-                          type: 'button',
-                          className: 'dsh-memory-button dsh-memory-button-primary',
-                          onClick: () => approve(record),
-                          disabled: actionBusy,
-                        }, t('actions.approve'))
-                        : null,
-                      record.status !== 'archived' && record.status !== 'superseded'
-                        ? h('button', {
-                          key: 'archive',
+                  h('span', { className: 'dsh-memory-row-meta' },
+                    h('span', null, t('row.updated', { value: formatTime(record.updatedAt, locale) })),
+                    h('span', null, t('row.confidence', { value: Number(record.confidence).toFixed(2) }))),
+                  h('div', { className: 'dsh-memory-row-controls' },
+                    h('div', { className: 'dsh-memory-row-actions' },
+                      deleted
+                      ? [
+                        h('button', {
+                          key: 'restore',
                           type: 'button',
                           className: 'dsh-memory-button',
-                          onClick: () => archive(record),
+                          onClick: () => restore(record),
                           disabled: actionBusy,
-                        }, t('actions.archive'))
-                        : null,
-                      h('button', {
-                        key: 'history',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => openHistory(record),
-                        disabled: actionBusy,
-                      }, t('actions.history')),
-                    ]),
-                  h('div', { className: 'dsh-memory-row-danger' }, h('button', {
-                    type: 'button',
-                    className: 'dsh-memory-button',
-                    'data-danger': 'true',
-                    'data-confirming': isConfirming,
-                    onClick: deleteRecord,
-                    disabled: actionBusy,
-                  }, t(deleteLabel)))))
-            }))],
+                        }, t('actions.restore')),
+                        h('button', {
+                          key: 'history',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => openHistory(record),
+                          disabled: actionBusy,
+                        }, t('actions.history')),
+                      ]
+                      : [
+                        h('button', {
+                          key: 'edit',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => {
+                            setEditError('')
+                            setEditing(record)
+                          },
+                          disabled: actionBusy,
+                        }, t('actions.edit')),
+                        record.status === 'candidate'
+                          ? h('button', {
+                            key: 'approve',
+                            type: 'button',
+                            className: 'dsh-memory-button dsh-memory-button-primary',
+                            onClick: () => approve(record),
+                            disabled: actionBusy,
+                          }, t('actions.approve'))
+                          : null,
+                        record.status !== 'archived' && record.status !== 'superseded'
+                          ? h('button', {
+                            key: 'archive',
+                            type: 'button',
+                            className: 'dsh-memory-button',
+                            onClick: () => archive(record),
+                            disabled: actionBusy,
+                          }, t('actions.archive'))
+                          : null,
+                        h('button', {
+                          key: 'history',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => openHistory(record),
+                          disabled: actionBusy,
+                        }, t('actions.history')),
+                      ]),
+                    h('div', { className: 'dsh-memory-row-danger' }, h('button', {
+                      type: 'button',
+                      className: 'dsh-memory-button',
+                      'data-danger': 'true',
+                      'data-confirming': isConfirming,
+                      onClick: deleteRecord,
+                      disabled: actionBusy,
+                    }, t(deleteLabel))))))
+            })),
         data === null || total === 0 ? null : h('div', { className: 'dsh-memory-pager' },
           h('span', null, t('pager.summary', { page: String(page + 1), pages: String(pageCount), total: String(total) })),
           h('div', { className: 'dsh-memory-pager-actions' },

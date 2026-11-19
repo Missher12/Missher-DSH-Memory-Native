@@ -292,7 +292,7 @@ window.__ModuleLoader__.load({
         'notice.bulkDone': '{count} memories processed',
         'bulk.selected': '{count} selected',
         'bulk.selectAll': 'Select all on page',
-        'bulk.clear': 'Clear',
+        'bulk.clear': 'Deselect',
         'bulk.archive': 'Archive',
         'bulk.delete': 'Delete',
         'bulk.restore': 'Restore',
@@ -759,7 +759,7 @@ window.__ModuleLoader__.load({
         'notice.bulkDone': '\u5df2\u5904\u7406 {count} \u6761',
         'bulk.selected': '\u5df2\u9009 {count} \u6761',
         'bulk.selectAll': '\u5168\u9009\u672c\u9875',
-        'bulk.clear': '\u6e05\u9664',
+        'bulk.clear': '取消选择',
         'bulk.archive': '\u5f52\u6863',
         'bulk.delete': '\u5220\u9664',
         'bulk.restore': '\u6062\u590d',
@@ -913,6 +913,7 @@ window.__ModuleLoader__.load({
       --memory-text: var(--dsw-alias-label-primary);
       --memory-muted: var(--dsw-alias-label-secondary);
       --memory-line: var(--dsw-alias-border-l2, rgba(127, 127, 127, .2));
+      --memory-rule: color-mix(in srgb, var(--memory-line) 68%, transparent);
       --memory-fill: var(--dsw-alias-bg-layer-1);
       --memory-hover: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, .12));
       --memory-accent: var(--dsw-alias-state-business-primary, #2f6df6);
@@ -949,7 +950,7 @@ window.__ModuleLoader__.load({
 
     .dsh-memory-navigation { display: grid; gap: 8px; min-width: 0; }
     .dsh-memory-view-tabs, .dsh-memory-subnav { display: flex; flex-wrap: wrap; align-items: stretch; min-width: 0; }
-    .dsh-memory-view-tabs { gap: 4px 20px; border-bottom: 1px solid var(--memory-line); }
+    .dsh-memory-view-tabs { gap: 4px 24px; border-bottom: 1px solid var(--memory-rule); }
     .dsh-memory-subnav { gap: 4px; }
     .dsh-memory-view-tab, .dsh-memory-kind-tab, .dsh-memory-tabs button {
       min-height: var(--memory-control-height); border: 0; background: transparent; color: var(--memory-muted);
@@ -1047,8 +1048,10 @@ window.__ModuleLoader__.load({
     .dsh-memory-disclosure-head:hover { color: var(--memory-text); }
 
     /* Activity overview */
-    .dsh-memory-activity-view { display: grid; gap: 18px; min-width: 0; }
+    .dsh-memory-activity-view { display: grid; gap: 20px; min-width: 0; }
+    .dsh-memory-activity-overview { display: grid; gap: 13px; }
     .dsh-memory-context-usage { display: grid; gap: 6px; min-width: 0; }
+    .dsh-memory-context-usage .dsh-memory-section-title { font-size: 13px; font-weight: 500; }
     .dsh-memory-context-usage-head, .dsh-memory-activity-head, .dsh-memory-trend-head {
       display: flex; align-items: baseline; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap;
     }
@@ -1058,13 +1061,20 @@ window.__ModuleLoader__.load({
     .dsh-memory-context-usage-track { height: 5px; border-radius: 3px; overflow: hidden; background: var(--memory-line); }
     .dsh-memory-context-usage-track > span { display: block; height: 100%; border-radius: inherit; background: var(--memory-accent); }
     .dsh-memory-activity-totals {
-      display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px;
-      margin: 0; padding: 10px 0; border-block: 1px solid var(--memory-line);
+      display: grid; grid-auto-flow: column; grid-template-columns: minmax(0, 1.45fr);
+      grid-auto-columns: minmax(0, 1fr); gap: 8px 12px;
+      margin: 0; padding: 3px 0;
     }
+    .dsh-memory-activity-totals > div { display: flex; flex-direction: column-reverse; justify-content: flex-start; min-width: 0; }
+    .dsh-memory-activity-totals > div + div { padding-left: 12px; border-left: 1px solid var(--memory-rule); }
     .dsh-memory-activity-totals dt { color: var(--memory-muted); font-size: 12px; overflow-wrap: anywhere; }
-    .dsh-memory-activity-totals dd { margin: 0; font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; }
-    .dsh-memory-trends-section > summary { min-height: 28px; }
-    .dsh-memory-trends-body { display: grid; gap: 16px; padding-top: 8px; min-width: 0; }
+    .dsh-memory-activity-totals dd {
+      margin: 0; font-size: 18px; line-height: 1.24; font-weight: 550; font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+    }
+    .dsh-memory-activity-totals [data-metric="total"] dd { font-size: 29px; font-weight: 600; letter-spacing: -.025em; }
+    .dsh-memory-trends-section { padding-top: 4px; border-top: 1px solid var(--memory-line); }
+    .dsh-memory-trends-section > summary { min-height: 32px; }
+    .dsh-memory-trends-body { display: grid; gap: 15px; padding-top: 5px; min-width: 0; }
     .dsh-memory-activity { min-width: 0; }
     .dsh-memory-activity-title, .dsh-memory-tabs, .dsh-memory-palette { display: flex; align-items: center; gap: 5px; }
     .dsh-memory-activity-title { min-width: 0; }
@@ -1075,7 +1085,8 @@ window.__ModuleLoader__.load({
     }
     .dsh-memory-palette { position: relative; }
     .dsh-memory-palette-trigger {
-      display: flex; align-items: center; gap: 4px; border: 0; border-radius: 6px; background: transparent;
+      display: flex; align-items: center; justify-content: center; width: 27px;
+      border: 0; border-radius: 6px; background: transparent;
       font-family: inherit; color: var(--memory-muted); cursor: pointer;
     }
     .dsh-memory-palette-trigger:hover, .dsh-memory-palette-trigger[aria-expanded="true"] { background: var(--memory-hover); }
@@ -1093,6 +1104,10 @@ window.__ModuleLoader__.load({
     .dsh-memory-palette-dot, .dsh-memory-palette-theme { width: 12px; height: 12px; border-radius: 3px; }
     .dsh-memory-color-input { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; }
     .dsh-memory-heatmap-stage { position: relative; margin-top: 8px; min-width: 0; }
+    .dsh-memory-heat-empty {
+      display: grid; min-height: 44px; margin-top: 6px; align-items: center;
+      padding: 0 10px; border-radius: 6px; background: color-mix(in srgb, var(--memory-hover) 44%, transparent);
+    }
     .dsh-memory-heatmap, .dsh-memory-heat-months {
       display: grid; grid-template-columns: repeat(53, minmax(0, 1fr)); gap: 3px;
     }
@@ -1116,14 +1131,15 @@ window.__ModuleLoader__.load({
       background: var(--dsw-alias-bg-overlay, var(--memory-fill)); color: var(--memory-text);
       box-shadow: 0 4px 16px #0002; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
     }
-    .dsh-memory-trend { display: grid; gap: 6px; min-width: 0; }
+    .dsh-memory-trend { display: grid; gap: 6px; min-width: 0; padding-top: 10px; border-top: 1px solid var(--memory-rule); }
+    .dsh-memory-trend-total { color: var(--memory-text); }
     .dsh-memory-trend-chart {
       display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; height: 82px; min-width: 0;
     }
     .dsh-memory-trend-col { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
     .dsh-memory-trend-bars {
       display: flex; flex: 1; align-items: flex-end; justify-content: center; gap: 3px; width: 100%;
-      min-height: 0; border-bottom: 1px solid var(--memory-line);
+      min-height: 0; border-bottom: 1px solid var(--memory-rule);
     }
     .dsh-memory-trend-bar { flex: 1; max-width: 12px; border-radius: 3px 3px 0 0; background: var(--memory-accent); }
     .dsh-memory-trend-bar[data-kind="extract"], .dsh-memory-trend-legend i[data-kind="extract"] { opacity: .48; }
@@ -1141,7 +1157,7 @@ window.__ModuleLoader__.load({
     .dsh-memory-activity-operations > h3 { margin-bottom: 8px; }
     .dsh-memory-activity-line {
       display: flex; align-items: center; gap: 6px 10px; min-height: 40px; box-sizing: border-box;
-      padding: 4px 0; border-top: 1px solid var(--memory-line); overflow-wrap: anywhere;
+      padding: 4px 0; border-top: 1px solid var(--memory-rule); overflow-wrap: anywhere;
     }
     .dsh-memory-activity-label { margin-right: auto; font-weight: 500; min-width: 0; }
     .dsh-memory-activity-line .dsh-memory-muted, .dsh-memory-activity-warning { text-align: right; }
@@ -1157,18 +1173,32 @@ window.__ModuleLoader__.load({
     .dsh-memory-activity-details progress { max-width: 100%; accent-color: var(--memory-accent); }
 
     /* Memory records */
-    .dsh-memory-toolbar { display: grid; gap: 6px; min-width: 0; }
+    .dsh-memory-toolbar { display: grid; gap: 8px; min-width: 0; }
     .dsh-memory-search-row, .dsh-memory-brief-tools {
       display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px;
     }
+    .dsh-memory-search-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+    .dsh-memory-search { position: relative; min-width: 0; }
     .dsh-memory-search-row input { width: 100%; }
+    .dsh-memory-search-icon {
+      position: absolute; z-index: 1; top: 10px; left: 11px; box-sizing: border-box; width: 10px; height: 10px;
+      border: 1px solid currentColor; border-radius: 50%; color: var(--memory-muted); pointer-events: none;
+    }
+    .dsh-memory-search-icon::after {
+      content: ""; position: absolute; top: 7px; left: 7px; width: 5px; height: 1px;
+      background: currentColor; transform: rotate(45deg); transform-origin: left center;
+    }
+    .dsh-memory-filter-toggle[aria-expanded="true"] { background: var(--memory-hover); }
     .dsh-memory-scope {
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px;
     }
     .dsh-memory-scope .dsh-memory-field { grid-template-columns: auto minmax(0, 1fr); }
-    .dsh-memory-filter-details > summary { min-height: 30px; padding-inline: 1px; color: var(--memory-muted); }
+    .dsh-memory-filter-details { padding: 4px 0; border-top: 1px solid var(--memory-rule); }
     .dsh-memory-filter-details .dsh-memory-field { padding: 4px 0; }
     .dsh-memory-filter-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
+    .dsh-memory-list-context { display: grid; grid-template-columns: minmax(0, 1fr); }
+    .dsh-memory-list-context > * { grid-area: 1 / 1; }
+    .dsh-memory-list-context > [data-inactive="true"] { visibility: hidden; }
     .dsh-memory-list-head {
       display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; min-width: 0;
     }
@@ -1179,7 +1209,7 @@ window.__ModuleLoader__.load({
       display: grid; margin: 0; padding: 0; list-style: none;
     }
     .dsh-memory-row {
-      display: grid; gap: 6px; min-width: 0; padding: 11px 0; border-top: 1px solid var(--memory-line);
+      display: grid; gap: 5px; min-width: 0; padding: 10px 0 8px; border-top: 1px solid var(--memory-rule);
     }
     .dsh-memory-row[data-selected="true"] { background: color-mix(in srgb, var(--memory-accent) 5%, transparent); }
     .dsh-memory-row-head, .dsh-memory-history-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
@@ -1199,26 +1229,37 @@ window.__ModuleLoader__.load({
     .dsh-memory-row-meta > span + span::before { content: "·"; margin-right: 8px; }
     .dsh-memory-content, .dsh-memory-row-foot { margin: 0 0 0 22px; min-width: 0; }
     .dsh-memory-content { white-space: pre-wrap; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
-    .dsh-memory-row-foot, .dsh-memory-tags, .dsh-memory-row-actions, .dsh-memory-bulk-actions {
+    .dsh-memory-row-foot, .dsh-memory-tags, .dsh-memory-row-actions, .dsh-memory-row-controls, .dsh-memory-bulk-actions {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
     }
-    .dsh-memory-tags { margin: 0; padding: 0; list-style: none; min-width: 0; }
+    .dsh-memory-row-foot { column-gap: 8px; }
+    .dsh-memory-row-foot .dsh-memory-row-meta { margin-left: 0; }
+    .dsh-memory-tags { margin: 0 0 0 22px; padding: 0; list-style: none; min-width: 0; }
     .dsh-memory-tag {
       max-width: 100%; padding: 1px 6px; border-radius: 4px; background: var(--memory-hover);
       color: var(--memory-muted); font-size: 11px; overflow-wrap: anywhere;
     }
-    .dsh-memory-row-actions { margin-left: auto; }
-    .dsh-memory-row-danger { display: flex; padding-left: 4px; border-left: 1px solid var(--memory-line); }
+    .dsh-memory-row-controls { margin-left: auto; justify-content: flex-end; }
+    .dsh-memory-row-danger { display: flex; padding-left: 3px; border-left: 1px solid var(--memory-line); }
     .dsh-memory-row-foot .dsh-memory-button {
       min-height: 28px; padding: 3px 6px; border: 0; border-radius: 5px; background: transparent;
     }
     .dsh-memory-row-foot .dsh-memory-button-primary { color: var(--memory-text); font-weight: 600; }
+    .dsh-memory-row-danger .dsh-memory-button:not(:hover):not(:focus-visible):not([data-confirming="true"]) {
+      color: var(--memory-muted);
+    }
     .dsh-memory-row-foot .dsh-memory-button[data-danger="true"][data-confirming="true"] {
       background: color-mix(in srgb, var(--memory-danger) 10%, transparent);
     }
     .dsh-memory-bulk {
-      display: grid; gap: 7px; padding: 9px 0; border-block: 1px solid var(--memory-line);
-      color: var(--memory-muted); font-size: 12px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px;
+      color: var(--memory-text); font-size: 12px; min-width: 0;
+    }
+    .dsh-memory-bulk-count { min-width: 7ch; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .dsh-memory-bulk-actions { margin-left: auto; justify-content: flex-end; }
+    .dsh-memory-bulk-actions .dsh-memory-button { min-height: 28px; padding-inline: 7px; }
+    .dsh-memory-bulk-actions .dsh-memory-danger-actions {
+      flex-basis: auto; padding: 0 0 0 5px; border: 0; border-left: 1px solid var(--memory-line);
     }
     .dsh-memory-danger-actions {
       display: flex; justify-content: flex-end; flex-basis: 100%; padding-top: 7px; border-top: 1px solid var(--memory-line);
@@ -1237,7 +1278,7 @@ window.__ModuleLoader__.load({
     }
     .dsh-memory-brief { gap: 18px; }
     .dsh-memory-brief-tools .dsh-memory-field { grid-template-columns: auto minmax(0, 1fr); }
-    .dsh-memory-history-item, .dsh-memory-profile-item { padding: 9px 0; border-top: 1px solid var(--memory-line); min-width: 0; }
+    .dsh-memory-history-item, .dsh-memory-profile-item { padding: 9px 0; border-top: 1px solid var(--memory-rule); min-width: 0; }
     .dsh-memory-history-content { margin: 0; color: var(--memory-text); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .dsh-memory-history-foot, .dsh-memory-brief-meta {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0;
@@ -1284,10 +1325,10 @@ window.__ModuleLoader__.load({
     .dsh-memory-library-file { margin: 0; overflow-wrap: anywhere; }
 
     /* Settings rows share a label column and a single right edge. */
-    .dsh-memory-settings { display: grid; gap: 22px; min-width: 0; }
+    .dsh-memory-settings { display: grid; gap: 25px; min-width: 0; }
     .dsh-memory-settings-group { min-width: 0; }
-    .dsh-memory-settings-group-title { margin-bottom: 7px; }
-    .dsh-memory-settings-row { min-height: 34px; padding: 8px 0; border-top: 1px solid var(--memory-line); }
+    .dsh-memory-settings-group-title { margin-bottom: 8px; }
+    .dsh-memory-settings-row { min-height: 34px; padding: 9px 0; border-top: 1px solid var(--memory-rule); }
     .dsh-memory-settings-copy { display: grid; gap: 2px; min-width: 0; }
     .dsh-memory-settings-control, .dsh-memory-settings-buttons {
       display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; min-width: 0;
@@ -1358,10 +1399,10 @@ window.__ModuleLoader__.load({
 
     @container (max-width: 430px) {
       .dsh-memory-view-tabs { gap: 2px 14px; }
-      .dsh-memory-row .dsh-memory-row-meta { flex-basis: 100%; margin-left: 22px; }
-      .dsh-memory-row-foot > .dsh-memory-tags { flex-basis: 100%; }
-      .dsh-memory-row-actions { margin-left: 0; }
-      .dsh-memory-activity-totals dd { font-size: 18px; }
+      .dsh-memory-row-foot { row-gap: 2px; }
+      .dsh-memory-activity-totals { column-gap: 8px; }
+      .dsh-memory-activity-totals > div + div { padding-left: 8px; }
+      .dsh-memory-activity-totals [data-metric="total"] dd { font-size: 25px; }
       .dsh-memory-heatmap, .dsh-memory-heat-months { gap: 2px; }
       .dsh-memory-heat-months { font-size: 9px; }
       .dsh-memory-settings-row { gap: 4px 9px; }
@@ -1710,7 +1751,6 @@ window.__ModuleLoader__.load({
       return h('label', { className: 'dsh-memory-field' },
         h('span', { className: 'dsh-memory-field-copy' }, label, hint), props.children)
     }
-    const DAY_MS = 86_400_000
     const HEAT_WEEKS = 53
     const PALETTE_KEY = 'dsh.memory.particle-color.v1'
     const PALETTE_PRESETS = [
@@ -1782,9 +1822,8 @@ window.__ModuleLoader__.load({
     function buildHeatWeeks(counts, mode, t) {
       const today = new Date()
       today.setHours(0, 0, 0, 0)
-      const first = new Date(today.getTime() - (HEAT_WEEKS * 7 - 1) * DAY_MS)
-      first.setHours(0, 0, 0, 0)
-      first.setDate(first.getDate() - first.getDay())
+      const first = new Date(today)
+      first.setDate(today.getDate() - today.getDay() - (HEAT_WEEKS - 1) * 7)
       const daily = []
       for (let week = 0; week < HEAT_WEEKS; week += 1) {
         const days = []
@@ -1819,7 +1858,7 @@ window.__ModuleLoader__.load({
           const end = present[present.length - 1] === undefined ? '' : present[present.length - 1].key
           return {
             tip: value <= 0 ? null : t('activity.weeklyTooltip', { start, end, count: compactNumber(value) }),
-            cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= 7 - filled ? level : 0 })),
+            cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= present.length - filled ? level : 0 })),
           }
         })
       }
@@ -1838,7 +1877,7 @@ window.__ModuleLoader__.load({
         const end = present[present.length - 1] === undefined ? '' : present[present.length - 1].key
         return {
           tip: value <= 0 ? null : t('activity.cumulativeTooltip', { end, count: compactNumber(value) }),
-          cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= 7 - filled ? level : 0 })),
+          cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= present.length - filled ? level : 0 })),
         }
       })
     }
@@ -1847,7 +1886,7 @@ window.__ModuleLoader__.load({
       const counts = ['total', 'active', 'candidate', 'projects']
       return h('dl', { className: 'dsh-memory-activity-totals' },
         counts.filter(key => key !== 'candidate' || stats.candidate > 0).map(key =>
-          h('div', { key },
+          h('div', { key, 'data-metric': key },
             h('dt', null, t('stats.' + key)),
             h('dd', null, stats[key].toLocaleString(locale || undefined)))))
     }
@@ -1891,14 +1930,15 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: 'dsh-memory-palette-trigger',
+          'aria-label': t('activity.colorMenu'),
           'aria-expanded': open,
           'aria-haspopup': 'listbox',
           onClick: () => setOpen((value) => !value),
           title: t('activity.colorMenu'),
         },
-        h('span', { className: 'dsh-memory-palette-swatch', style: { '--dsh-memory-swatch': color === '' ? 'var(--dsw-alias-state-business-primary, #2f6df6)' : color } },
-          h('i', null), h('i', null), h('i', null)),
-        t('activity.colorMenu')),
+        h('span', { className: 'dsh-memory-palette-swatch', 'aria-hidden': true,
+          style: { '--dsh-memory-swatch': color === '' ? 'var(--memory-accent)' : color } },
+          h('i', null), h('i', null), h('i', null))),
         open ? h('div', { className: 'dsh-memory-palette-menu', role: 'listbox', 'aria-label': t('activity.colorMenu') },
           PALETTE_PRESETS.map((preset) => h('button', {
             key: preset.key,
@@ -1937,7 +1977,7 @@ window.__ModuleLoader__.load({
         if (!Number.isFinite(count) || count <= 0) continue
         counts.set(day.date, count)
       }
-      const weeks = buildHeatWeeks(counts, mode, t)
+      const weeks = counts.size > 0 ? buildHeatWeeks(counts, mode, t) : []
       const labels = []
       let lastMonth = ''
       for (let week = 0; week < weeks.length; week += 1) {
@@ -1982,22 +2022,24 @@ window.__ModuleLoader__.load({
               'aria-selected': mode === item,
               onClick: () => setMode(item),
             }, t('activity.mode.' + item))))),
-        h('div', { className: 'dsh-memory-heatmap-stage', ref: stageRef },
-          h('div', { className: 'dsh-memory-heatmap' },
-            weeks.map((column, week) => column.cells.map((cell, row) => (cell === null
-              ? h('span', { key: week + ':' + row, className: 'dsh-memory-heat-cell', 'data-level': '0', 'data-future': 'true' })
-              : h('span', {
-                key: week + ':' + row,
-                className: 'dsh-memory-heat-cell',
-                'data-level': String(cell.level),
-                onMouseEnter: (event) => showTooltip(event, column, cell),
-                onMouseLeave: () => setTooltip(null),
-                'aria-label': t('activity.cell', { date: cell.key, count: String(cell.count) }),
-              }))))),
-          tooltip === null ? null : h('div', { className: 'dsh-memory-heat-tooltip', style: { left: tooltip.x, top: tooltip.top } }, tooltip.text)),
-        h('div', { className: 'dsh-memory-heat-months' },
-          labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text))),
-        counts.size === 0 ? h('p', { className: 'dsh-memory-help' }, t('activity.sparseHint')) : null)
+        weeks.length === 0
+          ? h('p', { className: 'dsh-memory-heat-empty dsh-memory-help' }, t('activity.sparseHint'))
+          : h(React.Fragment, null,
+            h('div', { className: 'dsh-memory-heatmap-stage', ref: stageRef },
+              h('div', { className: 'dsh-memory-heatmap' },
+                weeks.map((column, week) => column.cells.map((cell, row) => (cell === null
+                  ? h('span', { key: week + ':' + row, className: 'dsh-memory-heat-cell', 'data-level': '0', 'data-future': 'true' })
+                  : h('span', {
+                    key: week + ':' + row,
+                    className: 'dsh-memory-heat-cell',
+                    'data-level': String(cell.level),
+                    onMouseEnter: (event) => showTooltip(event, column, cell),
+                    onMouseLeave: () => setTooltip(null),
+                    'aria-label': t('activity.cell', { date: cell.key, count: String(cell.count) }),
+                  }))))),
+              tooltip === null ? null : h('div', { className: 'dsh-memory-heat-tooltip', style: { left: tooltip.x, top: tooltip.top } }, tooltip.text)),
+            h('div', { className: 'dsh-memory-heat-months' },
+              labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text)))))
     }
 
     function ContextUsage({ sessionId, sample, enabled, t, locale }) {
@@ -3093,6 +3135,8 @@ window.__ModuleLoader__.load({
       const [topic, setTopic] = React.useState('')
       const [queryInput, setQueryInput] = React.useState('')
       const [query, setQuery] = React.useState('')
+      const [filtersOpen, setFiltersOpen] = React.useState(false)
+      const filterId = React.useId()
       const [page, setPage] = React.useState(0)
       const [pageSize, setPageSize] = React.useState(10)
       const [view, setView] = React.useState('activity')
@@ -3526,10 +3570,11 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'dsh-memory-root' }, pageTop,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
           stats ? h('div', { className: 'dsh-memory-activity-view' },
-            h(ContextUsage, { sessionId,
-              sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
-              enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale }),
-            h(MemoryTotals, { stats, t, locale }),
+            h('div', { className: 'dsh-memory-activity-overview' },
+              h(MemoryTotals, { stats, t, locale }),
+              h(ContextUsage, { sessionId,
+                sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
+                enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale })),
             h(ActivityTrends, { stats, activity: data?.activity, t, locale }),
             h('section', { className: 'dsh-memory-activity-operations' },
               h('h3', { className: 'dsh-memory-section-title' }, t('activity.operations')),
@@ -3642,19 +3687,49 @@ window.__ModuleLoader__.load({
 
       const topics = Object.keys(topicCounts).filter(key => key !== '__none__').sort()
       const filterCount = Number(status !== '') + Number(topic !== '')
+      const showSelection = error === '' && items.length > 0 && selected.length > 0
+      const selectionToolbar = h('div', { className: 'dsh-memory-bulk', 'data-inactive': !showSelection },
+        h('span', { className: 'dsh-memory-bulk-count', role: 'status' }, t('bulk.selected', { count: String(selected.length) })),
+        h('div', { className: 'dsh-memory-bulk-actions' },
+          h('button', {
+            type: 'button', className: 'dsh-memory-button',
+            disabled: items.every(record => selected.includes(record.id)),
+            onClick: () => setSelected(items.map(record => record.id)),
+          }, t('bulk.selectAll')),
+          status === 'deleted'
+            ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('restore') }, t('bulk.restore'))
+            : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('archive') }, t('bulk.archive')),
+          status === 'deleted'
+            ? null
+            : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: event => {
+            const firstSelected = event.currentTarget.closest('.dsh-memory-root')
+              ?.querySelector('.dsh-memory-row[data-selected="true"] .dsh-memory-select-box')
+            setSelected([])
+            firstSelected?.focus({ preventScroll: true })
+          } }, t('bulk.clear')),
+          status === 'deleted' ? null : h('div', { className: 'dsh-memory-danger-actions' },
+            h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete')))))
 
       return h('div', { className: 'dsh-memory-root' },
         pageTop,
         h('div', { className: 'dsh-memory-toolbar' },
           h('div', { className: 'dsh-memory-search-row' },
-            h('input', {
-              className: 'dsh-memory-input',
-              type: 'search',
-              value: queryInput,
-              placeholder: t('filter.searchPlaceholder'),
-              onChange: event => setQueryInput(event.target.value),
-              'aria-label': t('filter.search'),
-            }),
+            h('div', { className: 'dsh-memory-search' },
+              h('span', { className: 'dsh-memory-search-icon', 'aria-hidden': true }),
+              h('input', {
+                className: 'dsh-memory-input',
+                type: 'search',
+                value: queryInput,
+                placeholder: t('filter.searchPlaceholder'),
+                onChange: event => setQueryInput(event.target.value),
+                'aria-label': t('filter.search'),
+              })),
+            h('button', {
+              type: 'button', className: 'dsh-memory-button dsh-memory-filter-toggle',
+              'aria-expanded': filtersOpen, 'aria-controls': filterId,
+              onClick: () => setFiltersOpen(!filtersOpen),
+            }, t('filter.more'), filterCount > 0 ? ' · ' + filterCount : ''),
             h('button', {
               type: 'button',
               className: 'dsh-memory-button',
@@ -3698,8 +3773,7 @@ window.__ModuleLoader__.load({
               'aria-label': t('filter.project'),
               title: currentProjectKey ?? '',
             }, projectOptions.map(key => h('option', { key, value: key, title: key }, key)))) : null),
-          h('details', { className: 'dsh-memory-filter-details dsh-memory-disclosure' },
-            h('summary', { className: 'dsh-memory-disclosure-head' }, t('filter.more'), filterCount > 0 ? ' · ' + filterCount : ''),
+          h('div', { className: 'dsh-memory-filter-details', id: filterId, hidden: !filtersOpen },
             h(Field, { label: t('filter.status') },
             h(Select, {
               className: 'dsh-memory-select',
@@ -3731,7 +3805,8 @@ window.__ModuleLoader__.load({
             className: 'dsh-memory-button',
             onClick: () => load(),
           }, t('list.error.retry')))),
-        data === null ? null : h('div', { className: 'dsh-memory-list-head' },
+        data === null ? null : h('div', { className: 'dsh-memory-list-context' },
+          h('div', { className: 'dsh-memory-list-head', 'data-inactive': showSelection },
           h('div', { className: 'dsh-memory-kind-tabs', role: 'tablist', 'aria-label': t('filter.kind') },
             h('button', {
               type: 'button',
@@ -3758,6 +3833,7 @@ window.__ModuleLoader__.load({
             }, t('kind.' + value), h('span', { className: 'dsh-memory-kind-count' }, String(kindCounts[value] ?? 0))))),
           kind === '' && total === kindCountsTotal ? null
             : h('span', { className: 'dsh-memory-list-total' }, t('pager.total', { total: String(total) }))),
+          selectionToolbar),
         loading && data === null ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('list.loading')) : null,
         error !== '' || (loading && data === null) ? null : items.length === 0
           ? h('div', { className: 'dsh-memory-empty' },
@@ -3766,26 +3842,7 @@ window.__ModuleLoader__.load({
               ? null
               : h('p', { className: 'dsh-memory-empty-body' }, t('list.empty.body')),
             showMissingProject ? h('p', { className: 'dsh-memory-empty-body' }, t('error.missingProject')) : null)
-          : [
-            selected.length === 0 ? null : h('div', { key: 'bulk', className: 'dsh-memory-bulk' },
-              h('span', null, t('bulk.selected', { count: String(selected.length) })),
-              h('div', { className: 'dsh-memory-bulk-actions' },
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-memory-button',
-                  onClick: () => setSelected(selected.length === items.length ? [] : items.map((record) => record.id)),
-                }, t('bulk.selectAll')),
-                status === 'deleted'
-                  ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('restore') }, t('bulk.restore'))
-                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => bulk('archive') }, t('bulk.archive')),
-                status === 'deleted'
-                  ? null
-                  : h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setBulkTagOpen(true) }, t('bulk.tag')),
-                h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setSelected([]) }, t('bulk.clear')),
-                status === 'deleted'
-                  ? null
-                  : h('div', { className: 'dsh-memory-danger-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete'))))),
-            h('ul', { key: 'list', className: 'dsh-memory-list' },
+          : h('ul', { className: 'dsh-memory-list' },
             items.map((record) => {
               const deleted = record.status === 'deleted'
               const isConfirming = (deleted ? purgingId : confirmingId) === record.id
@@ -3809,79 +3866,80 @@ window.__ModuleLoader__.load({
                   })),
                   h('span', { className: 'dsh-memory-kind', 'data-kind': record.kind }, t('kind.' + record.kind)),
                   h('span', { className: 'dsh-memory-status-pill', 'data-status': record.status }, t('status.' + record.status)),
-                  record.pinned === true ? h('span', { className: 'dsh-memory-pin' }, t('row.pinned')) : null,
-                  h('span', { className: 'dsh-memory-row-meta' },
-                    h('span', null, t('row.confidence', { value: Number(record.confidence).toFixed(2) })),
-                    h('span', null, t('row.updated', { value: formatTime(record.updatedAt, locale) })))),
+                  record.pinned === true ? h('span', { className: 'dsh-memory-pin' }, t('row.pinned')) : null),
                 h('p', { className: 'dsh-memory-content' }, record.content),
+                Array.isArray(record.tags) && record.tags.length > 0
+                  ? h('ul', { className: 'dsh-memory-tags' }, record.tags.map((tag, index) => h('li', { key: tag + ':' + index, className: 'dsh-memory-tag' }, tag)))
+                  : null,
                 h('div', { className: 'dsh-memory-row-foot' },
-                  Array.isArray(record.tags) && record.tags.length > 0
-                    ? h('ul', { className: 'dsh-memory-tags' }, record.tags.map((tag, index) => h('li', { key: tag + ':' + index, className: 'dsh-memory-tag' }, tag)))
-                    : null,
-                  h('div', { className: 'dsh-memory-row-actions' },
-                    deleted
-                    ? [
-                      h('button', {
-                        key: 'restore',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => restore(record),
-                        disabled: actionBusy,
-                      }, t('actions.restore')),
-                      h('button', {
-                        key: 'history',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => openHistory(record),
-                        disabled: actionBusy,
-                      }, t('actions.history')),
-                    ]
-                    : [
-                      h('button', {
-                        key: 'edit',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => {
-                          setEditError('')
-                          setEditing(record)
-                        },
-                        disabled: actionBusy,
-                      }, t('actions.edit')),
-                      record.status === 'candidate'
-                        ? h('button', {
-                          key: 'approve',
-                          type: 'button',
-                          className: 'dsh-memory-button dsh-memory-button-primary',
-                          onClick: () => approve(record),
-                          disabled: actionBusy,
-                        }, t('actions.approve'))
-                        : null,
-                      record.status !== 'archived' && record.status !== 'superseded'
-                        ? h('button', {
-                          key: 'archive',
+                  h('span', { className: 'dsh-memory-row-meta' },
+                    h('span', null, t('row.updated', { value: formatTime(record.updatedAt, locale) })),
+                    h('span', null, t('row.confidence', { value: Number(record.confidence).toFixed(2) }))),
+                  h('div', { className: 'dsh-memory-row-controls' },
+                    h('div', { className: 'dsh-memory-row-actions' },
+                      deleted
+                      ? [
+                        h('button', {
+                          key: 'restore',
                           type: 'button',
                           className: 'dsh-memory-button',
-                          onClick: () => archive(record),
+                          onClick: () => restore(record),
                           disabled: actionBusy,
-                        }, t('actions.archive'))
-                        : null,
-                      h('button', {
-                        key: 'history',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        onClick: () => openHistory(record),
-                        disabled: actionBusy,
-                      }, t('actions.history')),
-                    ]),
-                  h('div', { className: 'dsh-memory-row-danger' }, h('button', {
-                    type: 'button',
-                    className: 'dsh-memory-button',
-                    'data-danger': 'true',
-                    'data-confirming': isConfirming,
-                    onClick: deleteRecord,
-                    disabled: actionBusy,
-                  }, t(deleteLabel)))))
-            }))],
+                        }, t('actions.restore')),
+                        h('button', {
+                          key: 'history',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => openHistory(record),
+                          disabled: actionBusy,
+                        }, t('actions.history')),
+                      ]
+                      : [
+                        h('button', {
+                          key: 'edit',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => {
+                            setEditError('')
+                            setEditing(record)
+                          },
+                          disabled: actionBusy,
+                        }, t('actions.edit')),
+                        record.status === 'candidate'
+                          ? h('button', {
+                            key: 'approve',
+                            type: 'button',
+                            className: 'dsh-memory-button dsh-memory-button-primary',
+                            onClick: () => approve(record),
+                            disabled: actionBusy,
+                          }, t('actions.approve'))
+                          : null,
+                        record.status !== 'archived' && record.status !== 'superseded'
+                          ? h('button', {
+                            key: 'archive',
+                            type: 'button',
+                            className: 'dsh-memory-button',
+                            onClick: () => archive(record),
+                            disabled: actionBusy,
+                          }, t('actions.archive'))
+                          : null,
+                        h('button', {
+                          key: 'history',
+                          type: 'button',
+                          className: 'dsh-memory-button',
+                          onClick: () => openHistory(record),
+                          disabled: actionBusy,
+                        }, t('actions.history')),
+                      ]),
+                    h('div', { className: 'dsh-memory-row-danger' }, h('button', {
+                      type: 'button',
+                      className: 'dsh-memory-button',
+                      'data-danger': 'true',
+                      'data-confirming': isConfirming,
+                      onClick: deleteRecord,
+                      disabled: actionBusy,
+                    }, t(deleteLabel))))))
+            })),
         data === null || total === 0 ? null : h('div', { className: 'dsh-memory-pager' },
           h('span', null, t('pager.summary', { page: String(page + 1), pages: String(pageCount), total: String(total) })),
           h('div', { className: 'dsh-memory-pager-actions' },

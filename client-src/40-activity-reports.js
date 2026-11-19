@@ -1,4 +1,3 @@
-    const DAY_MS = 86_400_000
     const HEAT_WEEKS = 53
     const PALETTE_KEY = 'dsh.memory.particle-color.v1'
     const PALETTE_PRESETS = [
@@ -70,9 +69,8 @@
     function buildHeatWeeks(counts, mode, t) {
       const today = new Date()
       today.setHours(0, 0, 0, 0)
-      const first = new Date(today.getTime() - (HEAT_WEEKS * 7 - 1) * DAY_MS)
-      first.setHours(0, 0, 0, 0)
-      first.setDate(first.getDate() - first.getDay())
+      const first = new Date(today)
+      first.setDate(today.getDate() - today.getDay() - (HEAT_WEEKS - 1) * 7)
       const daily = []
       for (let week = 0; week < HEAT_WEEKS; week += 1) {
         const days = []
@@ -107,7 +105,7 @@
           const end = present[present.length - 1] === undefined ? '' : present[present.length - 1].key
           return {
             tip: value <= 0 ? null : t('activity.weeklyTooltip', { start, end, count: compactNumber(value) }),
-            cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= 7 - filled ? level : 0 })),
+            cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= present.length - filled ? level : 0 })),
           }
         })
       }
@@ -126,7 +124,7 @@
         const end = present[present.length - 1] === undefined ? '' : present[present.length - 1].key
         return {
           tip: value <= 0 ? null : t('activity.cumulativeTooltip', { end, count: compactNumber(value) }),
-          cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= 7 - filled ? level : 0 })),
+          cells: days.map((cell, row) => (cell === null ? null : { ...cell, level: row >= present.length - filled ? level : 0 })),
         }
       })
     }
@@ -135,7 +133,7 @@
       const counts = ['total', 'active', 'candidate', 'projects']
       return h('dl', { className: 'dsh-memory-activity-totals' },
         counts.filter(key => key !== 'candidate' || stats.candidate > 0).map(key =>
-          h('div', { key },
+          h('div', { key, 'data-metric': key },
             h('dt', null, t('stats.' + key)),
             h('dd', null, stats[key].toLocaleString(locale || undefined)))))
     }
@@ -179,14 +177,15 @@
         h('button', {
           type: 'button',
           className: 'dsh-memory-palette-trigger',
+          'aria-label': t('activity.colorMenu'),
           'aria-expanded': open,
           'aria-haspopup': 'listbox',
           onClick: () => setOpen((value) => !value),
           title: t('activity.colorMenu'),
         },
-        h('span', { className: 'dsh-memory-palette-swatch', style: { '--dsh-memory-swatch': color === '' ? 'var(--dsw-alias-state-business-primary, #2f6df6)' : color } },
-          h('i', null), h('i', null), h('i', null)),
-        t('activity.colorMenu')),
+        h('span', { className: 'dsh-memory-palette-swatch', 'aria-hidden': true,
+          style: { '--dsh-memory-swatch': color === '' ? 'var(--memory-accent)' : color } },
+          h('i', null), h('i', null), h('i', null))),
         open ? h('div', { className: 'dsh-memory-palette-menu', role: 'listbox', 'aria-label': t('activity.colorMenu') },
           PALETTE_PRESETS.map((preset) => h('button', {
             key: preset.key,
@@ -225,7 +224,7 @@
         if (!Number.isFinite(count) || count <= 0) continue
         counts.set(day.date, count)
       }
-      const weeks = buildHeatWeeks(counts, mode, t)
+      const weeks = counts.size > 0 ? buildHeatWeeks(counts, mode, t) : []
       const labels = []
       let lastMonth = ''
       for (let week = 0; week < weeks.length; week += 1) {
@@ -270,22 +269,24 @@
               'aria-selected': mode === item,
               onClick: () => setMode(item),
             }, t('activity.mode.' + item))))),
-        h('div', { className: 'dsh-memory-heatmap-stage', ref: stageRef },
-          h('div', { className: 'dsh-memory-heatmap' },
-            weeks.map((column, week) => column.cells.map((cell, row) => (cell === null
-              ? h('span', { key: week + ':' + row, className: 'dsh-memory-heat-cell', 'data-level': '0', 'data-future': 'true' })
-              : h('span', {
-                key: week + ':' + row,
-                className: 'dsh-memory-heat-cell',
-                'data-level': String(cell.level),
-                onMouseEnter: (event) => showTooltip(event, column, cell),
-                onMouseLeave: () => setTooltip(null),
-                'aria-label': t('activity.cell', { date: cell.key, count: String(cell.count) }),
-              }))))),
-          tooltip === null ? null : h('div', { className: 'dsh-memory-heat-tooltip', style: { left: tooltip.x, top: tooltip.top } }, tooltip.text)),
-        h('div', { className: 'dsh-memory-heat-months' },
-          labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text))),
-        counts.size === 0 ? h('p', { className: 'dsh-memory-help' }, t('activity.sparseHint')) : null)
+        weeks.length === 0
+          ? h('p', { className: 'dsh-memory-heat-empty dsh-memory-help' }, t('activity.sparseHint'))
+          : h(React.Fragment, null,
+            h('div', { className: 'dsh-memory-heatmap-stage', ref: stageRef },
+              h('div', { className: 'dsh-memory-heatmap' },
+                weeks.map((column, week) => column.cells.map((cell, row) => (cell === null
+                  ? h('span', { key: week + ':' + row, className: 'dsh-memory-heat-cell', 'data-level': '0', 'data-future': 'true' })
+                  : h('span', {
+                    key: week + ':' + row,
+                    className: 'dsh-memory-heat-cell',
+                    'data-level': String(cell.level),
+                    onMouseEnter: (event) => showTooltip(event, column, cell),
+                    onMouseLeave: () => setTooltip(null),
+                    'aria-label': t('activity.cell', { date: cell.key, count: String(cell.count) }),
+                  }))))),
+              tooltip === null ? null : h('div', { className: 'dsh-memory-heat-tooltip', style: { left: tooltip.x, top: tooltip.top } }, tooltip.text)),
+            h('div', { className: 'dsh-memory-heat-months' },
+              labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text)))))
     }
 
     function ContextUsage({ sessionId, sample, enabled, t, locale }) {
