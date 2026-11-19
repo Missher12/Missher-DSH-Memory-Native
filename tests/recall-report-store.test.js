@@ -38,10 +38,17 @@ test('per-session report writes are private, replace atomically, and reject pend
   store.write('private-session-a', PROJECT, first)
   const reportsDir = join(root, 'recall-reports')
   const files = fs.readdirSync(reportsDir)
-  assert.equal(files.filter(name => /^[a-f0-9]{64}\.json$/u.test(name)).length, 1)
+  const reportFiles = files.filter(name => /^[a-f0-9]{64}\.json$/u.test(name))
+  assert.equal(reportFiles.length, 1)
   assert.equal(files.some(name => name.includes('private-session-a')), false)
-  assert.equal(fs.statSync(reportsDir).mode & 0o777, 0o700)
-  assert.equal(fs.statSync(join(reportsDir, files[0])).mode & 0o777, 0o600)
+  const directoryStat = fs.statSync(reportsDir)
+  const reportStat = fs.statSync(join(reportsDir, reportFiles[0]))
+  assert.ok(directoryStat.isDirectory() && reportStat.isFile())
+  // Windows inherits ACLs from the profile directory rather than POSIX modes.
+  if (process.platform !== 'win32') {
+    assert.equal(directoryStat.mode & 0o777, 0o700)
+    assert.equal(reportStat.mode & 0o777, 0o600)
+  }
   assert.deepEqual(store.get('private-session-a', PROJECT), first)
   assert.equal(store.get('private-session-a', 'c'.repeat(64)), null)
   assert.equal(createRecallReportStore(root, 'd'.repeat(64)).get('private-session-a', PROJECT), null)
