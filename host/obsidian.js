@@ -14,11 +14,12 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 
 import { parseFrontmatter } from './frontmatter.js'
@@ -36,11 +37,24 @@ export function resolveObsidianTarget(vaultPath, folder) {
   const vault = resolve(vaultPath.trim())
   if (!existsSync(vault)) throw new Error('vault path does not exist')
   if (!statSync(vault).isDirectory()) throw new Error('vault path is not a directory')
+  const realVault = realpathSync(vault)
   const name = typeof folder === 'string' && folder.trim() !== '' ? folder.trim() : DEFAULT_FOLDER
   if (isAbsolute(name)) throw new Error('folder must be relative to the vault')
   const dir = resolve(vault, name)
   const rel = relative(vault, dir)
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('folder must stay inside the vault')
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('folder must stay inside the vault')
+  let existing = dir
+  while (!existsSync(existing)) {
+    const parent = dirname(existing)
+    if (parent === existing) throw new Error('folder must stay inside the vault')
+    existing = parent
+  }
+  if (!statSync(existing).isDirectory()) throw new Error('folder path is not a directory')
+  const realExisting = realpathSync(existing)
+  const actualRelative = relative(realVault, realExisting)
+  if (actualRelative === '..' || actualRelative.startsWith(`..${sep}`) || isAbsolute(actualRelative)) {
+    throw new Error('folder must stay inside the vault')
+  }
   return { vault, dir }
 }
 

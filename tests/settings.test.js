@@ -85,6 +85,22 @@ test('settings persist the Obsidian vault path and folder', (t) => {
   assert.deepEqual(config.obsidian, { vaultPath: '/Users/me/Vault', folder: 'DSH Notes' })
 })
 
+test('settings patches merge untouched fields and report stale same-field edits', t => {
+  const root = setup(t)
+  writeSettings(root, { captureEnabled: true, injectMaxTokens: 600, retentionEpisodeDays: 90 })
+
+  writeSettings(root, { captureEnabled: false }, { captureEnabled: true })
+  const merged = writeSettings(root, { injectMaxTokens: 650 }, { injectMaxTokens: 600 })
+  assert.equal(merged.captureEnabled, false)
+  assert.equal(merged.injectMaxTokens, 650)
+
+  const conflict = writeSettings(root, { injectMaxTokens: 700 }, { injectMaxTokens: 600 })
+  assert.equal(conflict.settingsConflict, true)
+  assert.deepEqual(conflict.conflicts.map(item => item.field), ['injectMaxTokens'])
+  assert.equal(conflict.current.injectMaxTokens, 650)
+  assert.equal(readSettings(root).injectMaxTokens, 650)
+})
+
 test('automatic Obsidian sync is opt-in and persists with its target',()=>{
  const config=settingsToConfig({obsidianAutoSync:true,obsidianVaultPath:'/a/vault',obsidianFolder:'Memory'})
  assert.deepEqual(config.obsidian,{autoSync:true,vaultPath:'/a/vault',folder:'Memory'})

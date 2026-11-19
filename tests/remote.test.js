@@ -484,6 +484,38 @@ test('updateSettings validates fields and calls the activation callback', (t) =>
   assert.throws(() => backend.updateSettings({}), /at least one field/u)
 })
 
+test('structured settings updates send only the requested fields with a compare baseline', async t => {
+  const { backend } = setup(t)
+  let received
+  backend.applySettings = (patch, expected) => {
+    received = { patch, expected }
+    return { captureEnabled: false, retentionEpisodeDays: 0 }
+  }
+  const result = await dispatchPanel(backend, 'updateSettings', {
+    changes: { captureEnabled: false, retentionEpisodeDays: 0 },
+    expected: { captureEnabled: true, retentionEpisodeDays: 90 },
+  })
+  assert.deepEqual(received, {
+    patch: { captureEnabled: false, retentionEpisodeDays: 0 },
+    expected: { captureEnabled: true, retentionEpisodeDays: 90 },
+  })
+  assert.equal(result.settings.retentionEpisodeDays, 0)
+  for (const value of ['', 25.5, -1, 36501]) {
+    assert.throws(() => backend.updateSettings({ changes: { retentionEpisodeDays: value }, expected: { retentionEpisodeDays: 90 } }), /retentionEpisodeDays/u)
+  }
+  assert.throws(() => backend.updateSettings({ changes: { injectMaxTokens: 99 }, expected: { injectMaxTokens: 600 } }), /injectMaxTokens/u)
+})
+
+test('settings conflicts return the value read from the locked settings file', async t => {
+  const { backend } = setup(t)
+  backend.config.inject.maxTokens = 600
+  backend.applySettings = () => ({ settingsConflict: true, conflicts: [{ field: 'injectMaxTokens', current: 650 }], current: { injectMaxTokens: 650 } })
+  const result = await dispatchPanel(backend, 'updateSettings', {
+    changes: { injectMaxTokens: 700 }, expected: { injectMaxTokens: 600 },
+  })
+  assert.deepEqual(result.currentValues, { injectMaxTokens: 650 })
+})
+
 test('export, import and backup round-trip through the panel operations', async (t) => {
   const source = setup(t)
   const target = setup(t)

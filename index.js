@@ -17,6 +17,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { ObsidianSync } from './host/obsidian-sync.js'
+import { resolveObsidianTarget } from './host/obsidian.js'
 import { CapturePipeline } from './host/capture.js'
 import { resolveConfig } from './host/config.js'
 import { prepareStorage } from './host/storage-boundary.js'
@@ -157,9 +158,24 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     }),
   })
 
-  const applySettings = (patch) => {
+  const applySettings = (patch, expected) => {
     const previousObsidian = config.obsidian
-    const saved = settingsIssue?.code === 'settings-invalid' ? repairSettings(root, patch) : writeSettings(root, patch)
+    const validateObsidian = ({ current, merged }) => {
+      const previous = resolveConfig(mergeConfigObjects(rawConfig, settingsToConfig(current))).obsidian
+      const next = resolveConfig(mergeConfigObjects(rawConfig, settingsToConfig(merged))).obsidian
+      const targetChanged = previous?.vaultPath !== next?.vaultPath || previous?.folder !== next?.folder
+      if (!next?.autoSync || (previous?.autoSync && !targetChanged)) return
+      try { resolveObsidianTarget(next.vaultPath, next.folder) }
+      catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const field = /folder/i.test(message) ? 'obsidianFolder' : 'obsidianVaultPath'
+        throw new Error(`${field}: ${message}`)
+      }
+    }
+    const saved = settingsIssue?.code === 'settings-invalid'
+      ? repairSettings(root, patch, validateObsidian)
+      : writeSettings(root, patch, expected, validateObsidian)
+    if (saved?.settingsConflict) return saved
     config = resolveConfig(mergeConfigObjects(rawConfig, settingsToConfig(saved)))
     settingsIssue = null
     capture.setConfig(config)

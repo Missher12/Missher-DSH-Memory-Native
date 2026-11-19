@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -40,4 +40,42 @@ test('corrupt settings keep the native panel usable while capture, recall and sy
   assert.equal(after.settingsIssue, null); assert.equal(after.captureEnabled, false); assert.equal(after.injectEnabled, true)
   const retained = readdirSync(root).find(name => name.startsWith('settings.invalid-'))
   assert.ok(retained); assert.equal(readFileSync(join(root, retained), 'utf8'), original)
+})
+
+test('Obsidian targets validate before enabling while a disconnected disabled vault does not block other settings', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'memory-settings-obsidian-')), effects = [], handlers = {}
+  t.after(() => { for (const effect of effects.reverse()) { try { effect()?.() } catch {} }; rmSync(root, { recursive: true, force: true }) })
+  let route
+  apply({
+    get: name => name === 'webServer' ? { register(value) { route = value; return () => {} } } : undefined,
+    on: (name, fn) => { handlers[name] = fn; return () => {} },
+    effect: factory => { const dispose = factory(); if (typeof dispose === 'function') effects.push(dispose) },
+    logger: { warn() {}, info() {} },
+  }, { dataDir: root, capture: { enabled: true }, maintenance: { enabled: false } })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const call = async (method, input) => {
+    const request = Readable.from([Buffer.from(JSON.stringify({ method, input }))]); request.method = 'POST'
+    let value; await route.handler(request, { writeHead() {}, end(data) { value = JSON.parse(data) } })
+    return value
+  }
+  const missing = join(root, 'missing-vault')
+  const rejected = await call('updateSettings', { changes: { obsidianAutoSync: true, obsidianVaultPath: missing }, expected: { obsidianAutoSync: false, obsidianVaultPath: null } })
+  assert.equal(rejected.ok, false)
+  assert.match(rejected.error.message, /obsidianVaultPath:/u)
+  assert.equal(existsSync(join(root, 'settings.json')), false)
+
+  const vault = join(root, 'vault'); mkdirSync(vault)
+  writeFileSync(join(root, 'settings.json'), JSON.stringify({ obsidianAutoSync: false, obsidianVaultPath: '' }))
+  const enabled = await call('updateSettings', { changes: { obsidianAutoSync: true, obsidianVaultPath: vault }, expected: { obsidianAutoSync: false, obsidianVaultPath: null } })
+  assert.equal(enabled.ok, true)
+  assert.equal(enabled.value.settings.obsidianVaultPath, vault)
+  rmSync(vault, { recursive: true, force: true })
+  const disabled = await call('updateSettings', { changes: { obsidianAutoSync: false }, expected: { obsidianAutoSync: true } })
+  assert.equal(disabled.ok, true)
+  const unrelated = await call('updateSettings', { changes: { captureEnabled: false }, expected: { captureEnabled: true } })
+  assert.equal(unrelated.ok, true)
+  const persisted = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
+  assert.equal(persisted.captureEnabled, false)
+  assert.equal(persisted.obsidianAutoSync, false)
+  assert.equal(persisted.obsidianVaultPath, vault)
 })

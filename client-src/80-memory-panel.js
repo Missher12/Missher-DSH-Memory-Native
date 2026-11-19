@@ -425,7 +425,7 @@
         { key: 'activity', views: ['activity'] },
         { key: 'memory', views: ['memory', 'library', 'profile'] },
         { key: 'brief', views: ['brief'] },
-        { key: 'settings', views: ['capture', 'retention', 'data', 'obsidian'] },
+        { key: 'settings', views: ['capture', 'data', 'obsidian'] },
       ]
       const section = sections.find(item => item.views.includes(view)) ?? sections[0]
       const navButtons = (items, label, secondary = false) => h('nav', {
@@ -499,7 +499,7 @@
           }))
       }
 
-      if (view === 'capture' || view === 'retention' || view === 'data' || view === 'obsidian') {
+      if (view === 'capture' || view === 'data' || view === 'obsidian') {
         return h('div', { className: 'dsh-memory-root' },
           header,
           viewTabs,

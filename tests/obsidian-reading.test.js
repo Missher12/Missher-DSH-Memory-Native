@@ -6,6 +6,7 @@ import { join, relative, sep, win32 } from 'node:path'
 import { MemoryStore } from '../host/store.js'
 import { MemoryIndex } from '../host/search.js'
 import { ObsidianSync } from '../host/obsidian-sync.js'
+import { resolveObsidianTarget } from '../host/obsidian.js'
 import { promoteMemoryToKnowledge } from '../host/knowledge.js'
 import { buildReadingPages, refreshReadingPages } from '../host/obsidian-reading.js'
 
@@ -224,4 +225,20 @@ test('a symlink cannot redirect the derived reading directory outside the sync f
   symlinkSync(elsewhere, join(c.dir, '阅读'))
   await assert.rejects(c.sync.run(), /符号链接/u)
   assert.deepEqual(readdirSync(elsewhere), [])
+})
+
+test('Obsidian targets reject existing ancestor links that escape the vault and allow nested folders', t => {
+  const c = setup(t)
+  const elsewhere = join(c.root, 'outside')
+  const vault = join(c.root, 'vault')
+  mkdirSync(elsewhere)
+  mkdirSync(join(vault, 'nested'))
+  symlinkSync(elsewhere, join(vault, 'nested', 'redirect'))
+  assert.throws(() => resolveObsidianTarget(vault, 'nested/redirect/new-folder'), /stay inside the vault/u)
+  writeFileSync(join(vault, 'existing.md'), 'file')
+  assert.throws(() => resolveObsidianTarget(vault, 'existing.md/Memory'), /not a directory/u)
+  assert.equal(resolveObsidianTarget(vault, 'nested/notes/deeper').dir, join(vault, 'nested/notes/deeper'))
+  const alias = join(c.root, 'vault-alias')
+  symlinkSync(vault, alias)
+  assert.equal(resolveObsidianTarget(alias, 'nested/notes').dir, join(alias, 'nested/notes'))
 })

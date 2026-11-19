@@ -282,6 +282,48 @@ test('configuration changes immediately reconcile and rebind automatic sync',asy
  assert.equal(c.sync.status().watchersReady,true)
 })
 
+test('initial export notices a note edit made immediately after publication', async t => {
+ const c=setup(t), sync=c.make(), originalReplace=sync.replace.bind(sync)
+ let edited=false
+ t.after(()=>sync.dispose())
+ sync.replace=async (...args)=>{
+  const result=await originalReplace(...args)
+  if(!edited&&args[0]===c.file&&args[2]!==null){
+   edited=true
+   writeFileSync(c.file,readFileSync(c.file,'utf8').replace('原始事实 12345','首轮导出后立即编辑 91919'))
+  }
+  return result
+ }
+ await sync.run({fullScan:true})
+ assert.equal(edited,true)
+ await waitFor(()=>c.store.find(c.record.id).content==='首轮导出后立即编辑 91919')
+ await waitFor(()=>sync.status().mode==='incremental'&&!sync.status().running)
+ assert.equal(sync.status().fullScanPending,false)
+ assert.ok(readFileSync(c.file,'utf8').includes('首轮导出后立即编辑 91919'))
+})
+
+test('a changed vault notices a note edit made immediately after publication', async t => {
+ const c=setup(t), sync=c.sync, originalReplace=sync.replace.bind(sync)
+ await sync.run({fullScan:true})
+ const target=join(c.vault,'Renamed Memory',`${c.record.id}.md`)
+ let edited=false
+ sync.replace=async (...args)=>{
+  const result=await originalReplace(...args)
+  if(!edited&&args[0]===target&&args[2]!==null){
+   edited=true
+   writeFileSync(target,readFileSync(target,'utf8').replace('原始事实 12345','更换 Vault 后立即编辑 91920'))
+  }
+  return result
+ }
+ c.config.folder='Renamed Memory'
+ await sync.configurationChanged()
+ assert.equal(edited,true)
+ await waitFor(()=>c.store.find(c.record.id).content==='更换 Vault 后立即编辑 91920')
+ await waitFor(()=>sync.status().mode==='incremental'&&!sync.status().running)
+ assert.equal(sync.status().fullScanPending,false)
+ assert.ok(readFileSync(target,'utf8').includes('更换 Vault 后立即编辑 91920'))
+})
+
 test('restart full reconciliation catches host authority changes missed while the watcher was offline',async t=>{
  const c=setup(t);await c.sync.run();c.sync.dispose()
  c.store.update(c.record.id,{content:'停机期间由宿主修改的事实'})

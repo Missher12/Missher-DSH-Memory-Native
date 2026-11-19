@@ -64,16 +64,32 @@ export function readSettings(root) {
 }
 
 /** Merge a validated patch into the file and return the full settings object. */
-export function writeSettings(root, patch) {
+export function writeSettings(root, patch, expected = null, validate = null) {
   return withFileLock(join(root, '.settings.lock'), () => {
-    const merged = sanitizeSettings({ ...readSettings(root), ...(patch !== null && typeof patch === 'object' ? patch : {}) })
+    const current = readSettings(root)
+    const changes = patch !== null && typeof patch === 'object' ? patch : {}
+    const conflicts = []
+    if (expected !== null && typeof expected === 'object') {
+      for (const [field, value] of Object.entries(expected)) {
+        if (!Object.hasOwn(current, field)) continue
+        const matches = (left, right) => field === 'obsidianVaultPath'
+          ? (left ?? '') === (right ?? '')
+          : Object.is(left, right)
+        if (!matches(current[field], value) && !matches(current[field], changes[field])) {
+          conflicts.push({ field, current: current[field] })
+        }
+      }
+    }
+    if (conflicts.length > 0) return { settingsConflict: true, conflicts, current }
+    const merged = sanitizeSettings({ ...current, ...changes })
+    validate?.({ current, merged })
     atomicWritePrivate(join(root, SETTINGS_FILE), `${JSON.stringify(merged, null, 2)}\n`)
     return merged
   })
 }
 
 /** An explicit full policy save repairs invalid JSON and preserves its bytes. */
-export function repairSettings(root, patch) {
+export function repairSettings(root, patch, validate = null) {
   for (const key of ['captureEnabled', 'injectEnabled', 'maintenanceEnabled', 'obsidianAutoSync']) {
     if (typeof patch?.[key] !== 'boolean') throw new Error('请检查并保存全部自动处理开关，再恢复记忆设置。')
   }
@@ -85,6 +101,7 @@ export function repairSettings(root, patch) {
       atomicWritePrivate(join(root, `settings.invalid-${randomUUID()}.json`), readFileSync(join(root, SETTINGS_FILE)))
     }
     const merged = sanitizeSettings({ ...current, ...patch })
+    validate?.({ current, merged })
     atomicWritePrivate(join(root, SETTINGS_FILE), `${JSON.stringify(merged, null, 2)}\n`)
     return merged
   })

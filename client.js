@@ -127,10 +127,10 @@ window.__ModuleLoader__.load({
         'view.memory': "Records",
         'view.library': "Notes",
         'view.settings': 'Settings',
-        'view.capture': "Capture & recall",
+        'view.capture': "Memory behavior",
         'view.retention': "Retention",
-        'view.data': "Backup & transfer",
-        'view.obsidian': "Obsidian sync",
+        'view.data': "Backup & sharing",
+        'view.obsidian': "Obsidian",
         'library.title': "Notes",
         'library.hint': "Long-form Markdown notes, editable here and synced with Obsidian. Choose where each note can be recalled.",
         'library.empty': "No notes yet. Sync notes from Obsidian in Settings to get started.",
@@ -171,15 +171,29 @@ window.__ModuleLoader__.load({
         'settings.captureRetried': 'Capture task queued for retry.',
         'settings.captureRetryFailed': 'Retry failed: {reason}',
         'settings.title': 'Memory settings',
+        'settings.loading': 'Reading settings…',
         'settings.capture': "Remember conversations",
         'settings.inject': "Use memories in replies",
-        'settings.budget': "Recall context limit",
+        'settings.budget': "Per-conversation recall cap",
+        'settings.budgetHint': 'Reduced automatically when the conversation has less room.',
         'settings.retention': 'Episode retention',
+        'settings.retentionHint': 'Only older, low-confidence, unpinned episodes are archived. 0 disables automatic archiving.',
+        'settings.days': 'days',
         'settings.maintenance': 'Self-maintenance',
-        'settings.group.capture': 'Capture & injection',
+        'settings.group.capture': 'Recording & recall',
         'settings.group.retention': 'Retention & maintenance',
         'settings.group.data': 'Data',
         'settings.group.obsidian': 'Obsidian',
+        'settings.group.records': 'Record transfer',
+        'settings.group.backup': 'Full backup',
+        'settings.group.sharing': 'Local sharing',
+        'settings.data.records': 'Memory records',
+        'settings.invalid.budget': 'Enter a whole number from 100 to 8000.',
+        'settings.invalid.retention': 'Enter a whole number from 0 to 36500.',
+        'settings.conflict': 'This setting changed in another window. Your edit is kept; save again to apply it.',
+        'settings.repair.numbersInvalid': 'Correct the recall budget and retention days on Memory behavior before restoring settings.',
+        'settings.obsidian.pathInvalid': 'Choose an existing Obsidian vault folder.',
+        'settings.obsidian.folderInvalid': 'Use a relative folder path inside the vault.',
         "obsidian.auto": "Automatic two-way sync",
         'obsidian.autoHint': 'Conflicts keep both copies. Open 阅读/首页 to browse source notes.',
         "obsidian.now": "Sync now",
@@ -211,7 +225,10 @@ window.__ModuleLoader__.load({
         'settings.data.label': 'Export, import & backup',
         'data.export': 'Export',
         'data.import': 'Import',
+        'data.importConfirm': 'Preview: import {imported} records and skip {skipped}. Continue?',
+        'data.importCanceled': 'Import canceled; no records were changed.',
         'data.backup': 'Complete backup',
+        'data.backupAction': 'Create backup',
         'data.backupHint': 'Export saves current records. Full backups also retain sources, history, settings and receipts.',
         'data.localSharing': 'Share this profile locally',
         'data.openSharing': 'Open local sharing',
@@ -523,10 +540,10 @@ window.__ModuleLoader__.load({
         'view.memory': "记忆记录",
         'view.library': "笔记",
         'view.settings': '\u8bbe\u7f6e',
-        'view.capture': "记忆方式",
+        'view.capture': "记忆行为",
         'view.retention': "保留与清理",
-        'view.data': "备份与迁移",
-        'view.obsidian': "Obsidian 同步",
+        'view.data': "备份与共享",
+        'view.obsidian': "Obsidian",
         'library.title': "笔记",
         'library.hint': "保存完整的 Markdown 笔记，可编辑并与 Obsidian 同步；每篇笔记可选择用于哪些对话。",
         'library.empty': "还没有笔记。可到设置中同步 Obsidian 笔记。",
@@ -568,13 +585,27 @@ window.__ModuleLoader__.load({
         'settings.title': '\u8bb0\u5fc6\u8bbe\u7f6e',
         'settings.capture': "自动记住对话",
         'settings.inject': "回答时参考记忆",
-        'settings.budget': "参考内容上限",
+        'settings.budget': "单次回答参考上限",
+        'settings.budgetHint': '可用上下文较少时会自动下调。',
         'settings.retention': '\u7247\u6bb5\u4fdd\u7559',
+        'settings.retentionHint': '仅归档较旧、低置信度且未置顶的片段；设为 0 可关闭自动归档。',
+        'settings.days': '天',
         'settings.maintenance': '\u81ea\u7ef4\u62a4',
-        'settings.group.capture': '\u6355\u83b7\u4e0e\u6ce8\u5165',
+        'settings.group.capture': '记录与召回',
         'settings.group.retention': '\u4fdd\u7559\u4e0e\u7ef4\u62a4',
         'settings.group.data': '\u6570\u636e',
         'settings.group.obsidian': 'Obsidian',
+        'settings.group.records': '记录迁移',
+        'settings.group.backup': '完整备份',
+        'settings.group.sharing': '本机共享',
+        'settings.data.records': '记忆记录',
+        'settings.invalid.budget': '请输入 100 到 8000 之间的整数。',
+        'settings.invalid.retention': '请输入 0 到 36500 之间的整数。',
+        'settings.conflict': '此项设置已在另一窗口更改。你的编辑已保留；再次保存即可应用。',
+        'settings.repair.numbersInvalid': '请先在“记忆行为”中修正参考上限和保留天数，再恢复设置。',
+        'settings.loading': '正在读取设置…',
+        'settings.obsidian.pathInvalid': '请选择一个已存在的 Obsidian Vault 文件夹。',
+        'settings.obsidian.folderInvalid': '文件夹路径须为 Vault 内的相对路径。',
         "obsidian.auto": "自动双向同步",
         'obsidian.autoHint': '冲突保留双方版本。打开「阅读/首页」查看原文。',
         "obsidian.now": "立即同步",
@@ -606,6 +637,8 @@ window.__ModuleLoader__.load({
         'settings.data.label': '\u5bfc\u51fa\u3001\u5bfc\u5165\u4e0e\u5907\u4efd',
         'data.export': '\u5bfc\u51fa',
         'data.import': '\u5bfc\u5165',
+        'data.importConfirm': '预览：将导入 {imported} 条记录，跳过 {skipped} 条。继续吗？',
+        'data.importCanceled': '已取消导入，记录未更改。',
         'health.title': '运行状态',
         "health.ok": "可用",
         'health.attention': '需处理',
@@ -655,6 +688,7 @@ window.__ModuleLoader__.load({
         'health.capture-incomplete': '部分提炼任务需恢复。',
         'health.capture-unknown': '待核实任务暂停重发，避免重复计费。',
         'data.backup': '完整备份',
+        'data.backupAction': '立即备份',
         'data.backupHint': '导出保存当前记录，完整备份另含原文、历史、设置和调用记录。',
         'data.localSharing': '\u672c\u673a\u5171\u4eab\u8bb0\u5fc6',
         'data.openSharing': '\u6253\u5f00\u672c\u673a\u5171\u4eab',
@@ -1046,11 +1080,11 @@ window.__ModuleLoader__.load({
       '.dsh-memory-settings-title{margin:0;font-size:16px;font-weight:600;line-height:24px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-sub{margin:3px 0 0;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
       '.dsh-memory-settings-group{margin-top:0}',
-      '.dsh-memory-settings-group+.dsh-memory-settings-group{padding-top:22px;border-top:.5px solid var(--dsh-memory-card-border)}',
+      '.dsh-memory-settings-group+.dsh-memory-settings-group{padding-top:24px;border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-tabs{display:flex;gap:2px;flex-wrap:wrap;margin:6px 0 10px;padding-bottom:8px;border-bottom:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-tab{border:0;background:transparent;padding:4px 10px;border-radius:7px;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}',
       '.dsh-memory-settings-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-2,#f5f6f8);color:var(--dsw-alias-label-primary,#1f2328);font-weight:600}',
-      '.dsh-memory-settings-group-title{margin:0 0 2px;font-size:11px;font-weight:500;line-height:16px;letter-spacing:.02em;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary,#6b7280))}',
+      '.dsh-memory-settings-group-title{margin:0 0 6px;font-size:15px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;box-sizing:border-box;min-height:48px;font-size:13.5px;color:var(--dsw-alias-label-primary,#1f2328)}',
       '.dsh-memory-settings-row+.dsh-memory-settings-row{border-top:.5px solid var(--dsh-memory-card-border)}',
       '.dsh-memory-settings-label{min-width:0;overflow:visible;text-overflow:clip;white-space:normal;flex:1 1 auto}',
@@ -1104,7 +1138,9 @@ window.__ModuleLoader__.load({
       '.dsh-memory-profile-line{display:flex;align-items:baseline;gap:8px;min-width:0}',
       '.dsh-memory-profile-line .dsh-memory-profile-statement{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-memory-profile-evidence{list-style:none;margin:4px 0 0 0;padding:0 0 0 28px;display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280)}',
-      '.dsh-memory-settings-input{box-sizing:border-box;flex:0 1 42%;min-width:112px;height:28px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 24px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;text-align:center;line-height:30px}',
+      '.dsh-memory-settings-input{box-sizing:border-box;flex:0 1 42%;min-width:112px;height:32px;border:.5px solid var(--dsh-memory-card-border);border-radius:7px;padding:0 24px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:inherit;font-size:12px;text-align:center;line-height:30px}',
+      '.dsh-memory-settings-input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#2f6df6);outline-offset:2px}',
+      '.dsh-memory-field-error{margin:0 0 8px;color:var(--dsw-alias-state-error-primary,#c0392b);font-size:12px;line-height:17px}',
       '.dsh-memory-settings-control{display:flex;align-items:center;gap:8px;flex:0 0 auto}',
       '.dsh-memory-switch{position:relative;flex:0 0 auto;width:40px;height:22px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.35));cursor:pointer;transition:background .18s ease}',
       '.dsh-memory-switch[aria-checked="true"]{background:var(--dsw-alias-label-primary,#111113)}',
@@ -2027,25 +2063,27 @@ window.__ModuleLoader__.load({
             : t('usage.providerMissing')))
     }
     function ObsidianSyncStatus({call,t,disabled}) {
-      const [status,setStatus]=React.useState(null), [error,setError]=React.useState(''), [busy,setBusy]=React.useState(false)
+      const [status,setStatus]=React.useState(null), [statusError,setStatusError]=React.useState(''), [actionError,setActionError]=React.useState(''), [busy,setBusy]=React.useState(false)
       React.useEffect(()=>{
         if(!call)return undefined
         let stopped=false
-        const read=()=>call('obsidianStatus',{}).then(v=>{if(!stopped){setStatus(v.automatic);setError('')}}).catch(e=>{if(!stopped)setError(messageOf(e))})
+        const read=()=>call('obsidianStatus',{}).then(v=>{if(!stopped){setStatus(v.automatic);setStatusError('')}}).catch(e=>{if(!stopped)setStatusError(messageOf(e))})
         void read();const timer=setInterval(read,5000)
         return()=>{stopped=true;clearInterval(timer)}
       },[call])
       const action=async(method,input={})=>{
         setBusy(true)
-        try{await call(method,input);const current=await call('obsidianStatus',{});setStatus(current.automatic);setError('')}
-        catch(e){setError(messageOf(e))}finally{setBusy(false)}
+        setActionError('')
+        try{await call(method,input);const current=await call('obsidianStatus',{});setStatus(current.automatic);setStatusError('')}
+        catch(e){setActionError(messageOf(e))}finally{setBusy(false)}
       }
       return h('div',null,
         h('p',{className:'dsh-memory-muted',role:'status'},status?.at?t('obsidian.syncStatus',{time:new Date(status.at).toLocaleTimeString(),sent:status.exported,received:status.imported,conflicts:status.conflicts.length})+' · '+t('obsidian.mode.'+(status.mode==='full'?'full':'incremental')):t('obsidian.notYet')),
         status?.pendingFiles?h('p',{className:'dsh-memory-muted'},t('obsidian.pending',{count:status.pendingFiles})):null,
         status?.fullScanPending?h('p',{className:'dsh-memory-muted'},t('obsidian.fullPending')):null,
         h('button',{type:'button',className:'dsh-memory-button',disabled:disabled||busy||!call,onClick:()=>action('obsidianSync',{fullScan:true})},t('obsidian.fullScan')),
-        error?h('p',{className:'dsh-memory-error-text',role:'alert'},error):null,
+        statusError?h('p',{className:'dsh-memory-error-text',role:'alert'},statusError):null,
+        actionError?h('p',{className:'dsh-memory-error-text',role:'alert'},actionError):null,
         (status?.errors??[]).map((e,i)=>h('p',{key:i,className:'dsh-memory-error-text'},e.file+': '+e.message)),
         (status?.conflicts??[]).map(c=>h('details',{key:c.key,className:'dsh-memory-card'},
           h('summary',null,c.file+' · '+c.reason),
@@ -2066,66 +2104,162 @@ window.__ModuleLoader__.load({
       const [obsidianAuto, setObsidianAuto] = React.useState(false)
       const [obsidianFolder, setObsidianFolder] = React.useState('DSH Memory')
       const [baseline, setBaseline] = React.useState(null)
+      const baselineRef = React.useRef(null)
+      const draftRef = React.useRef(null)
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState('')
+      const [fieldErrors, setFieldErrors] = React.useState({})
       const [sharingUrl, setSharingUrl] = React.useState('')
       const fileRef = React.useRef(null)
 
       React.useEffect(() => {
-        if (stats === null) return
+        if (stats === null || typeof stats !== 'object' ||
+            typeof stats.captureEnabled !== 'boolean' || typeof stats.injectEnabled !== 'boolean' ||
+            !Number.isInteger(stats.injectMaxTokens) || stats.injectMaxTokens < 100 || stats.injectMaxTokens > 8000 ||
+            !Number.isInteger(stats.retentionEpisodeDays) || stats.retentionEpisodeDays < 0 || stats.retentionEpisodeDays > 36500 ||
+            typeof stats.maintenanceEnabled !== 'boolean' || typeof stats.obsidianAutoSync !== 'boolean' ||
+            (stats.obsidianVaultPath !== null && typeof stats.obsidianVaultPath !== 'string') || typeof stats.obsidianFolder !== 'string') return
         const next = {
-          capture: stats.captureEnabled === true,
-          inject: stats.injectEnabled === true,
-          budget: String(stats.injectMaxTokens ?? 360),
-          retention: String(stats.retentionEpisodeDays ?? 90),
-          maintenance: stats.maintenanceEnabled !== false,
-          obsidianAuto: stats.obsidianAutoSync === true,
-          obsidianVault: typeof stats.obsidianVaultPath === 'string' ? stats.obsidianVaultPath : '',
-          obsidianFolder: typeof stats.obsidianFolder === 'string' ? stats.obsidianFolder : 'DSH Memory',
+          capture: stats.captureEnabled,
+          inject: stats.injectEnabled,
+          budget: String(stats.injectMaxTokens),
+          retention: String(stats.retentionEpisodeDays),
+          maintenance: stats.maintenanceEnabled,
+          obsidianAuto: stats.obsidianAutoSync,
+          obsidianVault: stats.obsidianVaultPath ?? '',
+          obsidianFolder: stats.obsidianFolder,
         }
-        setCapture(next.capture)
-        setInject(next.inject)
-        setBudget(next.budget)
-        setRetention(next.retention)
-        setMaintenance(next.maintenance)
-        setObsidianAuto(next.obsidianAuto)
-        setObsidianVault(next.obsidianVault)
-        setObsidianFolder(next.obsidianFolder)
-        setBaseline(next)
+        const previous = baselineRef.current
+        const currentDraft = draftRef.current
+        if (previous === null || currentDraft === null) {
+          baselineRef.current = next
+          draftRef.current = next
+          setBaseline(next)
+          setCapture(next.capture)
+          setInject(next.inject)
+          setBudget(next.budget)
+          setRetention(next.retention)
+          setMaintenance(next.maintenance)
+          setObsidianAuto(next.obsidianAuto)
+          setObsidianVault(next.obsidianVault)
+          setObsidianFolder(next.obsidianFolder)
+          return
+        }
+        const nextBaseline = { ...previous }
+        const nextDraft = { ...currentDraft }
+        for (const key of Object.keys(next)) {
+          if (fieldEqual(key, currentDraft[key], previous[key])) {
+            nextBaseline[key] = next[key]
+            nextDraft[key] = next[key]
+          }
+        }
+        baselineRef.current = nextBaseline
+        draftRef.current = nextDraft
+        setBaseline(nextBaseline)
+        setCapture(nextDraft.capture)
+        setInject(nextDraft.inject)
+        setBudget(nextDraft.budget)
+        setRetention(nextDraft.retention)
+        setMaintenance(nextDraft.maintenance)
+        setObsidianAuto(nextDraft.obsidianAuto)
+        setObsidianVault(nextDraft.obsidianVault)
+        setObsidianFolder(nextDraft.obsidianFolder)
       }, [stats])
 
-      const dirty = baseline !== null && (
-        stats?.settingsIssue?.code === 'settings-invalid' ||
-        capture !== baseline.capture ||
-        inject !== baseline.inject ||
-        budget !== baseline.budget ||
-        retention !== baseline.retention ||
-        maintenance !== baseline.maintenance ||
-        obsidianAuto !== baseline.obsidianAuto ||
-        obsidianVault !== baseline.obsidianVault ||
-        obsidianFolder !== baseline.obsidianFolder
-      )
-      const snapshot = () => ({ capture, inject, budget, retention, maintenance, obsidianAuto, obsidianVault, obsidianFolder })
+      const fieldEqual = (key, left, right) => {
+        if ((key === 'budget' || key === 'retention') && left !== '' && right !== '') {
+          const a = Number(left), b = Number(right)
+          if (Number.isInteger(a) && Number.isInteger(b)) return a === b
+        }
+        return left === right
+      }
+      const updateDraft = (key, value, setter) => {
+        const current = draftRef.current ?? baselineRef.current ?? {}
+        draftRef.current = { ...current, [key]: value }
+        setter(value)
+        const field = key === 'obsidianVault' ? 'obsidianVaultPath' : key === 'obsidianFolder' ? 'obsidianFolder' : null
+        if (field) setFieldErrors(previous => ({ ...previous, [field]: '' }))
+      }
+      const currentDraft = draftRef.current ?? { capture, inject, budget, retention, maintenance, obsidianAuto, obsidianVault, obsidianFolder }
+      const repairing = stats?.settingsIssue?.code === 'settings-invalid'
+      const pageKeys = group === 'obsidian'
+        ? ['obsidianAuto', 'obsidianVault', 'obsidianFolder']
+        : group === 'capture' ? Object.keys(currentDraft) : []
+      const dirtyFields = baseline === null ? [] : pageKeys.filter(key => !fieldEqual(key, currentDraft[key], baseline[key]))
+      const dirty = dirtyFields.length > 0 || repairing
+      const snapshot = () => ({ ...(draftRef.current ?? currentDraft) })
+      const budgetValue = budget.trim() === '' ? NaN : Number(budget)
+      const retentionValue = retention.trim() === '' ? NaN : Number(retention)
+      const budgetValid = Number.isInteger(budgetValue) && budgetValue >= 100 && budgetValue <= 8000
+      const retentionValid = Number.isInteger(retentionValue) && retentionValue >= 0 && retentionValue <= 36500
+      const numbersValid = budgetValid && retentionValid
+      const canSave = repairing ? numbersValid : group !== 'capture' || numbersValid
       const save = async () => {
-        if (call === null || busy || !dirty) return
+        if (call === null || busy || !dirty || !canSave) return
         setBusy(true)
         setNotice('')
+        setFieldErrors({})
         try {
-          await call('updateSettings', {
-            captureEnabled: capture,
-            injectEnabled: inject,
-            injectMaxTokens: Math.max(100, Number(budget) || 360),
-            retentionEpisodeDays: Math.max(0, Number(retention) || 0),
-            maintenanceEnabled: maintenance,
-            obsidianAutoSync: obsidianAuto,
-            obsidianVaultPath: obsidianVault.trim(),
-            obsidianFolder: obsidianFolder.trim(),
-          })
-          setBaseline(snapshot())
+          const submitted = snapshot()
+          const fields = {
+            capture: 'captureEnabled', inject: 'injectEnabled', budget: 'injectMaxTokens', retention: 'retentionEpisodeDays',
+            maintenance: 'maintenanceEnabled', obsidianAuto: 'obsidianAutoSync', obsidianVault: 'obsidianVaultPath', obsidianFolder: 'obsidianFolder',
+          }
+          const normalize = (key, value) => key === 'budget' ? Number(value) : key === 'retention' ? Number(value)
+            : key === 'obsidianVault' ? value.trim() : key === 'obsidianFolder' ? value.trim().slice(0, 64) : value
+          const patch = {}, expected = {}
+          const fieldsToSave = repairing ? Object.keys(fields) : dirtyFields
+          for (const key of Object.keys(fields)) {
+            if (!fieldsToSave.includes(key)) continue
+            patch[fields[key]] = normalize(key, submitted[key])
+            if (!repairing) expected[fields[key]] = normalize(key, baseline[key])
+          }
+          const result = await call('updateSettings', { changes: patch, expected })
+          if (result?.conflict) {
+            const keyForField = Object.fromEntries(Object.entries(fields).map(([key, field]) => [field, key]))
+            const nextBaseline = { ...baselineRef.current }
+            for (const conflict of result.conflicts ?? []) {
+              const key = keyForField[conflict.field]
+              if (key && Object.hasOwn(result.currentValues ?? {}, conflict.field)) {
+                nextBaseline[key] = key === 'budget' || key === 'retention' ? String(result.currentValues[conflict.field])
+                  : key === 'obsidianVault' ? result.currentValues[conflict.field] ?? '' : result.currentValues[conflict.field]
+              }
+            }
+            baselineRef.current = nextBaseline
+            setBaseline(nextBaseline)
+            setNotice(t('settings.conflict'))
+            onSaved()
+            return
+          }
+          const nextBaseline = { ...(baselineRef.current ?? baseline) }
+          const nextDraft = { ...(draftRef.current ?? submitted) }
+          for (const key of Object.keys(fields)) {
+            if (!Object.hasOwn(patch, fields[key])) continue
+            const value = key === 'budget' || key === 'retention' ? String(patch[fields[key]]) : patch[fields[key]]
+            nextBaseline[key] = value
+            if (fieldEqual(key, nextDraft[key], submitted[key])) nextDraft[key] = value
+          }
+          baselineRef.current = nextBaseline
+          draftRef.current = nextDraft
+          setBaseline(nextBaseline)
+          setCapture(nextDraft.capture)
+          setInject(nextDraft.inject)
+          setBudget(nextDraft.budget)
+          setRetention(nextDraft.retention)
+          setMaintenance(nextDraft.maintenance)
+          setObsidianAuto(nextDraft.obsidianAuto)
+          setObsidianVault(nextDraft.obsidianVault)
+          setObsidianFolder(nextDraft.obsidianFolder)
           setNotice(t('settings.saved'))
           onSaved()
         } catch (failure) {
-          setNotice(t('settings.failed', { reason: messageOf(failure) }))
+          const reason = messageOf(failure)
+          const match = /^(obsidianVaultPath|obsidianFolder):\s*(.*)$/u.exec(reason)
+          if (match) {
+            const field = match[1]
+            setFieldErrors(previous => ({ ...previous, [field]: t(field === 'obsidianVaultPath' ? 'settings.obsidian.pathInvalid' : 'settings.obsidian.folderInvalid') }))
+            setNotice(t('settings.failed', { reason: t(field === 'obsidianVaultPath' ? 'settings.obsidian.pathInvalid' : 'settings.obsidian.folderInvalid') }))
+          } else setNotice(t('settings.failed', { reason }))
         } finally {
           setBusy(false)
         }
@@ -2159,6 +2293,12 @@ window.__ModuleLoader__.load({
         setNotice('')
         try {
           const payload = JSON.parse(await file.text())
+          const preview = await call('importData', { payload, dryRun: true })
+          const counts = { imported: String(preview.imported ?? 0), skipped: String(preview.skipped ?? 0) }
+          if (!window.confirm(t('data.importConfirm', counts))) {
+            setNotice(t('data.importCanceled'))
+            return
+          }
           const result = await call('importData', { payload })
           setNotice(t('data.imported', { imported: String(result.imported ?? 0), skipped: String(result.skipped ?? 0) }) +
             (result.protectedDeleted > 0 ? ' ' + t('data.protectedDeleted', { count: String(result.protectedDeleted) }) : ''))
@@ -2221,7 +2361,7 @@ window.__ModuleLoader__.load({
           const result = kind === 'notes'
             ? await call('knowledgeSync', { direction })
             : await call(direction === 'export' ? 'obsidianExport' : 'obsidianImport', {
-              vaultPath: baseline.obsidianVault, folder: baseline.obsidianFolder, ...(direction === 'import' ? { dryRun: false } : {}),
+              vaultPath: baselineRef.current?.obsidianVault, folder: baselineRef.current?.obsidianFolder, ...(direction === 'import' ? { dryRun: false } : {}),
             })
           setNotice(direction === 'export'
             ? t('library.exportResult', { written: String(result?.written ?? 0), skipped: String(result?.skipped ?? 0) })
@@ -2241,21 +2381,30 @@ window.__ModuleLoader__.load({
           'aria-label': label,
           onClick: () => onChange(!checked),
         }, h('span', { className: 'dsh-memory-switch-knob' })))
-      const numberRow = (label, value, unit, min, max, step, onChange) => h('div', { className: 'dsh-memory-settings-row' },
-        h('span', { className: 'dsh-memory-settings-label' }, label),
-        h('span', { className: 'dsh-memory-number' },
-          h('input', { type: 'number', min, max, step, value, 'aria-label': label, onChange }),
-          h('em', null, unit)))
-      const textRow = (label, value, placeholder, onChange) => h('div', { className: 'dsh-memory-settings-row' },
-        h('span', { className: 'dsh-memory-settings-label' }, label),
-        h('input', {
-          className: 'dsh-memory-settings-input',
-          type: 'text',
-          value,
-          placeholder,
-          'aria-label': label,
-          onChange,
-        }))
+      const fieldError = message => message ? h('p', { className: 'dsh-memory-field-error', role: 'alert' }, message) : null
+      const numberRow = (label, value, unit, min, max, step, error, onChange) => h(React.Fragment, null,
+        h('div', { className: 'dsh-memory-settings-row' },
+          h('span', { className: 'dsh-memory-settings-label' }, label),
+          h('span', { className: 'dsh-memory-number' },
+            h('input', { type: 'number', min, max, step, value, 'aria-label': label, 'aria-invalid': error ? 'true' : undefined, onChange }),
+            h('em', null, unit))),
+        fieldError(error))
+      const textRow = (label, value, placeholder, error, maxLength, onChange) => h(React.Fragment, null,
+        h('div', { className: 'dsh-memory-settings-row' },
+          h('span', { className: 'dsh-memory-settings-label' }, label),
+          h('input', {
+            className: 'dsh-memory-settings-input',
+            type: 'text',
+            value,
+            placeholder,
+            maxLength,
+            'aria-label': label,
+            'aria-invalid': error ? 'true' : undefined,
+            onChange,
+          })),
+        fieldError(error))
+      const groupSection = (title, content) => h('div', { className: 'dsh-memory-settings-group' },
+        h('h2', { className: 'dsh-memory-settings-group-title' }, t('settings.group.' + title)), content)
       const button = (label, onClick) => h('button', {
         type: 'button',
         className: 'dsh-memory-button',
@@ -2263,67 +2412,73 @@ window.__ModuleLoader__.load({
         disabled: busy,
       }, label)
 
+      const budgetError = !budgetValid && (dirtyFields.includes('budget') || repairing) ? t('settings.invalid.budget') : ''
+      const retentionError = !retentionValid && (dirtyFields.includes('retention') || repairing) ? t('settings.invalid.retention') : ''
+      const behavior = h(React.Fragment, null,
+        groupSection('capture', h(React.Fragment, null,
+          switchRow(t('settings.capture'), capture, value => updateDraft('capture', value, setCapture)),
+          switchRow(t('settings.inject'), inject, value => updateDraft('inject', value, setInject)),
+          numberRow(t('settings.budget'), budget, 'token', '100', '8000', '1', budgetError,
+            event => updateDraft('budget', event.target.value, setBudget)),
+          h('p', { className: 'dsh-memory-muted' }, t('settings.budgetHint')))),
+        groupSection('retention', h(React.Fragment, null,
+          numberRow(t('settings.retention'), retention, t('settings.days'), '0', '36500', '1', retentionError,
+            event => updateDraft('retention', event.target.value, setRetention)),
+          h('p', { className: 'dsh-memory-muted' }, t('settings.retentionHint')),
+          switchRow(t('settings.maintenance'), maintenance, value => updateDraft('maintenance', value, setMaintenance)))))
+      const dataSettings = h(React.Fragment, null,
+        groupSection('records', h('div', { className: 'dsh-memory-settings-row' },
+          h('span', { className: 'dsh-memory-settings-label' }, t('settings.data.records')),
+          h('div', { className: 'dsh-memory-settings-buttons' },
+            button(t('data.export'), exportAll),
+            button(t('data.import'), () => fileRef.current?.click()),
+            h('input', { ref: fileRef, type: 'file', accept: 'application/json', className: 'dsh-memory-file-input', onChange: importAll })))),
+        groupSection('backup', h(React.Fragment, null,
+          h('div', { className: 'dsh-memory-settings-row' },
+            h('span', { className: 'dsh-memory-settings-label' }, t('data.backup')),
+            h('div', { className: 'dsh-memory-settings-buttons' }, button(t('data.backupAction'), backupNow))),
+          h('p', { className: 'dsh-memory-muted' }, t('data.backupHint')))),
+        groupSection('sharing', h(React.Fragment, null,
+          h('div', { className: 'dsh-memory-settings-row' },
+            h('span', { className: 'dsh-memory-settings-label' }, t('data.localSharing')),
+            h('div', { className: 'dsh-memory-settings-buttons' },
+              button(t('data.openSharing'), openLocalSharing), button(t('data.stopSharing'), stopLocalSharing))),
+          sharingUrl ? h('div', { className: 'dsh-memory-settings-row' },
+            h('span', { className: 'dsh-memory-settings-label' }, ''),
+            h('a', { href: sharingUrl, target: '_blank', rel: 'noopener noreferrer' }, t('data.sharingLink'))) : null)))
+      const obsidianSettings = groupSection('obsidian', h(React.Fragment, null,
+        switchRow(t('obsidian.auto'), obsidianAuto, value => updateDraft('obsidianAuto', value, setObsidianAuto)),
+        h('p', { className: 'dsh-memory-muted' }, t('obsidian.autoHint')),
+        textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', fieldErrors.obsidianVaultPath, 1024,
+          event => updateDraft('obsidianVault', event.target.value, setObsidianVault)),
+        textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', fieldErrors.obsidianFolder, 64,
+          event => updateDraft('obsidianFolder', event.target.value, setObsidianFolder)),
+        h(ObsidianSyncStatus, { call, t, disabled: busy || dirty }),
+        h('details', { className: 'dsh-memory-manual-sync' },
+          h('summary', null, t('sync.manual')),
+          ['memories', 'notes'].map(kind => h('div', { key: kind, className: 'dsh-memory-settings-row' },
+            h('span', { className: 'dsh-memory-settings-label' }, t('sync.' + kind)),
+            h('div', { className: 'dsh-memory-settings-buttons' },
+              ['export', 'import'].map(direction => h('button', {
+                key: direction, type: 'button', className: 'dsh-memory-button',
+                'aria-label': t('data.' + direction) + ' · ' + t('sync.' + kind),
+                disabled: !call || busy || dirty || !baselineRef.current?.obsidianVault,
+                onClick: () => transfer(kind, direction),
+              }, t('data.' + direction)))))))))
+      const content = group === 'capture' ? behavior : group === 'data' ? dataSettings : obsidianSettings
       return h('section', { className: 'dsh-memory-settings', 'aria-label': t('view.' + group) },
         stats?.settingsIssue ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.settingsIssue.message) : null,
-        group === 'retention' && stats?.maintenance?.backupError ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.maintenance.backupError.message) : null,
-        group === 'capture'
-          ? h('div', { className: 'dsh-memory-settings-group' },
-            switchRow(t('settings.capture'), capture, setCapture),
-            switchRow(t('settings.inject'), inject, setInject),
-            numberRow(t('settings.budget'), budget, 'token', '100', '8000', '50', (event) => setBudget(event.target.value)))
-          : group === 'retention'
-            ? h('div', { className: 'dsh-memory-settings-group' },
-              numberRow(t('settings.retention'), retention, '天', '0', '36500', '10', (event) => setRetention(event.target.value)),
-              switchRow(t('settings.maintenance'), maintenance, setMaintenance))
-            : group === 'data'
-              ? h('div', { className: 'dsh-memory-settings-group' },
-                h('p', { className: 'dsh-memory-muted' }, t('data.backupHint')),
-                h('div', { className: 'dsh-memory-settings-row' },
-                  h('span', { className: 'dsh-memory-settings-label' }, t('settings.data.label')),
-                  h('div', { className: 'dsh-memory-settings-buttons' },
-                    button(t('data.export'), exportAll),
-                    button(t('data.import'), () => fileRef.current?.click()),
-                    button(t('data.backup'), backupNow),
-                    h('input', {
-                      ref: fileRef,
-                      type: 'file',
-                      accept: 'application/json',
-                      className: 'dsh-memory-file-input',
-                      onChange: importAll,
-                    }))),
-                h('div', { className: 'dsh-memory-settings-row' },
-                  h('span', { className: 'dsh-memory-settings-label' }, t('data.localSharing')),
-                  h('div', { className: 'dsh-memory-settings-buttons' },
-                    button(t('data.openSharing'), openLocalSharing),
-                    button(t('data.stopSharing'), stopLocalSharing))),
-                sharingUrl ? h('div', { className: 'dsh-memory-settings-row' },
-                  h('span', { className: 'dsh-memory-settings-label' }, ''),
-                  h('a', { href: sharingUrl, target: '_blank', rel: 'noopener noreferrer' }, t('data.sharingLink'))) : null)
-              : h('div', { className: 'dsh-memory-settings-group' },
-                switchRow(t('obsidian.auto'), obsidianAuto, setObsidianAuto),
-                h('p', { className:'dsh-memory-muted' }, t('obsidian.autoHint')),
-                textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', (event) => setObsidianVault(event.target.value)),
-                textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', (event) => setObsidianFolder(event.target.value)),
-                h(ObsidianSyncStatus, {call,t,disabled:busy||dirty}),
-                h('details', { className: 'dsh-memory-manual-sync' },
-                  h('summary', null, t('sync.manual')),
-                  ['memories', 'notes'].map(kind => h('div', { key: kind, className: 'dsh-memory-settings-row' },
-                    h('span', { className: 'dsh-memory-settings-label' }, t('sync.' + kind)),
-                    h('div', { className: 'dsh-memory-settings-buttons' },
-                      ['export','import'].map(direction => h('button', {
-                        key: direction, type: 'button', className: 'dsh-memory-button',
-                        'aria-label': t('data.' + direction) + ' · ' + t('sync.' + kind),
-                        disabled: !call || busy || dirty || !baseline?.obsidianVault,
-                        onClick: () => transfer(kind, direction),
-                      }, t('data.' + direction)))))))),
-        notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
-        group === 'data' ? null : h('div', { className: 'dsh-memory-settings-foot' },
+        baseline === null ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('settings.loading')) : null,
+        baseline !== null && repairing && !numbersValid ? h('p', { className: 'dsh-memory-error', role: 'alert' }, t('settings.repair.numbersInvalid')) : null,
+        baseline !== null && stats?.maintenance?.backupError && group === 'capture'
+          ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.maintenance.backupError.message) : null,
+        baseline === null ? null : content,
+        baseline === null || notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
+        baseline === null || group === 'data' ? null : h('div', { className: 'dsh-memory-settings-foot' },
           dirty ? h('span', { className: 'dsh-memory-settings-state' }, t('settings.state.dirty')) : null,
           h('button', {
-            type: 'button',
-            className: 'dsh-memory-button dsh-memory-button-primary',
-            onClick: save,
-            disabled: busy || !dirty,
+            type: 'button', className: 'dsh-memory-button dsh-memory-button-primary', onClick: save,
+            disabled: busy || !dirty || !canSave,
           }, busy ? t('settings.saving') : t('settings.save'))))
     }
     function KnowledgeLibrary(props) {
@@ -3197,7 +3352,7 @@ window.__ModuleLoader__.load({
         { key: 'activity', views: ['activity'] },
         { key: 'memory', views: ['memory', 'library', 'profile'] },
         { key: 'brief', views: ['brief'] },
-        { key: 'settings', views: ['capture', 'retention', 'data', 'obsidian'] },
+        { key: 'settings', views: ['capture', 'data', 'obsidian'] },
       ]
       const section = sections.find(item => item.views.includes(view)) ?? sections[0]
       const navButtons = (items, label, secondary = false) => h('nav', {
@@ -3271,7 +3426,7 @@ window.__ModuleLoader__.load({
           }))
       }
 
-      if (view === 'capture' || view === 'retention' || view === 'data' || view === 'obsidian') {
+      if (view === 'capture' || view === 'data' || view === 'obsidian') {
         return h('div', { className: 'dsh-memory-root' },
           header,
           viewTabs,

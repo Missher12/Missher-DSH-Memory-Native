@@ -24,6 +24,7 @@ import { memoryHealth } from './health.js'
 import { buildKnowledgeGraph, knowledgeScopeWithinMemory, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
 import { deriveProjectBrief } from './project-brief.js'
 import { readMaintenance } from './maintenance.js'
+import { mergeConfigObjects, settingsToConfig } from './settings.js'
 import {
   exportKnowledgeToVault,
   exportToObsidian,
@@ -480,15 +481,25 @@ const PANEL_SETTINGS_FIELDS = Object.freeze([
  */
 export function updateSettings(backend, raw) {
   const input = asObject(raw)
+  const structured = Object.hasOwn(input, 'changes')
+  if (structured) {
+    for (const field of Object.keys(input)) {
+      if (field !== 'changes' && field !== 'expected') throw new PanelInputError(`settings has unsupported field: ${field}`)
+    }
+  }
+  const source = structured ? asObject(input.changes) : input
+  const expectedInput = structured ? asObject(input.expected ?? {}) : null
   const patch = {}
-  for (const field of Object.keys(input)) {
+  const validateField = (field, value) => {
     if (!PANEL_SETTINGS_FIELDS.includes(field)) {
       throw new PanelInputError(`settings has unsupported field: ${field}`)
     }
-    const value = input[field]
     if (field === 'injectMaxTokens' || field === 'retentionEpisodeDays') {
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         throw new PanelInputError(`${field} must be a number`)
+      }
+      if (!Number.isInteger(value) || value < (field === 'injectMaxTokens' ? 100 : 0) || value > (field === 'injectMaxTokens' ? 8000 : 36_500)) {
+        throw new PanelInputError(`${field} must be a whole number in range`)
       }
     } else if (field === 'obsidianVaultPath' || field === 'obsidianFolder') {
       if (typeof value !== 'string') throw new PanelInputError(`${field} must be a string`)
@@ -497,11 +508,44 @@ export function updateSettings(backend, raw) {
     } else if (typeof value !== 'boolean') {
       throw new PanelInputError(`${field} must be a boolean`)
     }
+  }
+  for (const field of Object.keys(source)) {
+    const value = source[field]
+    validateField(field, value)
     patch[field] = value
   }
   if (Object.keys(patch).length === 0) throw new PanelInputError('settings patch must change at least one field')
+  const expected = {}
+  if (expectedInput !== null) {
+    for (const [field, value] of Object.entries(expectedInput)) {
+      if (field === 'obsidianVaultPath' && value === null) {
+        expected[field] = value
+        continue
+      }
+      validateField(field, value)
+      expected[field] = value
+    }
+  }
   if (typeof backend.applySettings !== 'function') throw new PanelInputError('settings are read-only')
-  const saved = backend.applySettings(patch)
+  const saved = backend.applySettings(patch, expectedInput === null ? undefined : expected)
+  if (saved?.settingsConflict) {
+    const config = mergeConfigObjects(backend.config ?? {}, settingsToConfig(saved.current))
+    const values = {
+      captureEnabled: config.capture?.enabled,
+      injectEnabled: config.inject?.enabled,
+      injectMaxTokens: config.inject?.maxTokens,
+      retentionEpisodeDays: config.retention?.episodeDays,
+      maintenanceEnabled: config.maintenance?.enabled,
+      obsidianAutoSync: config.obsidian?.autoSync,
+      obsidianVaultPath: config.obsidian?.vaultPath ?? '',
+      obsidianFolder: config.obsidian?.folder,
+    }
+    return {
+      conflict: true,
+      conflicts: saved.conflicts,
+      currentValues: Object.fromEntries(saved.conflicts.map(({ field }) => [field, values[field]])),
+    }
+  }
   return {
     settings: saved,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
