@@ -12,7 +12,7 @@ node /path/to/dsh-memory/local-server.js status --root "/path/to/dsh-memory-data
 node /path/to/dsh-memory/local-server.js stop --root "/path/to/dsh-memory-data"
 ```
 
-也可以设置 `DSH_MEMORY_ROOT` 后省略 `--root`。DSH 内可从 **DSH Memory → 设置 → 数据 → 本机共享记忆** 启动网页或停止服务。服务只监听 `127.0.0.1`；启动结果中的地址带有本机访问令牌，不要发给他人。
+也可以设置 `DSH_MEMORY_ROOT` 后省略 `--root`。从 **DSH 设置 → 记忆 → 设置 → 备份与迁移 → 本机共享记忆** 可启动网页或停止服务。服务只监听 `127.0.0.1`。启动地址带有本机访问令牌，请仅在本机使用。
 
 命令行里的 `node` 必须是独立 Node 可执行文件。DSH 的设置按钮会优先使用应用 `Resources/runtime/primary-runtime/dependencies/node/bin/node` 中的独立运行时，不会把 Electron/DSH 主程序当作 Node 启动。
 
