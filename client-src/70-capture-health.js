@@ -61,9 +61,9 @@
     }
 
     function ActivityTrends({ stats, activity, locale, t }) {
-      const [open, setOpen] = React.useState(false)
+      const [open, setOpen] = React.useState(true)
       const storage = stats.captureStorage
-      return h('details', { className: 'dsh-memory-activity-disclosure', onToggle: event => setOpen(event.currentTarget.open) },
+      return h('details', { className: 'dsh-memory-activity-disclosure', open, onToggle: event => setOpen(event.currentTarget.open) },
         h('summary', { className: 'dsh-memory-activity-line' }, h(ActivityHeading, { title: t('activity.trends') })),
         open ? h('div', { className: 'dsh-memory-activity-details' },
           h(ActivityHeatmap, { activity, stats, t, locale }),

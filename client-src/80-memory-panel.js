@@ -439,6 +439,7 @@
       const viewTabs = h('div', { className: 'dsh-memory-navigation' },
         navButtons(sections.map(item => ({ value: item.views[0], label: t('section.' + item.key), active: item.key === section.key })), t('nav.sections')),
         section.views.length > 1 ? navButtons(section.views.map(value => ({ value, label: t('view.' + value), active: view === value })), t('section.' + section.key), true) : null)
+      const pageTop = h('div', { className: 'dsh-memory-page-top' }, header, viewTabs)
       const repairHealth = action => {
         if (action === 'capture') setView('capture')
         else if (action === 'obsidian') setView('obsidian')
@@ -451,30 +452,29 @@
       if (stats?.health?.status === 'unavailable') return h('div', { className: 'dsh-memory-root' }, header, h(HealthStatus, { health: stats.health, t, onRepair: repairHealth }))
 
       if (view === 'brief') {
-        return h('div', { className: 'dsh-memory-root' }, header, viewTabs,
+        return h('div', { className: 'dsh-memory-root' }, pageTop,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
           h(ProjectBrief, { call, t, locale, initialProject: stats?.currentProjectKey, projectKeys: stats?.projectKeys ?? [] }))
       }
 
       if (view === 'activity') {
-        return h('div', { className: 'dsh-memory-root dsh-memory-activity-view' }, header, viewTabs,
+        return h('div', { className: 'dsh-memory-root dsh-memory-activity-view' }, pageTop,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
           stats ? h(React.Fragment, null,
             h(ContextUsage, { sessionId,
               sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
               enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale }),
             h(MemoryTotals, { stats, t, locale }),
+            h(ActivityTrends, { stats, activity: data?.activity, t, locale }),
             h(ExtractionStatus, { stats, call, t, locale, onSaved: load }),
             h(RecallReport, { report: activeSessionPanel?.report ?? null, t, locale, call, onSaved: reloadAfterRecallChange }),
             h(HealthStatus, { health: stats.health, capture: stats.capture, t, onRepair: repairHealth }),
-            stats.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null,
-            h(ActivityTrends, { stats, activity: data?.activity, t, locale })) : null)
+            stats.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null) : null)
       }
 
       if (view === 'profile') {
         return h('div', { className: 'dsh-memory-root' },
-          header,
-          viewTabs,
+          pageTop,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
           h(ProfileView, { profile: data === null ? null : data.profile, t }))
@@ -482,8 +482,7 @@
 
       if (view === 'library') {
         return h('div', { className: 'dsh-memory-root' },
-          header,
-          viewTabs,
+          pageTop,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
           h(KnowledgeLibrary, {
@@ -501,8 +500,7 @@
 
       if (view === 'capture' || view === 'data' || view === 'obsidian') {
         return h('div', { className: 'dsh-memory-root' },
-          header,
-          viewTabs,
+          pageTop,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
           h(SettingsCard, { stats, call, t, onSaved: load, group: view }))
@@ -575,8 +573,7 @@
           h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setTopicSuggestOpen(false) }, t('actions.close')))) : null
 
       return h('div', { className: 'dsh-memory-root' },
-        header,
-        viewTabs,
+        pageTop,
         h('div', { className: 'dsh-memory-toolbar', ref: setToolbarNode, 'data-narrow': toolbarNarrow ? 'true' : 'false' },
           h(Field, { label: t('filter.scope') },
             h(Select, {
