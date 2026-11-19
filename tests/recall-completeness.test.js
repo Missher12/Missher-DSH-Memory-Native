@@ -24,7 +24,8 @@ async function setup(t, inject = {}, fixtureContents = null) {
   writeFileSync(loc.file,rows.map(row=>JSON.stringify(row)).join('\n')+'\n')
   let routeReady
   const ready=new Promise(resolve=>{routeReady=resolve})
-  apply({get:name=>name==='webServer'?{register(route){routeReady(route);return()=>{}}}:undefined,
+  const sessions={get:id=>id==='new-session'?{id,header:{cwd}}:undefined}
+  apply({get:name=>name==='webServer'?{register(route){routeReady(route);return()=>{}}}:name==='sessions'?sessions:undefined,
     on:(name,handler)=>{handlers[name]=handler;return()=>{}},
     effect:factory=>{const dispose=factory();if(typeof dispose==='function')disposers.push(dispose)},
     logger:{warn(){},info(){},debug(){}}},

@@ -9,8 +9,25 @@ import { isKnowledgeFile, parseKnowledgeNote } from './knowledge.js'
 import { buildRecord, nextRevision, MEMORY_KINDS, MEMORY_STATUSES, isValidMemoryId } from './records.js'
 import { isValidProjectKey } from './paths.js'
 import { refreshReadingPages } from './obsidian-reading.js'
+import { atomicWritePrivate } from './persistence.js'
 
 const hash = value => createHash('sha256').update(value).digest('hex')
+const reconcileTails = new Map()
+async function serializeReconcile(stateFile, onQueued, task) {
+  const queued = reconcileTails.has(stateFile)
+  const previous = reconcileTails.get(stateFile) ?? Promise.resolve()
+  let release
+  const turn = new Promise(resolve => { release = resolve })
+  const tail = previous.then(() => turn)
+  reconcileTails.set(stateFile, tail)
+  try { onQueued?.({ stateFile, queued }) } catch { /* Test observers never affect reconciliation. */ }
+  await previous
+  try { return await task() }
+  finally {
+    release()
+    if (reconcileTails.get(stateFile) === tail) reconcileTails.delete(stateFile)
+  }
+}
 const fields = ['kind', 'scope', 'projectKey', 'content', 'topic', 'tags', 'confidence', 'importance', 'status']
 const semantic = record => JSON.stringify(fields.map(key => record[key] ?? null))
 const textAt = async file => { try { return await readFile(file, 'utf8') } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
@@ -35,9 +52,9 @@ function memoryInput(text, parsed = parseMemoryNote(text)) {
 }
 
 export class ObsidianSync {
-  constructor({ root, store, index, getConfig, synchronize = () => {}, onKnowledgeChange = () => {}, watcherFactory = watch }) {
-    Object.assign(this, { root, store, index, getConfig, synchronize, onKnowledgeChange, watcherFactory })
-    this.timer = null; this.busy = null; this.stopped = false
+  constructor({ root, store, index, getConfig, synchronize = () => {}, onKnowledgeChange = () => {}, watcherFactory = watch, onReconcileQueued = () => {} }) {
+    Object.assign(this, { root, store, index, getConfig, synchronize, onKnowledgeChange, watcherFactory, onReconcileQueued })
+    this.timer = null; this.busy = null; this.stopped = false; this.disposed = false
     this.state = null; this.target = null; this.files = new Map(); this.records = new WeakMap()
     this.last = { at: null, exported: 0, imported: 0, conflicts: [], errors: [] }
     this.watchers = []; this.watchedTarget = null; this.changedFiles = new Set(); this.changedRecordIds = new Set(); this.purgedRecordIds = new Set()
@@ -52,6 +69,7 @@ export class ObsidianSync {
       lastFullScanAt: this.lastFullScanAt, watcherErrors: this.watcherErrors, watchersReady: this.watchedTarget !== null, ...this.last }
   }
   #authorityChanged(event) {
+    if (this.disposed) return
     if (event.type === 'refresh' || event.type === 'rewrite') this.fullScanRequested = true
     const records = Array.isArray(event.records) ? event.records : []
     for (const record of records) if (typeof record?.id === 'string') this.changedRecordIds.add(record.id)
@@ -60,9 +78,10 @@ export class ObsidianSync {
     if (this.getConfig()?.autoSync === true) this.#scheduleWatcherRun()
   }
   #watch(path, prefix, recursive = false) {
+    if (this.disposed) return false
     try {
       const watcher = this.watcherFactory(path, { persistent: false, ...(recursive ? { recursive: true } : {}) }, (_event, filename) => {
-        if (this.stopped) return
+        if (this.disposed || this.stopped) return
         if (filename === null || filename === undefined) {
           if ((this.selfDirectoryEvents.get(path) ?? 0) > Date.now()) return
           this.fullScanRequested = true
@@ -77,6 +96,7 @@ export class ObsidianSync {
         this.#scheduleWatcherRun()
       })
       watcher.on('error', () => {
+        if (this.disposed) return
         this.watcherErrors++; watcher.close(); this.watchers = this.watchers.filter(item => item !== watcher)
         this.watchedTarget = null; this.fullScanRequested = true
         this.#scheduleWatcherRun()
@@ -121,6 +141,7 @@ export class ObsidianSync {
     return false
   }
   #ensureWatchers(dir) {
+    if (this.disposed) return
     if (this.watchedTarget === dir) return
     for (const watcher of this.watchers) watcher.close()
     this.watchers = []; this.watchedTarget = null
@@ -131,9 +152,10 @@ export class ObsidianSync {
     if (complete) { this.watchedTarget = dir; this.watcherErrors = 0 }
   }
   #scheduleWatcherRun() {
+    if (this.disposed) return
     clearTimeout(this.changeTimer)
     this.changeTimer = setTimeout(() => {
-      if (this.stopped || this.getConfig()?.autoSync !== true) return
+      if (this.disposed || this.stopped || this.getConfig()?.autoSync !== true) return
       const fullScan = this.fullScanRequested
       void this.run({ fullScan, automatic: true, files: [...this.changedFiles], recordIds: [...this.changedRecordIds],
         purgedRecordIds: [...this.purgedRecordIds], readingChanged: this.readingChanged }).catch(() => {})
@@ -141,6 +163,7 @@ export class ObsidianSync {
     this.changeTimer.unref?.()
   }
   start(intervalMs = 300000) {
+    if (this.disposed) return
     this.stopped = false
     this.fullScanIntervalMs = Math.max(1, intervalMs)
     const tick = async () => {
@@ -158,13 +181,17 @@ export class ObsidianSync {
     this.timer = setTimeout(tick, Math.min(this.fullScanIntervalMs, 5000)); this.timer.unref?.()
   }
   dispose() {
+    if (this.disposed) return
+    this.disposed = true
     this.stopped = true; clearTimeout(this.timer); clearTimeout(this.changeTimer); clearTimeout(this.selfWriteTimer)
     for (const watcher of this.watchers) watcher.close()
-    this.watchers = []
+    this.watchers = []; this.watchedTarget = null
     this.selfWrites.clear(); this.selfDirectoryEvents.clear()
     this.unsubscribeStore?.(); this.unsubscribeStore = null
+    this.#drain()
   }
   configurationChanged() {
+    if (this.disposed) return Promise.resolve(this.status())
     for (const watcher of this.watchers) watcher.close()
     this.watchers = []; this.watchedTarget = null; this.fullScanRequested = true
     clearTimeout(this.changeTimer)
@@ -172,6 +199,7 @@ export class ObsidianSync {
     return this.run({ fullScan: true, automatic: true })
   }
   run(options = null) {
+    if (this.disposed) return Promise.resolve(this.last)
     const requested = options && typeof options === 'object' ? options : { fullScan: true }
     const resolution = typeof requested.key === 'string' ? requested : null
     const fullScan = resolution !== null || requested.fullScan !== false
@@ -225,6 +253,11 @@ export class ObsidianSync {
     return running
   }
   #drain() {
+    if (this.disposed) {
+      const error = new Error('Obsidian sync controller is disposed')
+      for (const item of this.queue.splice(0)) for (const waiter of item.waiters) waiter.reject(error)
+      return
+    }
     if (this.busy || !this.queue.length) return
     const item = this.queue.shift()
     const running = this.#start(item.request)
@@ -291,6 +324,7 @@ export class ObsidianSync {
     this.files.delete(file)
   }
   async reconcile(options = {}) {
+    if (this.disposed) return this.last
     const resolution = typeof options.key === 'string' ? options : null
     const fullScan = options.fullScan !== false
     const changedFiles = new Set(options.files instanceof Set ? options.files : Array.isArray(options.files) ? options.files : [])
@@ -299,16 +333,21 @@ export class ObsidianSync {
     const config = this.getConfig()
     if (!config?.vaultPath) return this.last
     const { dir } = resolveObsidianTarget(config.vaultPath, config.folder)
-    await directory(dir); await directory(join(dir, 'knowledge'))
     const stateFile = join(this.root, `obsidian-state-${hash(dir).slice(0, 20)}.json`)
-    if (this.target !== dir) {
-      let state = null
-      try { state = JSON.parse(await textAt(stateFile)) } catch { /* An absent baseline means conflict, never overwrite. */ }
-      this.state = state?.version === 1 && state.entries && typeof state.entries === 'object' ? state : { version: 1, entries: {} }
-      this.state.purged = this.state.purged && typeof this.state.purged === 'object' ? this.state.purged : {}
-      this.target = dir; this.files.clear()
-      this.readingSignature = null
-    }
+    return serializeReconcile(stateFile, this.onReconcileQueued, () => {
+      if (this.disposed) return this.last
+      return this.#reconcile(options, config, dir, stateFile,
+        { resolution, fullScan, changedFiles, changedRecordIds, purgedRecordIds })
+    })
+  }
+  async #reconcile(options, config, dir, stateFile, { resolution, fullScan, changedFiles, changedRecordIds, purgedRecordIds }) {
+    await directory(dir); await directory(join(dir, 'knowledge'))
+    const targetChanged = this.target !== dir
+    let state = null
+    try { state = JSON.parse(await textAt(stateFile)) } catch { /* An absent baseline means conflict, never overwrite. */ }
+    this.state = state?.version === 1 && state.entries && typeof state.entries === 'object' ? state : { version: 1, entries: {} }
+    this.state.purged = this.state.purged && typeof this.state.purged === 'object' ? this.state.purged : {}
+    if (targetChanged) { this.target = dir; this.files.clear(); this.readingSignature = null }
     this.synchronize()
     const records = new Map(this.store.listAll({ includeDeleted: true }).map(r => [r.id, r]))
     for (const id of this.store.purgedIds?.() ?? []) if (!records.has(id)) purgedRecordIds.add(id)
@@ -482,7 +521,7 @@ export class ObsidianSync {
     if (readingDirty) await refreshReadingPages(this, dir, config, result, { force: fullScan || options.readingChanged === true })
     const serialized = JSON.stringify(this.state)
     if (await textAt(stateFile) !== serialized) {
-      const temp = `${stateFile}.tmp`; await writeFile(temp, serialized, {mode:0o600}); await rename(temp, stateFile)
+      atomicWritePrivate(stateFile, serialized)
     }
     this.#ensureWatchers(dir)
     if (fullScan) this.lastFullScanAt = result.at

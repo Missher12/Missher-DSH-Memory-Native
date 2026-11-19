@@ -80,8 +80,15 @@ test('pre-step failures never break the turn', async (t) => {
   const decision = { kind: 'enter', messages: [] }
   const agent = {}
   Object.defineProperty(agent, 'session', { get() { throw new Error('session exploded') } })
-  const result = await handlers['agent/pre-step']({ agent, messages: [] }, async () => decision)
+  let nextCalls = 0
+  const result = await handlers['agent/pre-step']({ agent, messages: [] }, async () => { nextCalls++; return decision })
   assert.deepEqual(result, decision)
+  assert.equal(nextCalls, 1)
+  await assert.rejects(handlers['agent/pre-step']({ agent, messages: [] }, async () => {
+    nextCalls++
+    throw new Error('downstream host failure')
+  }), /downstream host failure/u)
+  assert.equal(nextCalls, 2)
 })
 
 test('production pre-step injects both required facts for a pnpm and Node compound query', async (t) => {

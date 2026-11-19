@@ -302,7 +302,7 @@ export function captureRetry(backend, raw) {
   return result
 }
 
-export function computeStats(backend, raw) {
+export function computeStats(backend, raw, trustedSessionProjectKey = null) {
   const input = asObject(raw)
   const { scope, projectKey } = normalizeScope(input)
   const sessionId = optionalText(input.sessionId, 'sessionId', 180)
@@ -317,11 +317,14 @@ export function computeStats(backend, raw) {
   let confidenceCount = aggregate?.confidenceCount ?? 0
   let lastCapturedAt = aggregate?.lastCapturedAt ?? 0
   let projectKeys = aggregate?.projectKeys
+  let browseableProjectKeys = Array.isArray(aggregate?.browseableProjectKeys) ? aggregate.browseableProjectKeys : null
   if (aggregate === null) {
+    const browseable = new Set()
     for (const item of backend.store.listAll({ includeDeleted: true })) {
       const record = hotRecord(item)
       if (record.status === 'deleted') { deleted += 1; continue }
       total += 1
+      if (record.scope === 'project' && isValidProjectKey(record.projectKey)) browseable.add(record.projectKey)
       if (Object.hasOwn(counts, record.status)) counts[record.status] += 1
       if (Object.hasOwn(kinds, record.kind) && (record.status === 'active' || record.status === 'candidate')) kinds[record.kind] += 1
       if (record.status === 'active' || record.status === 'candidate') {
@@ -333,9 +336,15 @@ export function computeStats(backend, raw) {
       const at = typeof record.updatedAt === 'number' ? record.updatedAt : record.observedAt
       if (typeof at === 'number' && at > lastCapturedAt) lastCapturedAt = at
     }
+    browseableProjectKeys = [...browseable]
   }
-  const current = currentProjectKey(backend.store)
   projectKeys ??= backend.store.listProjects()
+  browseableProjectKeys ??= projectKeys.filter(key => backend.store.list('project', key).length > 0)
+  const mostRecentlyTouched = currentProjectKey(backend.store)
+  const fallbackProject = browseableProjectKeys.includes(mostRecentlyTouched)
+    ? mostRecentlyTouched
+    : browseableProjectKeys[0] ?? null
+  const current = isValidProjectKey(trustedSessionProjectKey) ? trustedSessionProjectKey : fallbackProject
   const maintenance = backend.root ? readMaintenance(backend.root) : null
   const settingsIssue = backend.getSettingsIssue?.() ?? null
   const captureState = backend.getCaptureStatus?.()
@@ -350,6 +359,7 @@ export function computeStats(backend, raw) {
     deleted,
     projects: projectKeys.length,
     projectKeys,
+    browseableProjectKeys,
     kinds,
     currentProjectKey: current,
     scope,

@@ -105,6 +105,7 @@ test('forgotten records are not resurrected by an old vault note; vault deletion
 
 test('knowledge edits flow in both directions and conflicts keep both contents',async t=>{
  const c=setup(t), local=join(c.store.root,'knowledge','note.md')
+ c.config.autoSync=false
  mkdirSync(join(c.store.root,'knowledge'))
  writeFileSync(local,'---\ndsh_knowledge: true\ntags: [one]\n---\n# Original\n[[小主题]]\n')
  await c.sync.run()
@@ -118,6 +119,87 @@ test('knowledge edits flow in both directions and conflicts keep both contents',
  writeFileSync(local,readFileSync(local,'utf8').replace('# Host','# BothHost'))
  writeFileSync(external,readFileSync(external,'utf8').replace('# Host','# BothVault'))
  assert.equal((await c.sync.run()).conflicts.length,1)
+})
+
+test('a reloaded controller waits for the active baseline commit and preserves both conflict bodies',async t=>{
+ const c=setup(t),local=join(c.store.root,'knowledge','overlap.md')
+ c.config.autoSync=false
+ mkdirSync(join(c.store.root,'knowledge'))
+ writeFileSync(local,'---\ndsh_knowledge: true\n---\n# Initial\n')
+ await c.sync.run()
+ const external=join(c.vault,c.config.folder,'knowledge','overlap.md')
+ const memoryKey=`memory:${c.record.id}`
+ const initialEntry=structuredClone(c.sync.state.entries[memoryKey])
+ const hostBody='---\ndsh_knowledge: true\n---\n# Host overlap body\n'
+ const vaultBody='---\ndsh_knowledge: true\n---\n# Vault overlap body\n'
+ writeFileSync(local,hostBody)
+ writeFileSync(external,vaultBody)
+ c.store.update(c.record.id,{content:'并发期间由宿主更新的事实'})
+
+ let enteredConflict
+ const enteredConflictPromise=new Promise(resolve=>{enteredConflict=resolve})
+ let releaseConflict
+ const conflictGate=new Promise(resolve=>{releaseConflict=resolve})
+ const originalPreserve=c.sync.preserve.bind(c.sync)
+ c.sync.preserve=async(dir,name,text)=>{
+  if(dir.includes('_conflicts')){enteredConflict();await conflictGate}
+  return originalPreserve(dir,name,text)
+ }
+ const oldRun=c.sync.run({fullScan:true})
+ await enteredConflictPromise
+ const advancedEntry=structuredClone(c.sync.state.entries[memoryKey])
+ assert.notDeepEqual(advancedEntry,initialEntry)
+ const oldQueuedRun=c.sync.run({fullScan:true})
+ c.sync.dispose()
+
+ let cancelledQueue
+ const cancelledQueuePromise=new Promise(resolve=>{cancelledQueue=resolve})
+ let cancelledStarted=false
+ const cancelled=c.make({
+  onReconcileQueued:event=>{if(event.queued)cancelledQueue(event)},
+  synchronize:()=>{cancelledStarted=true},
+ })
+ t.after(()=>cancelled.dispose())
+ const cancelledRun=cancelled.run({fullScan:true})
+ const cancelledQueueEvent=await cancelledQueuePromise
+ assert.ok(cancelledQueueEvent.queued)
+ cancelled.dispose()
+
+ let queueController
+ let queued
+ const queuedPromise=new Promise(resolve=>{queued=resolve})
+ let loadedEntry
+ const next=c.make({
+  onReconcileQueued:event=>{if(event.queued)queued(event)},
+  synchronize:()=>{loadedEntry=structuredClone(queueController.state.entries[memoryKey])},
+ })
+ t.after(()=>next.dispose())
+ queueController=next
+ const nextRun=next.run({fullScan:true})
+ let queueTimer
+ const queueEvent=await Promise.race([queuedPromise,new Promise(resolve=>{queueTimer=setTimeout(()=>resolve(null),1000)})])
+ clearTimeout(queueTimer)
+ releaseConflict()
+ const [oldResult,nextResult,oldQueuedResult,cancelledResult]=await Promise.allSettled([oldRun,nextRun,oldQueuedRun,cancelledRun])
+
+ assert.ok(queueEvent?.queued,'the new controller should wait at the shared state boundary')
+ assert.equal(oldResult.status,'fulfilled')
+ assert.equal(nextResult.status,'fulfilled')
+ assert.equal(oldQueuedResult.status,'rejected','disposing the old controller cancels its queued rerun')
+ assert.equal(cancelledResult.status,'fulfilled')
+ assert.equal(cancelledStarted,false,'a controller disposed while queued never enters reconciliation')
+ assert.equal(cancelled.status().watchersReady,false)
+ assert.deepEqual(loadedEntry,advancedEntry,'the new controller reads the baseline committed by the old one')
+ const conflict=nextResult.value.conflicts.find(item=>item.key==='knowledge:overlap.md')
+ assert.ok(conflict)
+ assert.deepEqual(conflict.copies.map(file=>readFileSync(file,'utf8')).sort(),[hostBody,vaultBody].sort())
+ assert.deepEqual(nextResult.value.errors,[])
+ assert.deepEqual(readdirSync(c.store.root).filter(name=>name.startsWith('obsidian-state-')&&name.endsWith('.tmp')),[])
+ await c.sync.run()
+ assert.equal(c.sync.status().watchersReady,false,'the disposed controller cannot reinstall watchers')
+ c.sync.start(10)
+ assert.equal(c.sync.status().watchersReady,false,'start cannot revive a disposed controller')
+ next.dispose()
 })
 
 test('disabled sync does not create a vault folder and scheduled sync needs no RPC call',async t=>{

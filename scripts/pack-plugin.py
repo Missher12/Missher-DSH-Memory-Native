@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -55,6 +56,7 @@ def clean_name(name: str) -> bool:
 
 
 def main() -> int:
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "build-client.py")], cwd=ROOT, check=True)
     version = json.loads((ROOT / "package.json").read_text())["version"]
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / f"dsh-memory-{version}.tgz"
     names = collect()

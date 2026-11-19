@@ -126,6 +126,102 @@ test('a session cache notices a report created or replaced by another process', 
   assert.equal(recent[0].sessionKey, createHash('sha256').update('shared-session').digest('hex'))
 })
 
+test('a report remains listable after its session-index write is interrupted', t => {
+  const root = rootFor(t)
+  const writer = createRecallReportStore(root, PROFILE)
+  for (let i = 0; i < 8; i += 1) {
+    writer.write(`existing-${i}`, PROJECT, { ...report(`existing ${i}`, `mem_existing_${i}`, SOURCE_A), at: i + 1 })
+  }
+  const final = { ...report('interrupted report', 'mem_interrupted', SOURCE_B), at: 100 }
+  const pending = { ...final, outcome: 'pending', questions: [{ ...final.questions[0], answerCoverage: 'pending', answerExcerpt: null }] }
+  const key = createHash('sha256').update('interrupted-session').digest('hex')
+  const originalWrite = fs.writeSync
+  let injected = 0
+  fs.writeSync = (fd, data, ...args) => {
+    const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data)
+    if (injected === 0 && text.includes(`\"sessions\":[{\"sessionKey\":\"${key}\"`)) {
+      injected += 1
+      throw Object.assign(new Error('simulated session index interruption'), { code: 'EIO' })
+    }
+    return originalWrite(fd, data, ...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    assert.throws(() => writer.writePending('interrupted-session', PROJECT, pending), /session index interruption/u)
+  } finally {
+    fs.writeSync = originalWrite
+    syncBuiltinESMExports()
+  }
+  assert.equal(injected, 1)
+
+  const recovered = createRecallReportStore(root, PROFILE)
+  assert.deepEqual(recovered.get('interrupted-session', PROJECT), pending,
+    'the durable body remains readable while the derived index is stale')
+  assert.deepEqual(recovered.listRecent(PROJECT, 1, 0).map(item => item.report), [pending],
+    'the dirty index is rebuilt from durable bodies once')
+
+  const originalRead = fs.readFileSync
+  let reads = 0
+  fs.readFileSync = (...args) => { reads += 1; return originalRead(...args) }
+  syncBuiltinESMExports()
+  try {
+    assert.equal(recovered.listRecent(PROJECT, 1, 1).length, 1)
+    assert.equal(reads, 2, 'a normal paged refresh reads the index and only the requested report')
+  } finally {
+    fs.readFileSync = originalRead
+    syncBuiltinESMExports()
+  }
+
+  assert.equal(recovered.write('interrupted-session', PROJECT, final), true,
+    'pending and final reports share the same durable index update path')
+  assert.deepEqual(recovered.listRecent(PROJECT, 1, 0).map(item => item.report), [final])
+})
+
+test('a writer repairs a concurrent dirty index before adding its own session', t => {
+  const root = rootFor(t)
+  const writerA = createRecallReportStore(root, PROFILE)
+  const writerB = createRecallReportStore(root, PROFILE)
+  writerA.write('existing-before-interleave', PROJECT, { ...report('existing', 'mem_existing', SOURCE_A), at: 10 })
+  const second = { ...report('second writer', 'mem_second_writer', SOURCE_B), at: 200 }
+  const secondKey = createHash('sha256').update('second-writer-session').digest('hex')
+  const originalOpen = fs.openSync
+  const originalWrite = fs.writeSync
+  let interleaved = false
+  let failedIndexWrite = false
+  fs.writeSync = (fd, data, ...args) => {
+    const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data)
+    if (!failedIndexWrite && text.includes(`\"sessions\":[{\"sessionKey\":\"${secondKey}\"`)) {
+      failedIndexWrite = true
+      throw Object.assign(new Error('simulated concurrent session index interruption'), { code: 'EIO' })
+    }
+    return originalWrite(fd, data, ...args)
+  }
+  fs.openSync = (file, ...args) => {
+    if (!interleaved && String(file).endsWith('.reports.lock')) {
+      interleaved = true
+      assert.throws(() => writerB.write('second-writer-session', PROJECT, second), /concurrent session index interruption/u)
+    }
+    return originalOpen(file, ...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    assert.equal(writerA.write('first-writer-session', PROJECT,
+      { ...report('first writer', 'mem_first_writer', SOURCE_A), at: 100 }), true)
+  } finally {
+    fs.openSync = originalOpen
+    fs.writeSync = originalWrite
+    syncBuiltinESMExports()
+  }
+  assert.equal(interleaved, true)
+  assert.equal(failedIndexWrite, true)
+
+  const listed = createRecallReportStore(root, PROFILE).listRecent(PROJECT, 10)
+  const sessions = new Set(listed.map(item => item.sessionKey))
+  assert.ok(sessions.has(createHash('sha256').update('first-writer-session').digest('hex')))
+  assert.ok(sessions.has(secondKey), 'the second writer stays visible after the first writer completes')
+  assert.ok(sessions.has(createHash('sha256').update('existing-before-interleave').digest('hex')))
+})
+
 test('pending reports are visible but require the host stop event before an answer is marked observed', t => {
   const root = rootFor(t)
   const store = createRecallReportStore(root, PROFILE)

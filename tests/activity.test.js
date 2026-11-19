@@ -164,3 +164,32 @@ test('incremental store summaries preserve counts through activation, edit, arch
   assert.equal(stats.deleted, 2)
   assert.equal(computeActivity(backend, { scope: 'project', projectKey: KEY }).total, 3)
 })
+
+test('stats follows the trusted host session and otherwise chooses a browseable project', async t => {
+  const { root, store } = setup(t)
+  seed(store, Date.now(), { content: '可浏览项目的真实记忆。' })
+  const emptyProject = 'DSH-Memory-empty'
+  const deleted = seed(store, Date.now() + 1, { projectKey: emptyProject, content: '已遗忘的合成项目记录。' })
+  store.remove(deleted.id, [{ scope: 'project', projectKey: emptyProject }])
+  const trustedProject = 'DSH-Memory-current-session'
+  const index = { upsert() {}, remove() {}, search() { return [] } }
+  const backend = createPanelBackend({ store, index, config: {}, root,
+    getSessionProjectKey: async id => id === 'trusted-session' ? trustedProject : null,
+    getLastRecallAsync: async (input, hostProjectKey) => hostProjectKey &&
+      (!input?.projectKey || input.projectKey === hostProjectKey) ? { projectKey: hostProjectKey } : null,
+  })
+
+  const trusted = await backend.stats({ scope: 'project', sessionId: 'trusted-session' })
+  assert.equal(trusted.currentProjectKey, trustedProject)
+  assert.equal(trusted.lastRecall.projectKey, trustedProject)
+
+  const unknown = await backend.stats({ scope: 'project', sessionId: 'unknown-session' })
+  assert.equal(unknown.currentProjectKey, KEY)
+  assert.equal(unknown.lastRecall, null)
+  assert.deepEqual(unknown.browseableProjectKeys, [KEY])
+
+  const inconsistent = await backend.stats({ scope: 'project', sessionId: 'trusted-session', projectKey: KEY })
+  assert.equal(inconsistent.currentProjectKey, trustedProject)
+  assert.equal(inconsistent.lastRecall, null,
+    'a client project hint cannot rebind a recall report to a different host session project')
+})

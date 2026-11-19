@@ -64,7 +64,6 @@ window.__ModuleLoader__.load({
     const STATUSES = ['active', 'candidate', 'archived', 'superseded', 'deleted']
     const EDITABLE_STATUSES = ['active', 'candidate', 'archived']
     const BOOT_GLOBAL = '__DSH_MEMORY__'
-
     const DICTIONARIES = {
       en: {
         nav: 'Memory',
@@ -98,6 +97,7 @@ window.__ModuleLoader__.load({
         'flag.on': 'On',
         'flag.off': 'Off',
         'filter.scope': 'Scope',
+        'filter.project': 'Project',
         'filter.scope.project': 'Current project',
         'filter.scope.global': 'Global',
         'filter.status': 'Status',
@@ -493,6 +493,7 @@ window.__ModuleLoader__.load({
         'flag.on': '\u5f00\u542f',
         'flag.off': '\u5173\u95ed',
         'filter.scope': '\u8303\u56f4',
+        'filter.project': '\u9879\u76ee',
         'filter.scope.project': '\u5f53\u524d\u9879\u76ee',
         'filter.scope.global': '\u5168\u5c40',
         'filter.status': '\u72b6\u6001',
@@ -856,7 +857,6 @@ window.__ModuleLoader__.load({
         'recall.usageUnknown': '服务商未返回用量',
       },
     }
-
     const CSS = [
       'html:has(.dsh-memory-root),body:has(.dsh-memory-root){scrollbar-gutter:stable}',
       '*:has(.dsh-memory-root){scrollbar-gutter:stable}',
@@ -1185,7 +1185,6 @@ window.__ModuleLoader__.load({
       '.dsh-memory-select-option[aria-disabled="true"]{opacity:.5;cursor:default}',
       '.dsh-memory-select-mark{width:12px;flex:none}',
     ].join('\n')
-
     function messageOf(error) {
       if (error === null || error === undefined) return 'unknown error'
       return typeof error.message === 'string' && error.message !== '' ? error.message : String(error)
@@ -1474,7 +1473,6 @@ window.__ModuleLoader__.load({
         h('span', { className: 'dsh-memory-field-label' }, props.label),
         props.children)
     }
-
     const DAY_MS = 86_400_000
     const HEAT_WEEKS = 53
     const PALETTE_KEY = 'dsh.memory.particle-color.v1'
@@ -2028,7 +2026,6 @@ window.__ModuleLoader__.load({
             })
             : t('usage.providerMissing')))
     }
-
     function ObsidianSyncStatus({call,t,disabled}) {
       const [status,setStatus]=React.useState(null), [error,setError]=React.useState(''), [busy,setBusy]=React.useState(false)
       React.useEffect(()=>{
@@ -2329,7 +2326,6 @@ window.__ModuleLoader__.load({
             disabled: busy || !dirty,
           }, busy ? t('settings.saving') : t('settings.save'))))
     }
-
     function KnowledgeLibrary(props) {
       const { data, loading, error, t, call, onChanged, projectKeys = [] } = props
       const notes = data !== null && Array.isArray(data.notes) ? data.notes : []
@@ -2774,7 +2770,6 @@ window.__ModuleLoader__.load({
     }
 
     const EMPTY_SESSION_SOURCE = { subscribe: () => () => {}, getSnapshot: () => null }
-
     function MemoryPanel(props) {
       const { t, store, sessionSource } = props
       const locale = props.locale
@@ -2784,6 +2779,7 @@ window.__ModuleLoader__.load({
       const sessionId = typeof session?.key === 'string' ? session.key : undefined
 
       const [scope, setScope] = React.useState('project')
+      const [projectSelection, setProjectSelection] = React.useState({ sessionId: null, key: null })
       const [status, setStatus] = React.useState('')
       const [kind, setKind] = React.useState('')
       const [topic, setTopic] = React.useState('')
@@ -2796,7 +2792,7 @@ window.__ModuleLoader__.load({
       const [libraryLoading, setLibraryLoading] = React.useState(false)
       const [libraryError, setLibraryError] = React.useState('')
       const [libraryRefresh, setLibraryRefresh] = React.useState(0)
-      const [data, setData] = React.useState(null)
+      const [dataState, setData] = React.useState(null)
       const [sessionPanel, setSessionPanel] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
@@ -2820,8 +2816,12 @@ window.__ModuleLoader__.load({
       const toolbarObserver = React.useRef(null)
       const loadGeneration = React.useRef(0)
       const sessionRequestGeneration = React.useRef(0)
+      const projectViewGeneration = React.useRef(0)
+      const projectSelectionRef = React.useRef(projectSelection)
+      projectSelectionRef.current = projectSelection
       const activeSessionId = React.useRef(sessionId)
       activeSessionId.current = sessionId
+      const data = dataState !== null && dataState.scope === scope && dataState.sessionId === sessionId ? dataState : null
       const setToolbarNode = React.useCallback((node) => {
         if (toolbarObserver.current !== null) {
           toolbarObserver.current.disconnect()
@@ -2852,25 +2852,33 @@ window.__ModuleLoader__.load({
 
       const load = React.useCallback(async () => {
         if (call === null) return
+        const requestedSelection = projectSelection
+        if (projectSelectionRef.current !== requestedSelection) return
         const request = ++loadGeneration.current
         const requestedSessionId = activeSessionId.current
-        const isCurrent = () => request === loadGeneration.current && requestedSessionId === activeSessionId.current
+        const requestedProjectView = projectViewGeneration.current
+        const isCurrent = () => request === loadGeneration.current && requestedSessionId === activeSessionId.current &&
+          requestedSelection === projectSelectionRef.current && requestedProjectView === projectViewGeneration.current
         setLoading(true)
         setError('')
         try {
-          const stats = await call('stats', { scope })
+          const stats = await call('stats', { scope, sessionId: requestedSessionId })
           if (!isCurrent()) return
-          if (stats?.health?.status === 'unavailable') { setData({ stats, list: null, activity: null, profile: null }); return }
-          const activity = await call('activity', { scope, days: 371 })
+          if (stats?.health?.status === 'unavailable') {
+            setData({ scope, sessionId: requestedSessionId, projectKey: null, stats, list: null, activity: null, profile: null })
+            return
+          }
+          const selectedProjectKey = scope === 'project'
+            ? (requestedSelection.sessionId === requestedSessionId ? requestedSelection.key : null) ??
+              stats?.currentProjectKey ?? stats?.browseableProjectKeys?.[0]
+            : undefined
+          const activity = await call('activity', { scope, projectKey: selectedProjectKey, days: 371 })
           if (!isCurrent()) return
           const profile = await call('profile', { limit: 10 })
           if (!isCurrent()) return
-          const projectKey = scope === 'project' && typeof stats?.currentProjectKey === 'string'
-            ? stats.currentProjectKey
-            : undefined
           const listed = await call('list', {
             scope,
-            projectKey,
+            projectKey: selectedProjectKey,
             status: status === '' ? undefined : status,
             kind: kind === '' ? undefined : kind,
             topic: topic === '' ? undefined : topic,
@@ -2878,13 +2886,14 @@ window.__ModuleLoader__.load({
             limit: pageSize,
             offset: page * pageSize,
           })
-          if (isCurrent()) setData({ stats, activity, profile, list: listed })
+          if (isCurrent()) setData({ scope, sessionId: requestedSessionId,
+            projectKey: listed?.projectKey ?? selectedProjectKey ?? null, stats, activity, profile, list: listed })
         } catch (failure) {
           if (isCurrent()) setError(messageOf(failure))
         } finally {
           if (request === loadGeneration.current) setLoading(false)
         }
-      }, [call, scope, status, kind, topic, query, page, pageSize])
+      }, [call, scope, status, kind, topic, query, page, pageSize, sessionId, projectSelection])
 
       React.useEffect(() => {
         void load()
@@ -2939,14 +2948,16 @@ window.__ModuleLoader__.load({
 
       const runAction = async (key, action, successKey) => {
         if (call === null || busy !== '') return
+        const projectView = projectViewGeneration.current
         setBusy(key)
         setError('')
         try {
           await action(call)
+          if (projectView !== projectViewGeneration.current) return
           if (typeof successKey === 'string' && successKey !== '') setNotice(t(successKey))
           await load()
         } catch (failure) {
-          setError(messageOf(failure))
+          if (projectView === projectViewGeneration.current) setError(messageOf(failure))
         } finally {
           setBusy('')
         }
@@ -2968,8 +2979,11 @@ window.__ModuleLoader__.load({
         patch: { status: 'archived' },
       }), 'notice.archived')
 
-      const remove = (record) => runAction('delete:' + record.id, (invoke) => invoke('removeMemory', targetOf(record)), 'notice.deleted')
-        .then(() => setConfirmingId(''))
+      const remove = (record) => {
+        const projectView = projectViewGeneration.current
+        return runAction('delete:' + record.id, (invoke) => invoke('removeMemory', targetOf(record)), 'notice.deleted')
+          .then(() => { if (projectView === projectViewGeneration.current) setConfirmingId('') })
+      }
 
       const restore = (record) => runAction('restore:' + record.id, (invoke) => invoke('restoreMemory', targetOf(record)), 'notice.restored')
 
@@ -2984,25 +2998,30 @@ window.__ModuleLoader__.load({
 
       const openHistory = async (record) => {
         if (call === null) return
+        const projectView = projectViewGeneration.current
         setHistoryRecord(record)
         setHistoryData(null)
         setHistoryError('')
         setHistoryBusy(true)
         try {
-          setHistoryData(await call('history', targetOf(record)))
+          const history = await call('history', targetOf(record))
+          if (projectView === projectViewGeneration.current) setHistoryData(history)
         } catch (failure) {
-          setHistoryError(messageOf(failure))
+          if (projectView === projectViewGeneration.current) setHistoryError(messageOf(failure))
         } finally {
-          setHistoryBusy(false)
+          if (projectView === projectViewGeneration.current) setHistoryBusy(false)
         }
       }
 
       const restoreRevision = (revision) => {
         if (historyRecord === null) return
+        const projectView = projectViewGeneration.current
         void runAction('revision:' + revision, (invoke) => invoke('restoreRevision', {
           ...targetOf(historyRecord),
           revision,
-        }), 'notice.restored').then(() => setHistoryRecord(null))
+        }), 'notice.restored').then(() => {
+          if (projectView === projectViewGeneration.current) setHistoryRecord(null)
+        })
       }
 
       const toggleSelected = (id) => {
@@ -3013,6 +3032,7 @@ window.__ModuleLoader__.load({
 
       const bulk = async (action, extra) => {
         if (call === null || selected.length === 0 || busy !== '') return
+        const projectView = projectViewGeneration.current
         const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
         setBusy('bulk:' + action)
         setError('')
@@ -3024,6 +3044,7 @@ window.__ModuleLoader__.load({
             ids: selected,
             ...(extra === undefined ? {} : extra),
           })
+          if (projectView !== projectViewGeneration.current) return
           if (result.rolledBack === true) {
             setNotice(t('notice.bulkRolledBack', { failed: String(result.failedCount) }))
           } else if (result.failedCount > 0) {
@@ -3036,7 +3057,7 @@ window.__ModuleLoader__.load({
           setBulkTagValue('')
           await load()
         } catch (failure) {
-          setError(messageOf(failure))
+          if (projectView === projectViewGeneration.current) setError(messageOf(failure))
         } finally {
           setBusy('')
         }
@@ -3044,32 +3065,38 @@ window.__ModuleLoader__.load({
 
       const openTopicSuggestions = async () => {
         if (call === null) return
+        const projectView = projectViewGeneration.current
         const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
         setTopicSuggestOpen(true)
         setTopicSuggestions(null)
         setTopicSuggestBusy(true)
         try {
-          setTopicSuggestions(await call('topicSuggestions', { scope, projectKey }))
+          const suggestions = await call('topicSuggestions', { scope, projectKey })
+          if (projectView === projectViewGeneration.current) setTopicSuggestions(suggestions)
         } catch (failure) {
-          setError(messageOf(failure))
-          setTopicSuggestOpen(false)
+          if (projectView === projectViewGeneration.current) {
+            setError(messageOf(failure))
+            setTopicSuggestOpen(false)
+          }
         } finally {
-          setTopicSuggestBusy(false)
+          if (projectView === projectViewGeneration.current) setTopicSuggestBusy(false)
         }
       }
 
       const mergeTopic = async (item) => {
         if (call === null || busy !== '') return
+        const projectView = projectViewGeneration.current
         const projectKey = scope === 'project' && typeof currentProjectKey === 'string' ? currentProjectKey : undefined
         setBusy('topic:merge')
         setError('')
         try {
           const result = await call('mergeTopics', { scope, projectKey, from: item.from, to: item.to })
+          if (projectView !== projectViewGeneration.current) return
           setNotice(t('topic.merged', { count: String(result.merged ?? 0) }))
           setTopicSuggestOpen(false)
           await load()
         } catch (failure) {
-          setError(messageOf(failure))
+          if (projectView === projectViewGeneration.current) setError(messageOf(failure))
         } finally {
           setBusy('')
         }
@@ -3127,7 +3154,41 @@ window.__ModuleLoader__.load({
       const kindCountsTotal = Object.values(kindCounts).reduce((sum, value) => sum + (Number(value) || 0), 0)
       const topicCounts = listed !== null && listed.topicCounts !== undefined && listed.topicCounts !== null ? listed.topicCounts : {}
       const pageCount = Math.max(1, Math.ceil(total / pageSize))
-      const currentProjectKey = stats === null ? null : stats.currentProjectKey
+      const projectOverride = projectSelection.sessionId === sessionId ? projectSelection.key : null
+      const currentProjectKey = scope === 'project'
+        ? (data?.scope === 'project' ? data.projectKey : projectOverride ?? stats?.currentProjectKey ?? stats?.browseableProjectKeys?.[0] ?? null)
+        : null
+      const projectOptions = [...new Set([...(stats?.projectKeys ?? []), ...(stats?.browseableProjectKeys ?? []),
+        ...(typeof currentProjectKey === 'string' ? [currentProjectKey] : [])])]
+      const selectProject = key => {
+        if (scope !== 'project' || key === currentProjectKey) return
+        projectViewGeneration.current += 1
+        loadGeneration.current += 1
+        setProjectSelection({ sessionId, key })
+        setData(null)
+        setPage(0)
+        setStatus('')
+        setKind('')
+        setTopic('')
+        setQueryInput('')
+        setQuery('')
+        setSelected([])
+        setEditing(null)
+        setEditError('')
+        setConfirmingId('')
+        setPurgingId('')
+        setHistoryRecord(null)
+        setHistoryData(null)
+        setHistoryError('')
+        setHistoryBusy(false)
+        setTopicSuggestOpen(false)
+        setTopicSuggestions(null)
+        setTopicSuggestBusy(false)
+        setBulkTagOpen(false)
+        setBulkTagValue('')
+        setError('')
+        setNotice('')
+      }
       const filtering = query !== '' || status !== '' || kind !== '' || topic !== ''
       const showMissingProject = !filtering && scope === 'project' && currentProjectKey === null &&
         stats !== null && stats.total > 0
@@ -3294,13 +3355,37 @@ window.__ModuleLoader__.load({
               className: 'dsh-memory-select',
               value: scope,
               onChange: (event) => {
+                projectViewGeneration.current += 1
+                loadGeneration.current += 1
                 setScope(event.target.value)
+                setData(null)
                 setPage(0)
+                setStatus('')
+                setKind('')
+                setTopic('')
+                setQueryInput('')
+                setQuery('')
+                setSelected([])
+                setEditing(null)
+                setConfirmingId('')
+                setPurgingId('')
+                setHistoryRecord(null)
+                setHistoryData(null)
+                setTopicSuggestOpen(false)
+                setTopicSuggestions(null)
               },
               'aria-label': t('filter.scope'),
             },
             h('option', { value: 'project' }, t('filter.scope.project')),
             h('option', { value: 'global' }, t('filter.scope.global')))),
+          scope === 'project' && projectOptions.length > 1 ? h(Field, { label: t('filter.project') },
+            h(Select, {
+              className: 'dsh-memory-select dsh-memory-project-select',
+              value: currentProjectKey ?? '',
+              onChange: event => selectProject(event.target.value),
+              'aria-label': t('filter.project'),
+              title: currentProjectKey ?? '',
+            }, projectOptions.map(key => h('option', { key, value: key, title: key }, key)))) : null,
           h(Field, { label: t('filter.status') },
             h(Select, {
               className: 'dsh-memory-select',
@@ -3561,7 +3646,6 @@ window.__ModuleLoader__.load({
         bulkTagModal,
         topicModal)
     }
-
     const inject = ['slots', 'locale']
 
     function apply(ctx) {

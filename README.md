@@ -2,7 +2,7 @@
 
 ![Memory Native · 长期记忆（品牌插画）](docs/images/cover-v2.png)
 
-当前原生版本 **1.8.0-native.20261119.0** · [下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases)
+当前原生版本 **1.9.0-native.20261119.0** · [下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases)
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
 [仓库](https://github.com/Missher12/Missher-DSH-Memory-Native) · [Releases 下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases) · [设计文档](docs/design.md) · [验证记录](docs/verification.md)
@@ -115,8 +115,15 @@
 ## 开发
 
 ```bash
+# 客户端改动后重建/核对 DSH 加载文件
+npm run client:build
+npm run client:check
+
 # 单元测试（需要 Node ≥ 22.19）
 node --test tests/*.test.js
+
+# 插件包会先重建客户端文件
+npm run pack
 ```
 
 安装到当前 profile 时可使用 linked 目录方式，通过 Harness 的 plugin_manager install_bundle 指定本目录绝对路径。

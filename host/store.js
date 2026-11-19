@@ -367,6 +367,43 @@ export class MemoryStore {
     return undefined
   }
 
+  #appendCommitted(state, changes) {
+    const changed = changes.filter(change => change.changed !== false)
+    if (changed.length === 0) return false
+    const lines = changed.map(change => `${JSON.stringify(change.record)}\n`)
+    const text = lines.join('')
+    mkdirSync(state.dir, { recursive: true, mode: 0o700 })
+    const fd = openSync(state.file, 'a+', 0o600)
+    const originalSize = fstatSync(fd).size
+    let separatorBytes = 0
+    try {
+      if (originalSize > 0) {
+        const tail = Buffer.alloc(1)
+        if (readSync(fd, tail, 0, 1, originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
+        if (tail[0] !== 10) { writeAll(fd, '\n'); separatorBytes = 1 }
+      }
+      writeAll(fd, text)
+      fsyncSync(fd)
+    } catch (error) {
+      try { truncateFile(state.file, originalSize) }
+      catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
+      throw error
+    } finally { closeSync(fd) }
+    for (const change of changed) {
+      const line = `${JSON.stringify(change.record)}\n`
+      state.records.set(change.record.id, change.record)
+      this.#adjustAggregate(state, change.previous, change.record)
+      rememberAuthority(change.record, line.slice(0, -1))
+      state.lines += 1
+    }
+    state.bytes += Buffer.byteLength(text) + separatorBytes
+    state.stamp = fileStamp(state.file)
+    this.#touch()
+    const redundant = state.lines - state.records.size
+    return (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
+      redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+  }
+
   /** Append a record revision under a cross-process lock; fsync before returning. */
   append(record, options = {}) {
     if (record === null || typeof record !== 'object') throw new Error('append requires a record')
@@ -390,7 +427,6 @@ export class MemoryStore {
           next = { ...record, revision: current.revision + 1 }
         }
       }
-      mkdirSync(state.dir, { recursive: true, mode: 0o700 })
       const revokesCurrent = current && (current.content !== next.content || (current.status === 'active' && next.status !== 'active') || next.status === 'deleted')
       const revokesNext = next.status === 'deleted'
       if (revokesCurrent || revokesNext) {
@@ -401,38 +437,9 @@ export class MemoryStore {
       }
       if (revokesCurrent) blockSourceRecall(this.#root, current)
       if (revokesNext) blockSourceRecall(this.#root, next)
-      const line = `${JSON.stringify(next)}\n`
-      const fd = openSync(state.file, 'a+', 0o600)
-      const originalSize = fstatSync(fd).size
-      let separatorBytes = 0
-      try {
-        if (originalSize > 0) {
-          const tail = Buffer.alloc(1)
-          if (readSync(fd, tail, 0, 1, originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
-          if (tail[0] !== 10) { writeAll(fd, '\n'); separatorBytes = 1 }
-        }
-        writeAll(fd, line)
-        fsyncSync(fd)
-      } catch (error) {
-        // We hold the writer lock: roll back only this uncommitted append.
-        try { truncateFile(state.file, originalSize) }
-        catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
-        throw error
-      } finally {
-        closeSync(fd)
-      }
-      state.records.set(next.id, next)
-      this.#adjustAggregate(state, current, next)
-      rememberAuthority(next, line.slice(0, -1))
-      state.lines += 1
-      state.bytes += Buffer.byteLength(line) + separatorBytes
-      state.stamp = fileStamp(state.file)
-      this.#touch()
       // A large live set stays above the old size threshold even immediately
       // after compaction. Rewrite only when enough obsolete revisions exist.
-      const redundant = state.lines - state.records.size
-      const compact = (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
-        redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+      const compact = this.#appendCommitted(state, [{ record: next, previous: current, changed: true }])
       return { record: next, previous: current, changed: true, compact }
     })
     if (outcome.changed) this.#notifyChange({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
@@ -463,7 +470,6 @@ export class MemoryStore {
         }
       }
       const changes = []
-      const lines = []
       for (const input of records) {
         const current = state.records.get(input.id)
         if (current && input.content === current.content && input.status === current.status) {
@@ -485,43 +491,9 @@ export class MemoryStore {
         }
         if (revokesCurrent) blockSourceRecall(this.#root, current)
         if (revokesNext) blockSourceRecall(this.#root, next)
-        const line = `${JSON.stringify(next)}\n`
-        lines.push(line)
         changes.push({ record: next, previous: current, changed: true })
       }
-      if (lines.length === 0) return { changes, compact: false }
-      mkdirSync(state.dir, { recursive: true, mode: 0o700 })
-      const fd = openSync(state.file, 'a+', 0o600)
-      const originalSize = fstatSync(fd).size
-      let separatorBytes = 0
-      const text = lines.join('')
-      try {
-        if (originalSize > 0) {
-          const tail = Buffer.alloc(1)
-          if (readSync(fd, tail, 0, 1, originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
-          if (tail[0] !== 10) { writeAll(fd, '\n'); separatorBytes = 1 }
-        }
-        writeAll(fd, text)
-        fsyncSync(fd)
-      } catch (error) {
-        try { truncateFile(state.file, originalSize) }
-        catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
-        throw error
-      } finally { closeSync(fd) }
-      for (const change of changes) {
-        if (!change.changed) continue
-        const line = `${JSON.stringify(change.record)}\n`
-        state.records.set(change.record.id, change.record)
-        this.#adjustAggregate(state, change.previous, change.record)
-        rememberAuthority(change.record, line.slice(0, -1))
-        state.lines += 1
-      }
-      state.bytes += Buffer.byteLength(text) + separatorBytes
-      state.stamp = fileStamp(state.file)
-      this.#touch()
-      const redundant = state.lines - state.records.size
-      const compact = (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
-        redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+      const compact = this.#appendCommitted(state, changes)
       return { changes, compact }
     })
     const changed = outcome.changes.filter(item => item.changed)
@@ -830,9 +802,10 @@ export class MemoryStore {
     const projectKeys = this.listProjects()
     const scopes = [this.#state('global', null), ...projectKeys.map(key => this.#state('project', key))]
     const result = { total: 0, deleted: 0, statusCounts: new Map(), kinds: new Map(SUMMARY_KINDS.map(kind => [kind, 0])),
-      confidenceSum: 0, confidenceCount: 0, lastCapturedAt: 0, projectKeys }
+      confidenceSum: 0, confidenceCount: 0, lastCapturedAt: 0, projectKeys, browseableProjectKeys: [] }
     for (const state of scopes) {
       const aggregate = this.#aggregate(state)
+      if (state.scope === 'project' && aggregate.total > 0) result.browseableProjectKeys.push(state.projectKey)
       result.total += aggregate.total
       result.deleted += aggregate.deleted
       result.confidenceSum += aggregate.confidenceSum

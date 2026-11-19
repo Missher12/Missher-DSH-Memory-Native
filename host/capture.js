@@ -40,68 +40,19 @@ import {
 } from './capture-journal.js'
 import { projectIdentity } from './paths.js'
 import { estimateTokens } from './recall.js'
-import { buildRecord, contentHashOf, looksSensitive, mergeSourceRefs } from './records.js'
-import { tokenize } from './tokenize.js'
+import { looksSensitive } from './records.js'
 import { analyzeUserMessageControls, explicitRememberText, isBareRemember } from './user-controls.js'
 import { grantSourceRecall } from './source-passages.js'
 import { readRecallSelection, readRecallSelections, recallSelectionId, writeRecallSelection } from './recall-journal.js'
 import { buildRecallSelectionPrompt } from './recall-selection.js'
+import { MIN_CONTINUATION_CHARS, MAX_CONTINUATION_DEPTH, MAX_COMPLETION_ROUNDS, RECOVERY_OUTPUT_TOKENS,
+  emptyCapacityResult, sameRoute, dayKey, nextDayStart, receiptDay, combineSignals, automaticBudget,
+  normalizeUsage, splitRanges } from './capture-budget.js'
+import { EXPLICIT_MEMORY_PATTERN, isOrdinaryDecision, memoryOptOut, sourceLabel, isDirectUserSource, isModelEvidenceSource, sourceIdLine } from './capture-evidence.js'
+import { CaptureApplyCoordinator } from './capture-apply.js'
 
-const SIMILARITY_THRESHOLD = 0.9
-const PREFERENCE_SIMILARITY_THRESHOLD = 0.85
-const CONFLICT_SIMILARITY_THRESHOLD = 0.7
-const EXPLICIT_MEMORY_PATTERN = /记住|记一下|记下这个|别忘|以后都|从现在起|remember (?:this|that)|don'?t forget|from now on/iu
 const NO_SAVE_REASON = '明确要求不保存当前问答，已跳过提炼'
 const LOW_EFFORT_ORDER = ['off', 'none', 'minimal', 'low']
-const MAX_EVIDENCE_EXCERPT = 240
-
-// Short confirmed decisions qualify for normal (budgeted) capture. Only a
-// direct assertion counts; questions, hypotheticals and opt-outs still skip.
-function isOrdinaryDecision(source) {
-  if (!isDirectUserSource(source) || memoryOptOut(source)) return false
-  return (source.text.match(/[^。！？!?\n]+[？?]?/gu) ?? []).some(sentence =>
-    !/(?:如果|假如|要不要|是否|能不能|要是|可能|打个比方|假设|吗\s*$|[？?]|should we|what if)/iu.test(sentence) &&
-    /(?:我(?:们)?(?:已)?决定|我们(?:就|改用)|定为|改为|改成|改到|改在|从今(?:起|以后)|以后(?:都|统一)|先(?:别|不)(?:升|改|迁移)|we decided|we(?:'ll| will) (?:switch|use))/iu.test(sentence))
-}
-
-// Use enclosing sentences so an extractor cannot quote "升级" out of
-// "不要升级". Offsets refer to the stored original JS string (UTF-16).
-function locateSourceSentence(entry, needle) {
-  const { source, from, to } = entry
-  const start = source.text.indexOf(needle, from)
-  if (start < from || start + needle.length > to || source.text.indexOf(needle, start + 1) >= 0 ||
-      source.text.indexOf(needle) !== start) return null
-  const end = start + needle.length
-  const boundary = /[。！？!?；;\n]|\.(?=\s|$)/gu
-  let left = 0, right = source.text.length
-  for (const match of source.text.matchAll(boundary)) {
-    if (match.index + 1 <= start) left = match.index + 1
-    else if (match.index >= end - 1) { right = match.index + 1; break }
-  }
-  while (left < start && /\s/u.test(source.text[left])) left++
-  if (left < from || right > to || right - left > MAX_EVIDENCE_EXCERPT) return null
-  return { from: left, to: right, excerpt: source.text.slice(left, right) }
-}
-const MIN_CONTINUATION_CHARS = 1200
-const MAX_CONTINUATION_DEPTH = 4
-const MAX_COMPLETION_ROUNDS = 2
-const RECOVERY_OUTPUT_TOKENS = 4096
-
-function emptyCapacityResult(task) {
-  return task.callState === 'completed' && !String(task.resultText ?? '').trim() &&
-    (['max-tokens', 'length'].includes(task.resultFinishKind) || /输出预算耗尽且无可用文本/u.test(task.reason ?? ''))
-}
-
-function sameRoute(a, b) {
-  return a?.provider === b?.provider && a?.model === b?.model && a?.reasoningEffort === b?.reasoningEffort
-}
-
-function memoryOptOut(source) {
-  if (!isDirectUserSource(source)) return false
-  const head = source.text.slice(0, 600)
-  return analyzeUserMessageControls(head).noSaveDirective ||
-    (/虚构(?:测试|验收)?(?:材料|资料)/u.test(head) && /测试|验收/u.test(head) && !EXPLICIT_MEMORY_PATTERN.test(head))
-}
 
 function textOfContent(content) {
   if (typeof content === 'string') return content
@@ -147,151 +98,6 @@ function previousUserInput(observation, event, command) {
   return admitted
 }
 
-/** Token-set Jaccard overlap of two statements, used to collapse near duplicates. */
-function similarity(left, right) {
-  const a = new Set(tokenize(left))
-  const b = new Set(tokenize(right))
-  if (a.size === 0 || b.size === 0) return 0
-  let shared = 0
-  for (const token of a) if (b.has(token)) shared += 1
-  return shared / (a.size + b.size - shared)
-}
-
-/** Shared-token coverage of a statement against a source segment. */
-function coverage(statement, source) {
-  const a = new Set(tokenize(statement))
-  if (a.size === 0) return { ratio: 0, shared: 0 }
-  const b = new Set(tokenize(source))
-  let shared = 0
-  for (const token of a) if (b.has(token)) shared += 1
-  return { ratio: shared / a.size, shared }
-}
-
-function hasEvidenceMatch(value) {
-  return value.shared >= 2 && value.ratio >= 0.08
-}
-
-/** A user question that merely shares topic words cannot confirm a value. */
-function hasDirectUserSupport(statement, source) {
-  const value = coverage(statement, source)
-  if (!hasEvidenceMatch(value)) return false
-  const sourceText = String(source ?? '').toLowerCase()
-  for (const entity of entitiesOf(statement)) {
-    if (!sourceText.includes(entity.toLowerCase())) return false
-  }
-  const literals = text => [...text.matchAll(/\d+(?:[.:：]\d+)*(?:\s*(?:毫秒|秒钟?|分钟|小时|天|个月|年|次|mib|gib|mb|gb|ms|%))?/giu)]
-    .map(match => match[0].replace(/\s+/gu, '').replace(/：/gu, ':').toLowerCase())
-  const available = literals(sourceText)
-  for (const value of literals(statement)) {
-    if (!available.some(sourceValue => sourceValue === value ||
-        (/^[\d.:]+$/u.test(value) && sourceValue.match(/^[\d.:]+/u)?.[0] === value))) return false
-  }
-  return true
-}
-
-const NEGATION_PATTERN = /(?:不|没|别|勿|禁止|never|\bnot\b|\bno\b)/iu
-
-function entitiesOf(text) {
-  return new Set(String(text ?? '').match(/\b[A-Za-z][A-Za-z0-9_.-]{1,}\b/gu) ?? [])
-}
-
-function differentNamedServices(left, right) {
-  const names = text => [...String(text).matchAll(/(?:服务|实例|集群)\s*[-:：]?\s*([A-Za-z][\w-]*)|\b([A-Za-z][\w-]*)\s*(?:服务|实例|集群)/giu)]
-    .map(match => (match[1] ?? match[2]).toLowerCase())
-  const a = names(left), b = names(right)
-  return a.length > 0 && b.length > 0 && !a.some(name => b.includes(name))
-}
-
-function disjointEntities(left, right) {
-  if (differentNamedServices(left, right)) return true
-  const a = entitiesOf(left)
-  const b = entitiesOf(right)
-  if (a.size === 0 || b.size === 0) return false
-  for (const value of a) if (b.has(value)) return false
-  return true
-}
-
-function numbersOf(text) {
-  return new Set(String(text ?? '').match(/\d+(?:\.\d+)?/gu) ?? [])
-}
-
-/** Whether two similar statements carry conflicting values or polarity. */
-function conflictingValues(left, right) {
-  const a = numbersOf(left)
-  const b = numbersOf(right)
-  for (const value of a) if (!b.has(value)) return true
-  for (const value of b) if (!a.has(value)) return true
-  return NEGATION_PATTERN.test(String(left)) !== NEGATION_PATTERN.test(String(right))
-}
-
-function dayKey(ms) {
-  const date = new Date(ms)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function nextDayStart(ms) {
-  const date = new Date(ms)
-  date.setHours(24, 0, 0, 0)
-  return date.getTime()
-}
-
-// Older receipts used UTC dates. Interpret their original call timestamp;
-// never reset an already-spent allowance merely because the plugin upgraded.
-function receiptDay(day, at, calendar) {
-  return calendar !== 'local' && Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === day
-    ? dayKey(at) : day
-}
-
-function combineSignals(...signals) {
-  const active = signals.filter(signal => signal !== null && typeof signal === 'object' &&
-    typeof signal.addEventListener === 'function' && typeof signal.aborted === 'boolean')
-  if (active.length <= 1) return active[0]
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any(active)
-  const controller = new AbortController()
-  for (const signal of active) {
-    if (signal.aborted) controller.abort(signal.reason)
-    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
-  }
-  return controller.signal
-}
-
-// Explicit/manual calls bypass the automatic allowance. Preserve automatic
-// calls separately so a later manual retry cannot erase their budget usage.
-function automaticBudget(task) {
-  if (typeof task.automaticCallDay === 'string' && Number.isInteger(task.automaticCalls)) {
-    return { day: receiptDay(task.automaticCallDay, task.automaticCallAt ?? task.lastCallAt, task.budgetReservation?.calendar),
-      calls: Math.max(0, task.automaticCalls) }
-  }
-  return typeof task.lastCallAt === 'number' && !task.explicit && !task.manual
-    ? { day: dayKey(task.lastCallAt), calls: 1 }
-    : { day: null, calls: 0 }
-}
-
-/** Normalize provider usage without inventing zeros for missing fields. */
-function normalizeUsage(value) {
-  if (value === null || typeof value !== 'object') return null
-  const pick = (...names) => {
-    for (const name of names) {
-      const candidate = value[name]
-      if (Number.isInteger(candidate) && candidate >= 0) return candidate
-    }
-    return undefined
-  }
-  const input = pick('inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens')
-  const output = pick('outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens')
-  const total = pick('totalTokens', 'total_tokens')
-  if (input === undefined && output === undefined && total === undefined) return null
-  return {
-    ...(input === undefined ? {} : { inputTokens: input }),
-    ...(output === undefined ? {} : { outputTokens: output }),
-    ...(total === undefined ? {} : { totalTokens: total }),
-  }
-}
-
-/**
- * Split source messages into segment entries without truncating text.
- * Each entry records the source id plus a character range into that source.
- */
 export function segmentSources(root, sources, maxChars) {
   const limit = Math.max(1000, Number.isInteger(maxChars) ? maxChars : 8000)
   const segments = []
@@ -337,55 +143,6 @@ export function segmentSources(root, sources, maxChars) {
   return segments
 }
 
-function sourceLabel(source) {
-  if (source.role === 'assistant') return '助手'
-  if (source.sourceKind === 'user') return '用户'
-  return `内部上下文（${source.sourceKind ?? 'unknown'}）`
-}
-
-/** Only native user messages are confirming evidence; internal user-role rows are not. */
-function isDirectUserSource(source) {
-  return source.role === 'user' && (source.sourceKind === 'user' || source.sourceKind === 'unknown')
-}
-
-function isModelEvidenceSource(entry) {
-  return !memoryOptOut(entry.source) && (isDirectUserSource(entry.source) || entry.source.role === 'assistant')
-}
-
-function sourceIdLine(entry) {
-  return `[${entry.sourceId}] ${sourceLabel(entry)}：${entry.text}`
-}
-
-/** Split a task's covered source ranges into two contiguous children. */
-function splitRanges(entries) {
-  const total = entries.reduce((sum, entry) => sum + (entry.to - entry.from), 0)
-  if (total < MIN_CONTINUATION_CHARS * 2) return null
-  const target = Math.floor(total / 2)
-  const left = []
-  const right = []
-  let seen = 0
-  let split = false
-  for (const entry of entries) {
-    const length = entry.to - entry.from
-    if (split) {
-      right.push({ ...entry })
-      continue
-    }
-    if (seen + length <= target) {
-      left.push({ ...entry })
-      seen += length
-      continue
-    }
-    const cut = target - seen
-    if (cut > 0) left.push({ ...entry, to: entry.from + cut })
-    if (entry.from + cut < entry.to) right.push({ ...entry, from: entry.from + cut })
-    split = true
-    seen += length
-  }
-  if (left.length === 0 || right.length === 0) return null
-  return [left, right]
-}
-
 export class CapturePipeline {
   #store
   #index
@@ -396,6 +153,7 @@ export class CapturePipeline {
   #logger
   #onExtraction
   #onUsage
+  #applyCoordinator
   #buffers = new Map()
   #remembering = new WeakMap()
   #queue = Promise.resolve()
@@ -419,6 +177,8 @@ export class CapturePipeline {
     this.#logger = options.logger
     this.#onExtraction = typeof options.onExtraction === 'function' ? options.onExtraction : () => {}
     this.#onUsage = typeof options.onUsage === 'function' ? options.onUsage : () => {}
+    this.#applyCoordinator = new CaptureApplyCoordinator({ store: this.#store, index: this.#index,
+      config: this.#config, clock: this.#clock, logger: this.#logger })
     const root = this.#store?.root
     if (typeof root === 'string' && root !== '') {
       recoverCaptureTasks(root)
@@ -447,6 +207,7 @@ export class CapturePipeline {
       const changed = config.capture.enabled !== this.#config.capture.enabled ||
         config.capture.maxCallsPerDay !== this.#config.capture.maxCallsPerDay
       this.#config = config
+      this.#applyCoordinator.setConfig(config)
       if (changed) this.#scheduleDrain()
     }
   }
@@ -1508,7 +1269,7 @@ export class CapturePipeline {
     let applied = 0
     let rejected = 0
     try {
-      const appliedResult = this.#apply(parsed.items, scopeInfo)
+      const appliedResult = this.#applyCoordinator.apply(parsed.items, scopeInfo)
       applied = appliedResult.applied
       rejected = appliedResult.rejected
     } catch (error) {
@@ -1858,339 +1619,5 @@ export class CapturePipeline {
     return { text, truncated: false, usage, finishKind: finish.kind, reasoningChars }
   }
 
-  /** Fold a near-identical statement into the existing record (same kind/scope/topic). */
-  #findSimilar(record) {
-    const scopes = [{ scope: record.scope, projectKey: record.projectKey ?? null }]
-    const strict = record.kind === 'preference' || record.kind === 'decision'
-    const threshold = strict ? PREFERENCE_SIMILARITY_THRESHOLD : SIMILARITY_THRESHOLD
-    const minRatio = strict ? 0.75 : 0.6
-    let best
-    let bestScore = threshold
-    let conflictBest
-    let conflictScore = CONFLICT_SIMILARITY_THRESHOLD
-    for (const scope of scopes) {
-      for (const existing of this.#store.list(scope.scope, scope.projectKey)) {
-        if (existing.status !== 'active' && existing.status !== 'candidate') continue
-        if (existing.kind !== record.kind) continue
-        // Same topic is required for automatic folding; different entities with
-        // similar wording must not overwrite each other by similarity alone.
-        if (record.topic !== null && existing.topic !== null && record.topic !== existing.topic) continue
-        // Different named objects with the same kind must not be folded by
-        // wording similarity alone (e.g. service A port vs service B port).
-        if (disjointEntities(record.content, existing.content)) continue
-        const shorter = Math.min(existing.content.length, record.content.length)
-        const longer = Math.max(existing.content.length, record.content.length)
-        if (longer === 0 || shorter / longer < minRatio) continue
-        const score = similarity(existing.content, record.content)
-        if (score >= bestScore) {
-          best = existing
-          bestScore = score
-        } else if (score >= CONFLICT_SIMILARITY_THRESHOLD && conflictBest === undefined && conflictingValues(existing.content, record.content)) {
-          conflictBest = existing
-          conflictScore = score
-        }
-      }
-    }
-    if (best === undefined && conflictBest !== undefined) {
-      return { record: conflictBest, mode: 'supersede' }
-    }
-    if (best === undefined) return undefined
-    if (conflictingValues(best.content, record.content)) {
-      return { record: best, mode: 'supersede' }
-    }
-    return { record: best, mode: 'merge' }
-  }
 
-  #evidenceFor(item, entries) {
-    const explicitIds = Array.isArray(item.evidence) ? item.evidence.filter((id) => typeof id === 'string') : []
-    // Internal user-role rows are audit context, never extraction evidence.
-    const allowed = entries.filter(isModelEvidenceSource)
-    const explicit = allowed.filter((entry) => explicitIds.includes(entry.source.id))
-    // If the model explicitly cited only internal rows, do not fall back to a
-    // different source that merely happens to share words.
-    const candidates = explicitIds.length > 0 ? explicit : allowed
-    const refFor = (entry, span) => ({
-      sessionId: entry.source.sessionId, messageId: entry.source.messageId ?? undefined,
-      sourceId: entry.source.id, role: entry.source.role,
-      sourceKind: entry.source.sourceKind ?? 'unknown', sourceForm: entry.source.sourceForm,
-      at: entry.source.at, ...span,
-    })
-    const quotes = item.quotes ?? []
-    const precise = []
-    for (const quote of quotes) {
-      const entry = candidates.find(entry => entry.source.id === quote.sourceId && isDirectUserSource(entry.source) &&
-        quote.text && entry.source.text.slice(entry.from, entry.to).includes(quote.text))
-      if (!entry) continue
-      const span = locateSourceSentence(entry, quote.text)
-      if (span && !precise.some(ref => ref.sourceId === entry.source.id && ref.from === span.from))
-        precise.push(refFor(entry, span))
-    }
-    const grounded = precise.map(ref => ref.excerpt).join(' ')
-    if (precise.length && hasDirectUserSupport(item.content, grounded)) {
-      return { refs: precise, role: 'user', grounded }
-    }
-    // Older stored results did not request quotes. Use a unique supporting
-    // sentence when available, otherwise retain just the message reference.
-    let best, span, bestScore = 0
-    for (const entry of candidates) {
-      const text = entry.source.text.slice(entry.from, entry.to)
-      const direct = isDirectUserSource(entry.source)
-      const score = coverage(item.content, text)
-      if (!(direct ? hasDirectUserSupport(item.content, text) : hasEvidenceMatch(score)) || score.ratio <= bestScore) continue
-      best = entry
-      bestScore = score.ratio
-      span = locateSourceSentence(entry, item.content)
-      if (!span) {
-        const matches = text.match(/[^。！？!?；;\n]+/gu) ?? []
-        const supporting = matches.map(sentence => sentence.trim()).filter(sentence => sentence &&
-          hasDirectUserSupport(item.content, sentence) && (matches.length === 1 || coverage(item.content, sentence).ratio >= 0.55))
-        if (supporting.length === 1) span = locateSourceSentence(entry, supporting[0])
-      }
-    }
-    if (!best) return { refs: [], role: 'unknown' }
-    const role = isDirectUserSource(best.source) ? 'user' : best.source.role
-    return { refs: [refFor(best, span)], role, grounded: span?.excerpt }
-  }
-
-  #apply(items, { scopes, identity, session, entries, task, grants }) {
-    const now = this.#clock()
-    const root = this.#store?.root
-    // Finish any interrupted replacement before applying another pass, so a
-    // local retry sees one effective record instead of two conflicting actives.
-    const reconciled = reconcileReplacements(root, this.#store, now)
-    for (const record of reconciled) this.#index.upsert(record)
-    const all = this.#store.listAll({ includeDeleted: true })
-    const scopeIdOf = (scope, projectKey) => scope === 'global' ? 'global' : `project:${projectKey}`
-    const seenByScope = new Map()
-    const deletedHashesByScope = new Map()
-    const deletedSources = new Set()
-    const captureKeys = new Set()
-    const deletedIds = new Set()
-    for (const record of all) {
-      if (record.captureKey !== null && record.captureKey !== undefined) captureKeys.add(record.captureKey)
-      const scopeId = scopeIdOf(record.scope, record.projectKey)
-      if (record.status === 'deleted') {
-        deletedIds.add(record.id)
-        if (!deletedHashesByScope.has(scopeId)) deletedHashesByScope.set(scopeId, new Map())
-        const deletedAt = Math.max(record.observedAt ?? 0, record.updatedAt ?? 0, record.createdAt ?? 0)
-        const priorDeletedAt = deletedHashesByScope.get(scopeId).get(record.contentHash) ?? 0
-        deletedHashesByScope.get(scopeId).set(record.contentHash, Math.max(priorDeletedAt, deletedAt))
-        for (const ref of Array.isArray(record.sourceRefs) ? record.sourceRefs : []) {
-          if (typeof ref.sourceId === 'string') deletedSources.add(ref.sourceId)
-        }
-      }
-      if (record.status === 'active' || record.status === 'candidate') {
-        if (!seenByScope.has(scopeId)) seenByScope.set(scopeId, new Map())
-        seenByScope.get(scopeId).set(record.contentHash, record)
-      }
-    }
-    const publish = record => {
-      this.#index.upsert(record)
-      if (record.status !== 'active' || record.scope !== 'project' || record.quoted ||
-          record.evidenceRole !== 'user' || record.captureTaskId !== task.id) return
-      for (const ref of record.sourceRefs ?? []) {
-        if (ref.role === 'user' && ref.sourceKind === 'user' && Number.isSafeInteger(ref.from) &&
-            Number.isSafeInteger(ref.to) && task.sourceIds.includes(ref.sourceId)) {
-          grants.push({ id: record.id, revision: record.revision, hash: record.contentHash,
-            sourceId: ref.sourceId, from: ref.from, to: ref.to })
-        }
-      }
-    }
-    let applied = 0
-    let rejected = 0
-    for (let index = 0; index < items.length; index += 1) {
-      const extracted = items[index]
-      const evidence = this.#evidenceFor(extracted, entries)
-      // A decision carries the actual words including its cause, conditions and
-      // polarity. A message-level reference alone cannot confirm a decision.
-      const needsOriginal = extracted.kind === 'decision' ||
-        /因为|由于|为了|原因是|because|in order to/iu.test(extracted.content) ||
-        (evidence.grounded && NEGATION_PATTERN.test(evidence.grounded) !== NEGATION_PATTERN.test(extracted.content))
-      const item = needsOriginal && evidence.role === 'user' && evidence.grounded && evidence.grounded.length <= 500
-        ? { ...extracted, content: evidence.grounded } : extracted
-      const itemKey = `${task.id}:${index}:${contentHashOf(extracted.content)}`
-      if (captureKeys.has(itemKey)) continue
-      const explicitIds = Array.isArray(item.evidence) ? item.evidence : []
-      const citedInternal = entries.some((entry) => explicitIds.includes(entry.source.id) &&
-        entry.source.role === 'user' && !isModelEvidenceSource(entry))
-      // An internal citation invalidates the claim even if a user question
-      // overlaps its topic. Word overlap cannot authorize an injected value.
-      if (citedInternal) {
-        rejected += 1
-        continue
-      }
-      const scope = item.kind === 'preference' && item.scope !== 'project' ? 'global' : item.scope === 'global' ? 'global' : 'project'
-      const scopeId = scopeIdOf(scope, scope === 'project' ? identity.key : null)
-      const seen = seenByScope.get(scopeId) ?? new Map()
-      seenByScope.set(scopeId, seen)
-      const deletedHashes = deletedHashesByScope.get(scopeId) ?? new Map()
-      // Forgetting is source-aware: a paraphrase from the same deleted source
-      // must not be revived by a pending task. Other sources stay independent.
-      if (evidence.refs.some((ref) => deletedSources.has(ref.sourceId) || !canReadSource(this.#store.root, ref.sourceId))) continue
-      // Observation time comes from the selected user evidence, not from the
-      // recovery/processing clock. A missing time is conservative.
-      const userTimes = evidence.refs
-        .filter((ref) => ref.role === 'user' && typeof ref.at === 'number' && Number.isFinite(ref.at))
-        .map((ref) => Math.floor(ref.at))
-      const anyTimes = evidence.refs
-        .filter((ref) => typeof ref.at === 'number' && Number.isFinite(ref.at))
-        .map((ref) => Math.floor(ref.at))
-      const hasKnownUserTime = userTimes.length > 0
-      const observedAt = hasKnownUserTime
-        ? Math.max(...userTimes)
-        : anyTimes.length > 0 ? Math.max(...anyTimes) : now
-      const contentHash = contentHashOf(item.content)
-      const deletedAt = deletedHashes.get(contentHash)
-      // Forgetting blocks both manual retry and old-source recovery. Only a
-      // genuinely newer explicit user source may re-authorize the same content.
-      const userReauthorized = task.explicit === true && deletedAt !== undefined && hasKnownUserTime && observedAt > deletedAt
-      if (deletedAt !== undefined && !userReauthorized) continue
-      const appendHistoricalCandidate = () => {
-        const historical = buildRecord({
-          ...base,
-          supersedesId: null,
-          status: 'candidate',
-        }, { now, observedAt, autoApproveConfidence: this.#config.capture.autoApproveConfidence })
-        if (historical.ok !== true) return false
-        if (seen.has(historical.record.contentHash) || captureKeys.has(itemKey)) return true
-        this.#store.append(historical.record)
-        this.#index.upsert(historical.record)
-        seen.set(historical.record.contentHash, historical.record)
-        captureKeys.add(itemKey)
-        applied += 1
-        return true
-      }
-      const unconfirmed = evidence.role !== 'user' || item.quoted === true || (needsOriginal && item === extracted)
-      const target = items[index].targetId === null ? undefined : this.#store.find(item.targetId, scopes)
-      const safeTarget = target !== undefined && !unconfirmed && target.kind === item.kind && target.scope === scope && !differentNamedServices(target.content, item.content) &&
-        (scope !== 'project' || target.projectKey === identity.key) && !deletedIds.has(target.id) && (target.status === 'active' || target.status === 'candidate') ? target : undefined
-      const sourceRefs = evidence.refs
-      const base = {
-        kind: item.kind,
-        scope,
-        projectKey: scope === 'project' ? identity.key : null,
-        content: item.content,
-        topic: item.topic,
-        tags: item.tags,
-        sourceRefs,
-        confidence: unconfirmed ? Math.min(item.confidence, 0.5) : item.confidence,
-        importance: unconfirmed ? Math.min(item.importance, 0.5) : item.importance,
-        validFrom: item.validFrom,
-        validTo: item.validTo,
-        evidenceRole: evidence.role,
-        quoted: item.quoted === true,
-        captureKey: itemKey,
-        captureTaskId: task.id,
-      }
-      // UPDATE/merge must retain the earlier evidence trail, but an old source
-      // must never overwrite a record observed later than that source.
-      if (safeTarget && observedAt < (safeTarget.observedAt ?? safeTarget.createdAt ?? 0)) {
-        appendHistoricalCandidate()
-        continue
-      }
-      if (item.op === 'UPDATE' && safeTarget !== undefined) {
-        const updated = this.#store.update(safeTarget.id, {
-          content: item.content,
-          tags: item.tags,
-          ...(item.topic === null || item.topic === undefined ? {} : { topic: item.topic }),
-          confidence: item.confidence,
-          importance: item.importance,
-          sourceRefs: mergeSourceRefs(sourceRefs, safeTarget.sourceRefs),
-          evidenceRole: evidence.role,
-          captureKey: itemKey,
-          captureTaskId: task.id,
-          quoted: item.quoted === true,
-          observedAt,
-        }, scopes)
-        if (updated !== undefined) {
-          publish(updated)
-          seen.set(updated.contentHash, updated)
-          captureKeys.add(itemKey)
-          applied += 1
-        } else {
-          rejected += 1
-        }
-        continue
-      }
-      // Both authority revisions commit together before publishing to the index.
-      if (item.op === 'SUPERSEDE' && safeTarget !== undefined) {
-        const built = buildRecord({
-          ...base,
-          supersedesId: safeTarget.id,
-          status: unconfirmed ? 'candidate' : undefined,
-        }, { now, observedAt, autoApproveConfidence: this.#config.capture.autoApproveConfidence })
-        if (built.ok !== true) {
-          rejected += 1
-          this.#logger?.warn?.(`[dsh-memory] supersede replacement rejected: ${built.reason}`)
-          continue
-        }
-        const committed = this.#store.replace(safeTarget.id, built.record)
-        this.#index.upsert(committed.previous)
-        publish(committed.record)
-        seen.set(built.record.contentHash, built.record)
-        captureKeys.add(itemKey)
-        applied += 1
-        continue
-      }
-      const built = buildRecord({
-        ...base,
-        supersedesId: null,
-        status: unconfirmed ? 'candidate' : undefined,
-      }, { now, observedAt, autoApproveConfidence: this.#config.capture.autoApproveConfidence })
-      if (built.ok !== true) {
-        rejected += 1
-        this.#logger?.warn?.(`[dsh-memory] dropped candidate: ${built.reason}`)
-        continue
-      }
-      if (captureKeys.has(itemKey) || seen.has(built.record.contentHash)) continue
-      const similar = unconfirmed ? undefined : this.#findSimilar(built.record)
-      if (similar !== undefined && observedAt < (similar.record.observedAt ?? similar.record.createdAt ?? 0)) {
-        appendHistoricalCandidate()
-        continue
-      }
-      if (similar !== undefined && similar.mode === 'supersede') {
-        const builtReplacement = buildRecord({
-          ...base,
-          supersedesId: similar.record.id,
-          status: undefined,
-        }, { now, observedAt, autoApproveConfidence: this.#config.capture.autoApproveConfidence })
-        if (builtReplacement.ok !== true) {
-          rejected += 1
-          continue
-        }
-        const committed = this.#store.replace(similar.record.id, builtReplacement.record)
-        this.#index.upsert(committed.previous)
-        publish(committed.record)
-        captureKeys.add(itemKey)
-        applied += 1
-        continue
-      }
-      if (similar !== undefined) {
-        const merged = this.#store.update(similar.record.id, {
-          content: built.record.content.length > similar.record.content.length ? built.record.content : similar.record.content,
-          tags: [...new Set([...(Array.isArray(similar.record.tags) ? similar.record.tags : []), ...built.record.tags])],
-          confidence: Math.min(1, Math.max(similar.record.confidence, built.record.confidence) + 0.05),
-          importance: Math.max(similar.record.importance, built.record.importance),
-          sourceRefs: mergeSourceRefs(built.record.sourceRefs, similar.record.sourceRefs),
-          evidenceRole: evidence.role,
-          captureKey: itemKey,
-          captureTaskId: task.id,
-          observedAt: Math.max(observedAt, similar.record.observedAt ?? 0),
-        }, scopes)
-        if (merged !== undefined) {
-          publish(merged)
-          seen.set(merged.contentHash, merged)
-          captureKeys.add(itemKey)
-          applied += 1
-          continue
-        }
-      }
-      this.#store.append(built.record)
-      publish(built.record)
-      captureKeys.add(itemKey)
-      seen.set(built.record.contentHash, built.record)
-      applied += 1
-    }
-    return { applied, rejected }
-  }
 }

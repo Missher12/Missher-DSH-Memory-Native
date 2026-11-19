@@ -2,12 +2,17 @@ const $ = selector => document.querySelector(selector)
 const projectSelect = $('#project')
 const notice = $('#notice')
 const REPORT_LIMIT = 20
+const BROWSE_LIMIT = 50
 let reportProject = ''
 let reportOffset = 0
 let projectGeneration = 0
 let refreshRequest = 0
 let searchRequest = 0
 let reportRequest = 0
+let browseRequest = 0
+let browseProject = ''
+let browseOffset = 0
+let browseTotal = 0
 const reportItems = new Map()
 let token = new URLSearchParams(location.hash.slice(1)).get('token') || sessionStorage.getItem('dsh-memory-token')
 if (new URLSearchParams(location.hash.slice(1)).has('token')) {
@@ -22,10 +27,16 @@ function setNotice(message, error = false) {
 
 function clearProjectViews() {
   reportRequest += 1
+  browseRequest += 1
   reportItems.clear()
   reportProject = ''
   reportOffset = 0
-  for (const selector of ['#results', '#brief', '#scenes', '#rules']) $(selector).replaceChildren()
+  browseProject = ''
+  browseOffset = 0
+  browseTotal = 0
+  for (const selector of ['#results', '#brief', '#scenes', '#rules', '#browse']) $(selector).replaceChildren()
+  $('#browse').textContent = '展开后读取当前页。'
+  $('#browse-pager').hidden = true
   renderReports()
 }
 
@@ -54,6 +65,24 @@ function sourceEvidence(parent, refs = []) {
   }
 }
 
+function forgetButton(hit, key, generation, refreshView) {
+  const button = element('button', 'danger', '遗忘')
+  button.type = 'button'
+  button.addEventListener('click', async () => {
+    if (!isCurrentProject(key, generation)) return
+    if (!confirm('遗忘这条内容及其来源后，它将从其他客户端的检索和相关报告中撤回。继续吗？')) return
+    try {
+      await api('/api/forget', { method: 'POST', body: JSON.stringify({ id: hit.id, projectKey: key }) })
+      if (!isCurrentProject(key, generation)) return
+      await refreshView()
+      if (!isCurrentProject(key, generation)) return
+      await loadReports({ reset: true })
+      if (isCurrentProject(key, generation)) setNotice('已从共享记忆撤回该内容。')
+    } catch (error) { if (isCurrentProject(key, generation)) setNotice(error.message, true) }
+  })
+  return button
+}
+
 function showSearch(result, key, generation) {
   const root = $('#results')
   root.replaceChildren()
@@ -62,22 +91,8 @@ function showSearch(result, key, generation) {
     const row = element('article', 'row')
     const head = element('div', 'row-head')
     const title = element('div', 'row-title', `${hit.kind === 'source' ? '原文' : hit.kind} · ${hit.id}@${hit.revision}`)
-    const forget = element('button', 'danger', '遗忘')
-    forget.type = 'button'
-    forget.addEventListener('click', async () => {
-      if (!isCurrentProject(key, generation)) return
-      if (!confirm('遗忘这条内容及其来源后，它将从其他客户端的检索和相关报告中撤回。继续吗？')) return
-      try {
-        await api('/api/forget', { method: 'POST', body: JSON.stringify({ id: hit.id, projectKey: key }) })
-        if (isCurrentProject(key, generation)) {
-          await searchProject(key, $('#query').value.trim())
-          if (isCurrentProject(key, generation)) setNotice('已从共享记忆撤回该内容。')
-        }
-        await loadReports({ reset: true })
-      } catch (error) { if (isCurrentProject(key, generation)) setNotice(error.message, true) }
-    })
     const actions = element('div', 'row-actions')
-    actions.append(forget)
+    actions.append(forgetButton(hit, key, generation, () => searchProject(key, $('#query').value.trim())))
     head.append(title, actions)
     row.append(head, element('p', 'row-text', hit.content))
     sourceEvidence(row, hit.sourceRefs)
@@ -98,6 +113,61 @@ async function searchProject(key, query) {
   showSearch(result, key, generation)
   setNotice(`${result.hits.length} 条证据 · 项目 ${key}`)
   return result
+}
+
+function renderBrowse(result, key, generation) {
+  const root = $('#browse')
+  root.replaceChildren()
+  const items = Array.isArray(result.items) ? result.items : []
+  if (items.length === 0) root.append(element('p', 'muted', '当前项目这一页没有可浏览记忆。'))
+  for (const hit of items) {
+    const row = element('article', 'row')
+    const head = element('div', 'row-head')
+    const title = element('div', 'row-title', `${hit.kind} · ${hit.status} · ${hit.id}@${hit.revision}`)
+    const actions = element('div', 'row-actions')
+    actions.append(forgetButton(hit, key, generation, async () => {
+      const query = $('#query').value.trim()
+      if (query) await searchProject(key, query)
+      await loadBrowsePage({ offset: browseOffset })
+    }))
+    head.append(title, actions)
+    row.append(head, element('p', 'row-text', hit.content))
+    sourceEvidence(row, hit.sourceRefs)
+    root.append(row)
+  }
+  const start = result.total === 0 ? 0 : browseOffset + 1
+  const end = Math.min(browseOffset + items.length, result.total)
+  $('#browse-page').textContent = `${start}–${end} / ${result.total}`
+  $('#browse-pager').hidden = result.total <= BROWSE_LIMIT
+  $('#browse-prev').disabled = browseOffset <= 0
+  $('#browse-next').disabled = browseOffset + items.length >= result.total
+}
+
+async function loadBrowsePage({ offset = browseOffset } = {}) {
+  const key = projectKey()
+  if (!key || !$('#browse-details').open) return null
+  const generation = projectGeneration
+  const request = ++browseRequest
+  const root = $('#browse')
+  root.replaceChildren(element('p', 'muted', '正在读取当前页…'))
+  try {
+    const result = await api(`/api/list?projectKey=${encodeURIComponent(key)}&limit=${BROWSE_LIMIT}&offset=${offset}`)
+    if (request !== browseRequest || !isCurrentProject(key, generation)) return null
+    const total = Number.isFinite(result.total) ? result.total : 0
+    const lastOffset = total === 0 ? 0 : Math.floor((total - 1) / BROWSE_LIMIT) * BROWSE_LIMIT
+    if (offset > lastOffset) return loadBrowsePage({ offset: lastOffset })
+    browseProject = key
+    browseOffset = offset
+    browseTotal = total
+    renderBrowse(result, key, generation)
+    return result
+  } catch (error) {
+    if (request === browseRequest && isCurrentProject(key, generation)) {
+      root.replaceChildren(element('p', 'muted', error.message))
+      setNotice(error.message, true)
+    }
+    return null
+  }
 }
 
 function showBrief(brief) {
@@ -213,6 +283,10 @@ async function refresh() {
     $('#rules').replaceChildren()
     if (status.projects.length) await loadReports({ reset: reportProject !== projectKey() })
     else { reportItems.clear(); reportProject = ''; reportOffset = 0; renderReports() }
+    if (status.projects.length && $('#browse-details').open) {
+      const offset = browseProject === projectKey() ? browseOffset : 0
+      await loadBrowsePage({ offset })
+    }
     if (request !== refreshRequest) return
     setNotice(status.projects.length ? `服务已连接 · ${status.projects.length} 个项目` : '服务已连接，尚无项目记忆。')
   } catch (error) { if (request === refreshRequest) setNotice(error.message, true) }
@@ -278,6 +352,19 @@ $('#more-reports').addEventListener('click', async () => {
   const generation = projectGeneration
   try { await loadReports({ offset: reportOffset }) }
   catch (error) { if (isCurrentProject(key, generation)) setNotice(error.message, true) }
+})
+
+$('#browse-details').addEventListener('toggle', () => {
+  if ($('#browse-details').open) {
+    const offset = browseProject === projectKey() ? browseOffset : 0
+    void loadBrowsePage({ offset })
+  } else browseRequest += 1
+})
+$('#browse-prev').addEventListener('click', () => {
+  void loadBrowsePage({ offset: Math.max(0, browseOffset - BROWSE_LIMIT) })
+})
+$('#browse-next').addEventListener('click', () => {
+  if (browseOffset + BROWSE_LIMIT < browseTotal) void loadBrowsePage({ offset: browseOffset + BROWSE_LIMIT })
 })
 
 $('#refresh').addEventListener('click', () => { void refresh() })

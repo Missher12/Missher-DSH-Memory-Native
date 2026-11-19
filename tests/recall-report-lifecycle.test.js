@@ -87,8 +87,9 @@ function complete(handlers, session, text, sequence) {
 test('completed reports survive restart per cold host session and remain project/profile bound', async t => {
   const host = createHost(t)
   const first = await host.start()
+  const beforeUnknownReport = host.sessionStatCalls
   assert.equal((await first.panel('stats', { scope: 'project', sessionId: 'session-old' })).lastRecall, null)
-  assert.equal(host.sessionStatCalls, 0, 'a missing report short-circuits before the SDK session stat')
+  assert.equal(host.sessionStatCalls, beforeUnknownReport + 1, 'stats resolves the trusted browse default even without a report')
   const a1 = await first.prepare('session-a', host.cwdA, 'a-first', '青岚快照每天几点执行？', 2)
   complete(a1.handlers, a1.session, '青岚快照每天04:20执行。', 2)
   const loadedA = host.liveSessions.get('session-a')
@@ -108,16 +109,31 @@ test('completed reports survive restart per cold host session and remain project
   first.dispose()
 
   const restarted = await host.start()
-  const statCallsBeforeWarmRead = host.sessionStatCalls
-  const reportA = (await restarted.panel('stats', { scope: 'project', sessionId: 'session-a' })).lastRecall
-  const reportB = (await restarted.panel('stats', { scope: 'project', sessionId: 'session-b' })).lastRecall
-  assert.equal(host.sessionStatCalls, statCallsBeforeWarmRead, 'live host session objects authorize warm report reads')
+  host.liveSessions.clear()
+  const noSessionBefore = host.sessionStatCalls
+  const noSession = await restarted.panel('stats', { scope: 'project' })
+  assert.equal(host.sessionStatCalls, noSessionBefore, 'a stats request without a session skips session persistence')
+  assert.ok(noSession.browseableProjectKeys.includes(noSession.currentProjectKey))
+  const beforeColdA = host.sessionStatCalls
+  const statsA = await restarted.panel('stats', { scope: 'project', sessionId: 'session-a' })
+  const reportA = statsA.lastRecall
+  assert.equal(statsA.currentProjectKey, host.keyA)
+  assert.equal(host.sessionStatCalls, beforeColdA + 1, 'cold stats reads session metadata once for both the default and report')
+  const beforeColdB = host.sessionStatCalls
+  const statsB = await restarted.panel('stats', { scope: 'project', sessionId: 'session-b' })
+  const reportB = statsB.lastRecall
+  assert.equal(statsB.currentProjectKey, host.keyB)
+  assert.equal(host.sessionStatCalls, beforeColdB + 1, 'the second cold session is also resolved once')
   assert.equal(reportA.questions[0].query.includes('保留多久'), true)
   assert.match(reportA.questions[0].injected[0].text, /47天/u)
   assert.equal(reportA.questions[0].answerCoverage, 'covered')
   assert.equal(reportB.questions[0].query.includes('几点执行'), true)
   assert.match(reportB.questions[0].injected[0].text, /06:15/u)
   assert.equal(reportB.questions[0].answerCoverage, 'covered')
+  const fallbackProject = (await restarted.panel('stats', { scope: 'project' })).currentProjectKey
+  const unknownSession = await restarted.panel('stats', { scope: 'project', sessionId: 'missing-session', projectKey: host.keyA })
+  assert.equal(unknownSession.lastRecall, null)
+  assert.equal(unknownSession.currentProjectKey, fallbackProject, 'an unknown session uses the browse fallback, not the client hint')
   assert.equal((await restarted.panel('stats', { scope: 'project', sessionId: 'session-old' })).lastRecall, null)
   assert.equal((await restarted.panel('stats', { scope: 'project', sessionId: 'session-a', projectKey: host.keyB })).lastRecall, null)
   assert.equal((await restarted.panel('stats', { scope: 'project', sessionId: 'session-b', projectKey: host.keyA })).lastRecall, null)

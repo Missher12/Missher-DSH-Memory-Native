@@ -128,6 +128,7 @@ export function createPanelBackend(options) {
     getLastExtraction: typeof options.getLastExtraction === 'function' ? options.getLastExtraction : null,
     getLastRecall: typeof options.getLastRecall === 'function' ? options.getLastRecall : null,
     getLastRecallAsync: typeof options.getLastRecallAsync === 'function' ? options.getLastRecallAsync : null,
+    getSessionProjectKey: typeof options.getSessionProjectKey === 'function' ? options.getSessionProjectKey : null,
     invalidateRecallReferences: typeof options.invalidateRecallReferences === 'function' ? options.invalidateRecallReferences : null,
     getSemanticStatus: typeof options.getSemanticStatus === 'function' ? options.getSemanticStatus : null,
     prepareSemantic: typeof options.prepareSemantic === 'function' ? options.prepareSemantic : null,
@@ -145,9 +146,15 @@ export function createPanelBackend(options) {
   }
   backend.list = (input) => listMemories(backend, input)
   backend.stats = (input) => {
-    const stats = computeStats(backend, input)
-    if (!backend.getLastRecallAsync) return stats
-    return Promise.resolve(backend.getLastRecallAsync(input)).then(lastRecall => ({ ...stats, lastRecall: lastRecall ?? null }))
+    const sessionId = typeof input?.sessionId === 'string' && input.sessionId !== '' ? input.sessionId : undefined
+    const withProject = trustedProjectKey => {
+      const stats = computeStats(backend, input, trustedProjectKey)
+      if (!backend.getLastRecallAsync) return stats
+      return Promise.resolve(backend.getLastRecallAsync(input, trustedProjectKey))
+        .then(lastRecall => ({ ...stats, lastRecall: lastRecall ?? null }))
+    }
+    if (sessionId === undefined || backend.getSessionProjectKey === null) return withProject(undefined)
+    return Promise.resolve().then(() => backend.getSessionProjectKey(sessionId)).catch(() => null).then(withProject)
   }
   backend.projectBrief = (input) => projectBrief(backend, input)
   backend.activity = (input) => computeActivity(backend, input)

@@ -9,6 +9,7 @@ const VERSION = 1
 const MAX_REPORT_BYTES = 8 * 1024 * 1024
 const INVALIDATED_FILE = 'invalidated-references.json'
 const SESSION_INDEX_FILE = 'sessions-index.json'
+const SESSION_INDEX_DIRTY_FILE = '.sessions-index-dirty'
 const sessionKey = id => createHash('sha256').update(id).digest('hex')
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const uniqueStrings = values => [...new Set(values && typeof values[Symbol.iterator] === 'function' && typeof values !== 'string'
@@ -129,6 +130,7 @@ export function createRecallReportStore(root, profileIdentity) {
   const lockFile = join(directory, '.reports.lock')
   const tombstoneFile = join(directory, INVALIDATED_FILE)
   const sessionIndexFile = join(directory, SESSION_INDEX_FILE)
+  const sessionIndexDirtyFile = join(directory, SESSION_INDEX_DIRTY_FILE)
   const cache = new Map()
   const sessionStamps = new Map()
   let invalidated = { recordIds: new Set(), recordRevisions: new Map(), sourceIds: new Set() }
@@ -156,38 +158,74 @@ export function createRecallReportStore(root, profileIdentity) {
     }
   }
 
-  function ensureSessionIndex() {
-    ensureDirectory()
+  function sessionIndexDirty() {
     try {
-      const stat = lstatSync(sessionIndexFile)
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('recall report index is not a regular file')
-      return readSessionIndex(sessionIndexFile)
+      const stat = lstatSync(sessionIndexDirtyFile)
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('recall report index marker is not a regular file')
+      return true
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
+      return false
+    }
+  }
+
+  function clearSessionIndexDirty() {
+    try { unlinkSync(sessionIndexDirtyFile) }
+    catch (error) { if (error?.code !== 'ENOENT') return }
+  }
+
+  /** Caller holds the report lock. A dirty marker makes this the one repair scan. */
+  function rebuildSessionIndexLocked() {
+    refreshInvalidations()
+    const sessions = []
+    for (const name of readdirSync(directory)) {
+      if (!/^[a-f0-9]{64}\.json$/u.test(name)) continue
+      const file = join(directory, name), key = name.slice(0, -5)
+      let stat
+      try { stat = lstatSync(file) }
+      catch (error) { if (error?.code === 'ENOENT') continue; throw error }
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REPORT_BYTES) continue
+      let serialized
+      try { serialized = readFileSync(file, 'utf8') }
+      catch (error) { if (error?.code === 'ENOENT') continue; throw error }
+      let value
+      try { value = JSON.parse(serialized) }
+      catch { continue }
+      if (validEnvelope(value, key, profileIdentity) && !recallReportReferences(value.report, invalidated)) {
+        sessions.push({ sessionKey: key, projectKey: value.projectKey,
+          at: Number.isFinite(value.report.at) ? value.report.at : stat.mtimeMs })
+      }
+    }
+    sessions.sort((left, right) => right.at - left.at)
+    atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
+    clearSessionIndexDirty()
+    return sessions
+  }
+
+  function readSessionIndexIfPresent() {
+    let stat
+    try { stat = lstatSync(sessionIndexFile) }
+    catch (error) { if (error?.code === 'ENOENT') return null; throw error }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('recall report index is not a regular file')
+    try { return readSessionIndex(sessionIndexFile) }
+    catch (error) {
+      if (error instanceof SyntaxError || error?.message === 'recall report index is malformed') return null
+      throw error
+    }
+  }
+
+  function ensureSessionIndex() {
+    ensureDirectory()
+    if (!sessionIndexDirty()) {
+      const existing = readSessionIndexIfPresent()
+      if (existing !== null) return existing
     }
     return withFileLock(lockFile, () => {
-      try {
-        const stat = lstatSync(sessionIndexFile)
-        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('recall report index is not a regular file')
-        return readSessionIndex(sessionIndexFile)
-      } catch (error) {
-        if (error?.code !== 'ENOENT') throw error
+      if (!sessionIndexDirty()) {
+        const existing = readSessionIndexIfPresent()
+        if (existing !== null) return existing
       }
-      const sessions = []
-      for (const name of readdirSync(directory)) {
-        if (!/^[a-f0-9]{64}\.json$/u.test(name)) continue
-        const file = join(directory, name), key = name.slice(0, -5)
-        try {
-          const stat = lstatSync(file)
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REPORT_BYTES) continue
-          const value = JSON.parse(readFileSync(file, 'utf8'))
-          if (validEnvelope(value, key, profileIdentity)) sessions.push({ sessionKey: key,
-            projectKey: value.projectKey, at: Number.isFinite(value.report.at) ? value.report.at : stat.mtimeMs })
-        } catch { /* Only valid reports from this profile enter the one-time index. */ }
-      }
-      sessions.sort((left, right) => right.at - left.at)
-      atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
-      return sessions
+      return rebuildSessionIndexLocked()
     })
   }
 
@@ -215,6 +253,43 @@ export function createRecallReportStore(root, profileIdentity) {
     cache.set(key, value)
     sessionStamps.set(key, stamp)
     return value
+  }
+
+  function persistReport(sessionId, projectKey, report, pending = false) {
+    const key = recallReportSessionKey(sessionId)
+    const value = pending ? { ...report, outcome: 'pending' } : report
+    const valid = pending ? pendingReport(value) : finalizedReport(value)
+    if (key === null || !isValidProjectKey(projectKey) || !valid || value.projectKey !== projectKey) {
+      throw new Error(pending
+        ? 'pending report must be bound to its session project and contain no answer excerpt'
+        : 'only a finalized report bound to its session project can be persisted')
+    }
+    const envelope = { version: VERSION, sessionKey: key, profileIdentity, projectKey, report: value }
+    const serialized = `${JSON.stringify(envelope)}\n`
+    if (Buffer.byteLength(serialized) > MAX_REPORT_BYTES) throw new Error('recall report exceeds the storage limit')
+    ensureDirectory()
+    return withFileLock(lockFile, () => {
+      refreshInvalidations()
+      if (sessionIndexDirty() || readSessionIndexIfPresent() === null) rebuildSessionIndexLocked()
+      if (recallReportReferences(value, invalidated)) {
+        cache.set(key, null)
+        return false
+      }
+      if (!sessionIndexDirty()) atomicWritePrivate(sessionIndexDirtyFile, `${JSON.stringify({ version: VERSION })}\n`)
+      atomicWritePrivate(join(directory, `${key}.json`), serialized)
+      let sessions = readSessionIndexIfPresent()
+      if (sessions === null) sessions = rebuildSessionIndexLocked()
+      else {
+        sessions = sessions.filter(item => item.sessionKey !== key)
+        sessions.push({ sessionKey: key, projectKey, at: typeof value.at === 'number' ? value.at : Date.now() })
+        sessions.sort((left, right) => right.at - left.at)
+        atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
+        clearSessionIndexDirty()
+      }
+      cache.set(key, envelope)
+      sessionStamps.delete(key)
+      return true
+    })
   }
 
   return {
@@ -271,55 +346,11 @@ export function createRecallReportStore(root, profileIdentity) {
     },
 
     write(sessionId, projectKey, report) {
-      const key = recallReportSessionKey(sessionId)
-      if (key === null || !isValidProjectKey(projectKey) || !finalizedReport(report) || report.projectKey !== projectKey) {
-        throw new Error('only a finalized report bound to its session project can be persisted')
-      }
-      const envelope = { version: VERSION, sessionKey: key, profileIdentity, projectKey, report }
-      const serialized = `${JSON.stringify(envelope)}\n`
-      if (Buffer.byteLength(serialized) > MAX_REPORT_BYTES) throw new Error('recall report exceeds the storage limit')
-      ensureDirectory()
-      ensureSessionIndex()
-      return withFileLock(lockFile, () => {
-        refreshInvalidations()
-        if (recallReportReferences(report, invalidated)) {
-          cache.set(key, null)
-          return false
-        }
-        atomicWritePrivate(join(directory, `${key}.json`), serialized)
-        const sessions = readSessionIndex(sessionIndexFile).filter(item => item.sessionKey !== key)
-        sessions.push({ sessionKey: key, projectKey, at: typeof report.at === 'number' ? report.at : Date.now() })
-        sessions.sort((left, right) => right.at - left.at)
-        atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
-        cache.set(key, envelope)
-        sessionStamps.delete(key)
-        return true
-      })
+      return persistReport(sessionId, projectKey, report)
     },
 
     writePending(sessionId, projectKey, report) {
-      const key = recallReportSessionKey(sessionId)
-      const pending = { ...report, outcome: 'pending' }
-      if (key === null || !isValidProjectKey(projectKey) || !pendingReport(pending) || pending.projectKey !== projectKey) {
-        throw new Error('pending report must be bound to its session project and contain no answer excerpt')
-      }
-      const envelope = { version: VERSION, sessionKey: key, profileIdentity, projectKey, report: pending }
-      const serialized = `${JSON.stringify(envelope)}\n`
-      if (Buffer.byteLength(serialized) > MAX_REPORT_BYTES) throw new Error('recall report exceeds the storage limit')
-      ensureDirectory()
-      ensureSessionIndex()
-      return withFileLock(lockFile, () => {
-        refreshInvalidations()
-        if (recallReportReferences(pending, invalidated)) { cache.set(key, null); return false }
-        atomicWritePrivate(join(directory, `${key}.json`), serialized)
-        const sessions = readSessionIndex(sessionIndexFile).filter(item => item.sessionKey !== key)
-        sessions.push({ sessionKey: key, projectKey, at: typeof pending.at === 'number' ? pending.at : Date.now() })
-        sessions.sort((left, right) => right.at - left.at)
-        atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
-        cache.set(key, envelope)
-        sessionStamps.delete(key)
-        return true
-      })
+      return persistReport(sessionId, projectKey, report, true)
     },
 
     invalidateReferences({ recordIds = [], recordRevisions = [], sourceIds = [] } = {}) {
