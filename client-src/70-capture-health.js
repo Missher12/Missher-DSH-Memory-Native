@@ -61,19 +61,20 @@
     }
 
     function ActivityTrends({ stats, activity, locale, t }) {
-      const [open, setOpen] = React.useState(true)
       const storage = stats.captureStorage
-      return h('details', { className: 'dsh-memory-activity-disclosure', open, onToggle: event => setOpen(event.currentTarget.open) },
-        h('summary', { className: 'dsh-memory-activity-line' }, h(ActivityHeading, { title: t('activity.trends') })),
-        open ? h('div', { className: 'dsh-memory-activity-details' },
-          h(ActivityHeatmap, { activity, stats, t, locale }),
+      const [open, setOpen] = React.useState(true)
+      return h('details', { className: 'dsh-memory-trends-section dsh-memory-disclosure', open, onToggle: event => setOpen(event.currentTarget.open) },
+        h('summary', { className: 'dsh-memory-disclosure-head dsh-memory-section-title' }, t('activity.trends')),
+        open ? h('div', { className: 'dsh-memory-trends-body' },
+          h(ActivityHeatmap, { activity, t, locale }),
           h(TokenTrend, { usage: stats.usage, t }),
-          stats.captureBudget ? h('p', { className: 'dsh-memory-muted' }, t('settings.captureAllowance', stats.captureBudget)) : null,
-          storage ? h('p', { className: 'dsh-memory-muted' }, t('settings.captureStorage', {
-            sources: String(storage.sources?.count ?? 0),
-            size: ((storage.bytes ?? 0) / 1024 / 1024).toFixed(1) + ' MB',
-            tasks: String(storage.tasks ?? 0),
-          })) : null) : null)
+          stats.captureBudget || storage ? h('div', { className: 'dsh-memory-trend-facts' },
+            stats.captureBudget ? h('span', null, t('settings.captureAllowance', stats.captureBudget)) : null,
+            storage ? h('span', null, t('settings.captureStorage', {
+              sources: String(storage.sources?.count ?? 0),
+              size: ((storage.bytes ?? 0) / 1024 / 1024).toFixed(1) + ' MB',
+              tasks: String(storage.tasks ?? 0),
+            })) : null) : null) : null)
     }
 
     function HealthStatus({ health, capture, t, onRepair }) {
@@ -90,14 +91,16 @@
         h(ActivityDisclosure, { title: t('health.title'), value: t('health.' + health.status), warning: health.status !== 'ok' },
           health.isolation === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.' + health.isolation)),
           health.status === 'unavailable' ? null : h('p', { className: 'dsh-memory-muted' }, t('health.memories', health.counts)),
-          h('div', { className: 'dsh-memory-settings-group' }, Object.entries(health.components ?? {}).map(([key, component]) =>
-            h('div', { key, className: 'dsh-memory-settings-row' },
-              h('span', { className: 'dsh-memory-settings-label' }, t('health.component.' + key)),
-              h('span', { className: 'dsh-memory-muted' }, t('health.state.' + component.state)),
-              component.action !== 'none' && component.state !== 'disabled' && onRepair
-                ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onRepair(component.action) }, t('health.action.' + component.action)) : null))),
-          h('div', { className: 'dsh-memory-settings-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', onClick: download }, t('health.download'))),
-          h('p', { className: 'dsh-memory-muted' }, t('health.hint'))),
+          h('div', { className: 'dsh-memory-settings-group' }, Object.entries(health.components ?? {}).map(([key, component]) => {
+            const repair = component.action !== 'none' && component.state !== 'disabled' && onRepair
+            const state = t('health.state.' + component.state)
+            return h(SettingRow, { key, label: t('health.component.' + key), hint: repair ? state : null },
+              repair ? h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => onRepair(component.action) }, t('health.action.' + component.action))
+                : h('span', { className: 'dsh-memory-muted' }, state))
+          })),
+          h('div', { className: 'dsh-memory-detail-actions' },
+            h('p', { className: 'dsh-memory-help' }, t('health.hint')),
+            h('button', { type: 'button', className: 'dsh-memory-button', onClick: download }, t('health.download')))),
         issues.length ? h('ul', { className: 'dsh-memory-activity-issues', role: 'status' },
           issues.map(code => h('li', { key: code }, t('health.' + code),
             code === 'corrupt-lines' && health.counts?.corruptLines ? ' ' + t('health.corrupt', { count: health.counts.corruptLines }) : null))) : null)
@@ -146,10 +149,9 @@
         progress?.total ? h('progress', { max: progress.total, value: Math.min(progress.total, progress.downloaded ?? 0), 'aria-label': t('recall.semantic') }) : null,
         status?.total ? h('p', { className: 'dsh-memory-muted' },
           t('recall.semanticProgress', { indexed: String(status.indexed), total: String(status.total) })) : null,
-        h('div', { className: 'dsh-memory-settings-row' },
-          h('span', { className: 'dsh-memory-settings-label' }, t('recall.model.folder')),
-          h('input', { className: 'dsh-memory-settings-input', type: 'text', value: folder, onChange: event => setFolder(event.target.value), 'aria-label': t('recall.model.folder') })),
-        h('p', { className: 'dsh-memory-muted' }, t('recall.model.folderHint')),
+        h(SettingRow, { label: t('recall.model.folder'), hint: t('recall.model.folderHint') },
+          description => h('input', { className: 'dsh-memory-settings-input', type: 'text', value: folder,
+            title: folder || undefined, onChange: event => setFolder(event.target.value), 'aria-label': t('recall.model.folder'), 'aria-describedby': description })),
         h('div', { className: 'dsh-memory-settings-buttons' },
           active
             ? h('button', { type: 'button', className: 'dsh-memory-button', disabled: !!busy, onClick: () => run('cancel') }, t('recall.model.cancel'))

@@ -154,10 +154,52 @@
       }
     }
 
-    function StatCard(props) {
-      return h('div', { className: 'dsh-memory-stat' },
-        h('span', { className: 'dsh-memory-stat-label' }, props.label),
-        h('strong', { className: 'dsh-memory-stat-value' }, props.value))
+    function SettingRow({ label, hint, error, children }) {
+      const descriptionId = React.useId()
+      const hasDescription = Boolean(hint || error)
+      return h('div', { className: 'dsh-memory-settings-row' },
+        h('div', { className: 'dsh-memory-settings-copy' },
+          h('span', { className: 'dsh-memory-settings-label' }, label),
+          hasDescription ? h('div', { id: descriptionId },
+            hint ? h('p', { className: 'dsh-memory-help' }, hint) : null,
+            error ? h('p', { className: 'dsh-memory-field-error', role: 'alert' }, error) : null) : null),
+        h('div', { className: 'dsh-memory-settings-control' },
+          typeof children === 'function' ? children(hasDescription ? descriptionId : undefined) : children))
+    }
+
+    function PanelDialog({ title, children, onClose, busy = false }) {
+      const ref = React.useRef(null)
+      const titleId = React.useId()
+      React.useLayoutEffect(() => {
+        const dialog = ref.current
+        const returnFocus = document.activeElement
+        dialog.showModal()
+        return () => {
+          dialog.close()
+          if (returnFocus instanceof HTMLElement && returnFocus.isConnected) returnFocus.focus({ preventScroll: true })
+        }
+      }, [])
+      return h('dialog', {
+        ref,
+        className: 'dsh-memory-modal',
+        'aria-labelledby': titleId,
+        onCancel: event => {
+          event.preventDefault()
+          if (!busy) onClose()
+        },
+        onKeyDown: event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (!busy) onClose()
+        },
+        onMouseDown: event => {
+          if (busy || event.target !== event.currentTarget) return
+          const bounds = event.currentTarget.getBoundingClientRect()
+          if (event.clientX < bounds.left || event.clientX > bounds.right ||
+              event.clientY < bounds.top || event.clientY > bounds.bottom) onClose()
+        },
+      }, h('h3', { className: 'dsh-memory-modal-title', id: titleId }, title), children)
     }
 
     // Keep the menu in the browser top layer so scrolling containers cannot clip
@@ -282,7 +324,9 @@
     }
 
     function Field(props) {
-      return h('label', { className: 'dsh-memory-field' + (props.grow === true ? ' dsh-memory-field-grow' : '') },
-        h('span', { className: 'dsh-memory-field-label' }, props.label),
-        props.children)
+      const label = h('span', { className: 'dsh-memory-field-label' }, props.label)
+      const hint = props.hint ? h('span', { className: 'dsh-memory-help' }, props.hint) : null
+      if (props.wide) return h('label', { className: 'dsh-memory-field dsh-memory-field-wide' }, label, props.children, hint)
+      return h('label', { className: 'dsh-memory-field' },
+        h('span', { className: 'dsh-memory-field-copy' }, label, hint), props.children)
     }

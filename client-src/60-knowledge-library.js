@@ -9,7 +9,6 @@
       const [noteError, setNoteError] = React.useState('')
       const [conflict, setConflict] = React.useState(false)
       const [notice, setNotice] = React.useState('')
-      const titleId = React.useId()
 
       const close = () => {
         setEditing(false)
@@ -19,18 +18,6 @@
         setConflict(false)
         setOpening(false)
       }
-
-      React.useEffect(() => {
-        if (!editing) return undefined
-        const onKeyDown = (event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            close()
-          }
-        }
-        document.addEventListener('keydown', onKeyDown)
-        return () => document.removeEventListener('keydown', onKeyDown)
-      }, [editing])
 
       const loadNote = async (file) => {
         if (call === null) return
@@ -115,7 +102,7 @@
               placeholder: t('library.tagsHint'),
               onChange: (event) => setDraft({ ...draft, tags: event.target.value }),
             })),
-          h(Field, { label: t('library.recallScope') },
+          h(Field, { label: t('library.recallScope'), hint: t('library.scopeHint') },
             h(Select, { className: 'dsh-memory-select', value: draft.scope, 'aria-label': t('library.recallScope'),
               onChange: event => setDraft({ ...draft, scope: event.target.value, projectKey: event.target.value === 'project' ? draft.projectKey : '' }) },
               ['unbound','project','global'].map(scope => h('option', { key: scope, value: scope }, t('library.scope.' + scope))))),
@@ -124,15 +111,13 @@
               onChange: event => setDraft({ ...draft, projectKey: event.target.value }) },
               h('option', { value: '' }, t('brief.choose')),
               [...new Set([...projectKeys, ...(draft.projectKey ? [draft.projectKey] : [])])].map(key => h('option', { key, value: key }, key)))) : null,
-          h('p', { className: 'dsh-memory-muted' }, t('library.scopeHint')),
-          h(Field, { label: t('library.bodyField') },
+          h(Field, { label: t('library.bodyField'), wide: true, hint: t('library.bodyHint') },
             h('textarea', {
               className: 'dsh-memory-textarea dsh-memory-library-body',
               rows: 10,
               value: draft.body,
               onChange: (event) => setDraft({ ...draft, body: event.target.value }),
             })),
-          h('p', { className: 'dsh-memory-muted' }, t('library.bodyHint')),
           noteError === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, noteError),
           h('div', { className: 'dsh-memory-modal-actions' },
             conflict
@@ -147,14 +132,7 @@
             }, saving ? t('library.saving') : t('actions.save'))))
 
       const modal = editing
-        ? h('div', {
-          className: 'dsh-memory-overlay',
-          onMouseDown: (event) => {
-            if (event.target === event.currentTarget) close()
-          },
-        },
-        h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId },
-          h('h3', { className: 'dsh-memory-modal-title', id: titleId }, t('library.editorTitle')),
+        ? h(PanelDialog, { title: t('library.editorTitle'), onClose: close, busy: saving },
           note === null ? null : h('p', { className: 'dsh-memory-library-file' }, note.file),
           opening
             ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('library.loading'))
@@ -163,14 +141,13 @@
                 noteError === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, noteError),
                 h('div', { className: 'dsh-memory-modal-actions' },
                   h('button', { type: 'button', className: 'dsh-memory-button', onClick: close }, t('actions.cancel'))))
-              : editor))
+              : editor)
         : null
 
-      return h('section', { className: 'dsh-memory-card dsh-memory-library' },
-        h('div', { className: 'dsh-memory-library-head' },
-          h('h3', { className: 'dsh-memory-settings-title' }, t('library.title')),
+      return h('section', { className: 'dsh-memory-library' },
+        h('div', { className: 'dsh-memory-section-head' },
+          h('h3', { className: 'dsh-memory-section-title' }, t('library.title')),
           h('span', { className: 'dsh-memory-list-total' }, t('library.total', { count: String(notes.length) }))),
-        h('p', { className: 'dsh-memory-muted' }, t('library.hint')),
         notice === '' ? null : h('p', { className: 'dsh-memory-library-notice', role: 'status' }, notice),
         loading
           ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('library.loading'))
@@ -184,12 +161,12 @@
                   className: 'dsh-memory-library-open',
                   onClick: () => loadNote(note.file),
                 },
-                h('span', { className: 'dsh-memory-history-head' },
+                h('span', { className: 'dsh-memory-library-description' },
                   h('strong', null, note.title),
-                  note.topic === null ? null : h('span', { className: 'dsh-memory-tag' }, note.topic),
-                  h('span', { className: 'dsh-memory-library-edit' }, t('library.edit'))),
-                h('span', { className: 'dsh-memory-muted' }, t('library.scope.' + (note.scope ?? 'unbound')),
-                  note.scope === 'project' && note.projectKey ? ' · ' + note.projectKey : ''))))),
+                  h('span', { className: 'dsh-memory-muted' },
+                    [t('library.scope.' + (note.scope ?? 'unbound')),
+                      note.scope === 'project' ? note.projectKey : null, note.topic].filter(Boolean).join(' · '))),
+                h('span', { className: 'dsh-memory-library-edit' }, t('library.edit')))))),
         modal)
     }
 
@@ -201,7 +178,6 @@
       const [status, setStatus] = React.useState(EDITABLE_STATUSES.includes(record.status) ? record.status : 'archived')
       const [pinned, setPinned] = React.useState(record.pinned === true)
       const contentRef = React.useRef(null)
-      const titleId = React.useId()
 
       React.useEffect(() => {
         const node = contentRef.current
@@ -211,17 +187,6 @@
         }
       }, [])
 
-      React.useEffect(() => {
-        const onKeyDown = (event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onCancel()
-          }
-        }
-        document.addEventListener('keydown', onKeyDown)
-        return () => document.removeEventListener('keydown', onKeyDown)
-      }, [onCancel])
-
       const submit = (event) => {
         event.preventDefault()
         if (busy) return
@@ -229,16 +194,9 @@
         onSave({ content: content.trim(), tags: nextTags, status, pinned })
       }
 
-      return h('div', {
-        className: 'dsh-memory-overlay',
-        onMouseDown: (event) => {
-          if (event.target === event.currentTarget) onCancel()
-        },
-      },
-      h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId },
-        h('h3', { className: 'dsh-memory-modal-title', id: titleId }, t('edit.title')),
+      return h(PanelDialog, { title: t('edit.title'), onClose: onCancel, busy },
         h('form', { className: 'dsh-memory-form', onSubmit: submit },
-          h(Field, { label: t('edit.content') },
+          h(Field, { label: t('edit.content'), wide: true },
             h('textarea', {
               ref: contentRef,
               className: 'dsh-memory-textarea',
@@ -276,7 +234,7 @@
               className: 'dsh-memory-button',
               'data-primary': 'true',
               disabled: busy || content.trim() === '',
-            }, busy ? t('actions.saving') : t('actions.save'))))))
+            }, busy ? t('actions.saving') : t('actions.save')))))
     }
 
     /** Character-level change summary between two revisions. */

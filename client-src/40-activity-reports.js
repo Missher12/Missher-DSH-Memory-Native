@@ -133,9 +133,11 @@
 
     function MemoryTotals({ stats, t, locale }) {
       const counts = ['total', 'active', 'candidate', 'projects']
-      return h('div', { className: 'dsh-memory-activity-totals' },
+      return h('dl', { className: 'dsh-memory-activity-totals' },
         counts.filter(key => key !== 'candidate' || stats.candidate > 0).map(key =>
-          h('span', { key }, t('stats.' + key), ' ', h('b', null, stats[key].toLocaleString(locale || undefined)))))
+          h('div', { key },
+            h('dt', null, t('stats.' + key)),
+            h('dd', null, stats[key].toLocaleString(locale || undefined)))))
     }
 
     function ActivityHeading({ title, value, warning = false }) {
@@ -146,11 +148,11 @@
     }
 
     function ActivityDisclosure({ title, value, warning, children }) {
-      const attrs = { className: 'dsh-memory-activity-disclosure' }
+      const attrs = { className: 'dsh-memory-activity-disclosure dsh-memory-disclosure' }
       const heading = h(ActivityHeading, { title, value, warning })
       if (children == null) return h('div', { className: 'dsh-memory-activity-line' }, heading)
       return h('details', attrs,
-        h('summary', { className: 'dsh-memory-activity-line' }, heading),
+        h('summary', { className: 'dsh-memory-activity-line dsh-memory-disclosure-head' }, heading),
         h('div', { className: 'dsh-memory-activity-details' }, children))
     }
 
@@ -210,20 +212,18 @@
     }
 
     function ActivityHeatmap(props) {
-      const { activity, stats, t, locale } = props
+      const { activity, t, locale } = props
       const [mode, setMode] = React.useState('daily')
       const [color, setColor] = React.useState(readPalette)
       const [tooltip, setTooltip] = React.useState(null)
       const stageRef = React.useRef(null)
       const counts = new Map()
       const days = activity !== null && activity !== undefined && Array.isArray(activity.days) ? activity.days : []
-      let total = 0
       for (const day of days) {
         if (day === null || typeof day !== 'object' || typeof day.date !== 'string') continue
         const count = Number(day.count)
         if (!Number.isFinite(count) || count <= 0) continue
         counts.set(day.date, count)
-        total += count
       }
       const weeks = buildHeatWeeks(counts, mode, t)
       const labels = []
@@ -257,7 +257,7 @@
         const top = above ? rect.top - stageRect.top - 28 : rect.bottom - stageRect.top + 6
         setTooltip({ x, top, text })
       }
-      return h('section', { className: 'dsh-memory-activity dsh-memory-card', 'aria-label': t('activity.title'), style: { '--dsh-memory-particle-color': color === '' ? 'var(--dsw-alias-state-business-primary, #2f6df6)' : color } },
+      return h('section', { className: 'dsh-memory-activity', 'aria-label': t('activity.title'), style: { '--dsh-memory-particle-color': color === '' ? 'var(--dsw-alias-state-business-primary, #2f6df6)' : color } },
         h('div', { className: 'dsh-memory-activity-head' },
           h('div', { className: 'dsh-memory-activity-title' },
             h('h3', null, t('activity.title')),
@@ -285,7 +285,7 @@
           tooltip === null ? null : h('div', { className: 'dsh-memory-heat-tooltip', style: { left: tooltip.x, top: tooltip.top } }, tooltip.text)),
         h('div', { className: 'dsh-memory-heat-months' },
           labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text))),
-        counts.size < 7 ? h('p', { className: 'dsh-memory-activity-hint' }, t('activity.sparseHint')) : null)
+        counts.size === 0 ? h('p', { className: 'dsh-memory-help' }, t('activity.sparseHint')) : null)
     }
 
     function ContextUsage({ sessionId, sample, enabled, t, locale }) {
@@ -302,13 +302,15 @@
         : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' : 'contextUsage.empty')
       return h('section', { className: 'dsh-memory-context-usage' },
         h('div', { className: 'dsh-memory-context-usage-head' },
-          h('h3', { className: 'dsh-memory-settings-title' }, title),
-          amount === null ? null : h('span', { className: 'dsh-memory-context-usage-amount', title: formatTime(usage.at, locale) }, amount)),
+          h('h3', { className: 'dsh-memory-section-title' }, title),
+          amount === null
+            ? h('span', { className: 'dsh-memory-muted' }, detail)
+            : h('span', { className: 'dsh-memory-context-usage-amount', title: formatTime(usage.at, locale) }, amount)),
         !hasUsage || usage.budget === 0 ? null : h('div', {
           className: 'dsh-memory-context-usage-track', role: 'meter', 'aria-label': title,
           'aria-valuemin': 0, 'aria-valuemax': usage.budget, 'aria-valuenow': value, 'aria-valuetext': amount,
         }, h('span', { style: { width: (100 * value / usage.budget) + '%' } })),
-        h('p', { className: 'dsh-memory-muted' }, detail))
+        hasUsage ? h('p', { className: 'dsh-memory-help' }, detail) : null)
     }
 
     function RecallReport({ report, t, locale, call, onSaved }) {
@@ -418,26 +420,26 @@
             h('p', { className: 'dsh-memory-muted' }, [ref.role === 'user' ? t('brief.user') : ref.role, ref.sessionId].filter(Boolean).join(' · '))))
           return h('li', { key: item.id, className: 'dsh-memory-history-item' },
             h('p', { className: 'dsh-memory-history-content' }, item.content),
-            h('div', { className: 'dsh-memory-brief-meta' },
-              h('span', null, t(statusKey)),
-              Number.isFinite(item.validFrom) ? h('span', null, t('brief.since', { time: formatTime(item.validFrom, locale) })) : null,
-              Number.isFinite(item.validTo) ? h('span', null, t('brief.until', { time: formatTime(item.validTo, locale) })) : null),
-            h('details', { className: 'dsh-memory-brief-sources' },
-              h('summary', null, t('brief.sources')),
+            h('details', { className: 'dsh-memory-brief-sources dsh-memory-brief-entry' },
+              h('summary', null,
+                h('span', { className: 'dsh-memory-brief-meta' },
+                  h('span', null, t(statusKey)),
+                  Number.isFinite(item.validFrom) ? h('span', null, t('brief.since', { time: formatTime(item.validFrom, locale) })) : null,
+                  Number.isFinite(item.validTo) ? h('span', null, t('brief.until', { time: formatTime(item.validTo, locale) })) : null),
+                h('span', { className: 'dsh-memory-brief-toggle' }, t('brief.sources'), sources.length ? ' · ' + sources.length : '')),
               sources.length ? sources : h('p', { className: 'dsh-memory-muted' }, t('brief.noQuote'))))
         })
         return h('section', { key: section.id, className: 'dsh-memory-brief-section' },
-          h('h3', { className: 'dsh-memory-settings-title' }, t('brief.' + section.id)),
+          h('h3', { className: 'dsh-memory-section-title' }, t('brief.' + section.id)),
           h('ul', { className: 'dsh-memory-history' }, items))
       })
       return h('section', { className: 'dsh-memory-brief' },
         h('div', { className: 'dsh-memory-brief-tools' },
-          h('label', { className: 'dsh-memory-brief-project' }, t('brief.project'),
+          h(Field, { label: t('brief.project') },
             h(Select, { className: 'dsh-memory-select', value: project, title: project, 'aria-label': t('brief.project'), onChange: event => { setProject(event.target.value); setOffset(0) } },
               !project ? h('option', { value: '' }, t('brief.choose')) : null,
               options.map(key => h('option', { key, value: key }, key)))),
           h('button', { type: 'button', className: 'dsh-memory-button', disabled: loading || !project, onClick: () => setRefresh(value => value + 1) }, t('actions.refresh'))),
-        h('p', { className: 'dsh-memory-muted' }, t('brief.hint')),
         loading ? h('p', { role: 'status', className: 'dsh-memory-muted' }, t('list.loading')) : null,
         error ? h('p', { role: 'alert', className: 'dsh-memory-error-text' }, error) : null,
         !project ? h('p', { className: 'dsh-memory-muted' }, t('error.missingProject')) : null,
@@ -454,44 +456,26 @@
       const { profile, t } = props
       const traits = profile !== null && profile !== undefined && Array.isArray(profile.traits) ? profile.traits : []
       const total = typeof profile?.total === 'number' ? profile.total : traits.length
-      return h('section', { className: 'dsh-memory-card dsh-memory-profile' },
-        h('div', { className: 'dsh-memory-profile-head' },
-          h('h3', { className: 'dsh-memory-activity-title' }, t('profile.title')),
+      return h('section', { className: 'dsh-memory-profile' },
+        h('div', { className: 'dsh-memory-section-head' },
+          h('h3', { className: 'dsh-memory-section-title' }, t('profile.title')),
           h('span', { className: 'dsh-memory-list-total' }, t('profile.summary', { count: String(total) }))),
-        h('p', { className: 'dsh-memory-muted' }, t('profile.hint')),
         traits.length === 0
           ? h('p', { className: 'dsh-memory-muted' }, t('profile.empty'))
           : h('ul', { className: 'dsh-memory-profile-list' },
-            traits.map((trait) => h('li', { key: trait.id, className: 'dsh-memory-profile-item' },
-              h('div', { className: 'dsh-memory-profile-line' },
-                h('span', { className: 'dsh-memory-kind', 'data-kind': trait.kind }, t('kind.' + trait.kind)),
-                h('span', { className: 'dsh-memory-profile-statement', title: trait.statement }, trait.statement),
+            traits.map(trait => {
+              const evidence = Array.isArray(trait.evidence) ? trait.evidence.slice(0, 3) : []
+              const heading = h('span', { className: 'dsh-memory-profile-line' },
+                h('span', { className: 'dsh-memory-profile-statement' }, trait.statement),
                 h('span', { className: 'dsh-memory-profile-meta' },
-                  t('profile.evidence', { count: String(trait.evidenceCount) }),
-                  ' · ',
-                  Number(trait.confidence).toFixed(2))),
-              Array.isArray(trait.evidence) && trait.evidence.length > 0
-                ? h('ul', { className: 'dsh-memory-profile-evidence' }, trait.evidence.slice(0, 3).map((item) => h('li', { key: item.id }, item.content)))
-                : null))))
-    }
-
-    function ProfileCard(props) {
-      const { profile, t } = props
-      const traits = profile !== null && profile !== undefined && Array.isArray(profile.traits) ? profile.traits : []
-      if (traits.length === 0) return null
-      const total = typeof profile.total === 'number' ? profile.total : traits.length
-      return h('section', { className: 'dsh-memory-card dsh-memory-profile' },
-        h('div', { className: 'dsh-memory-profile-head' },
-          h('h3', { className: 'dsh-memory-activity-title' }, t('profile.title')),
-          h('span', { className: 'dsh-memory-list-total' }, t('profile.summary', { count: String(total) }))),
-        h('ul', { className: 'dsh-memory-profile-list' },
-          traits.slice(0, 3).map((trait) => h('li', { key: trait.id, className: 'dsh-memory-profile-item' },
-            h('span', { className: 'dsh-memory-kind', 'data-kind': trait.kind }, t('kind.' + trait.kind)),
-            h('span', { className: 'dsh-memory-profile-statement', title: trait.statement }, trait.statement),
-            h('span', { className: 'dsh-memory-profile-meta' },
-              t('profile.evidence', { count: String(trait.evidenceCount) }),
-              ' · ',
-              Number(trait.confidence).toFixed(2))))))
+                  t('profile.evidence', { count: String(trait.evidenceCount) }), ' · ',
+                  t('row.confidence', { value: Number(trait.confidence).toFixed(2) })))
+              return h('li', { key: trait.id, className: 'dsh-memory-profile-item' },
+                evidence.length === 0 ? heading : h('details', { className: 'dsh-memory-disclosure' },
+                  h('summary', { className: 'dsh-memory-disclosure-head' }, heading),
+                  h('ul', { className: 'dsh-memory-profile-evidence' },
+                    evidence.map(item => h('li', { key: item.id }, item.content)))))
+            })))
     }
 
     /** Seven-day injection and extraction token usage. */
@@ -540,7 +524,7 @@
               tokens: String(number(totals.injectCalls) === 0 ? 0 : Math.round(injectTokens / number(totals.injectCalls))),
             })),
             overBudget > 0 ? h('em', null, t('usage.overBudget', { count: String(overBudget) })) : null),
-        usage === null || usage === undefined
+        total === 0 && number(totals.extractProviderCalls) === 0
           ? null
           : h('p', { className: 'dsh-memory-trend-note' }, number(totals.extractProviderCalls) > 0
             ? t('usage.provider', {

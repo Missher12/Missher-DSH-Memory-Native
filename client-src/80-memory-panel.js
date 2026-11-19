@@ -40,8 +40,6 @@
       const [topicSuggestBusy, setTopicSuggestBusy] = React.useState(false)
       const [bulkTagOpen, setBulkTagOpen] = React.useState(false)
       const [bulkTagValue, setBulkTagValue] = React.useState('')
-      const [toolbarNarrow, setToolbarNarrow] = React.useState(false)
-      const toolbarObserver = React.useRef(null)
       const loadGeneration = React.useRef(0)
       const sessionRequestGeneration = React.useRef(0)
       const projectViewGeneration = React.useRef(0)
@@ -50,19 +48,6 @@
       const activeSessionId = React.useRef(sessionId)
       activeSessionId.current = sessionId
       const data = dataState !== null && dataState.scope === scope && dataState.sessionId === sessionId ? dataState : null
-      const setToolbarNode = React.useCallback((node) => {
-        if (toolbarObserver.current !== null) {
-          toolbarObserver.current.disconnect()
-          toolbarObserver.current = null
-        }
-        if (node === null || typeof ResizeObserver !== 'function') return
-        const observer = new ResizeObserver((entries) => {
-          const width = entries[0]?.contentRect?.width ?? 0
-          setToolbarNarrow(width < 560)
-        })
-        observer.observe(node)
-        toolbarObserver.current = observer
-      }, [])
 
       React.useEffect(() => {
         const timer = setTimeout(() => {
@@ -458,18 +443,20 @@
       }
 
       if (view === 'activity') {
-        return h('div', { className: 'dsh-memory-root dsh-memory-activity-view' }, pageTop,
+        return h('div', { className: 'dsh-memory-root' }, pageTop,
           error ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error) : null,
-          stats ? h(React.Fragment, null,
+          stats ? h('div', { className: 'dsh-memory-activity-view' },
             h(ContextUsage, { sessionId,
               sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
               enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale }),
             h(MemoryTotals, { stats, t, locale }),
             h(ActivityTrends, { stats, activity: data?.activity, t, locale }),
-            h(ExtractionStatus, { stats, call, t, locale, onSaved: load }),
-            h(RecallReport, { report: activeSessionPanel?.report ?? null, t, locale, call, onSaved: reloadAfterRecallChange }),
-            h(HealthStatus, { health: stats.health, capture: stats.capture, t, onRepair: repairHealth }),
-            stats.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null) : null)
+            h('section', { className: 'dsh-memory-activity-operations' },
+              h('h3', { className: 'dsh-memory-section-title' }, t('activity.operations')),
+              h(ExtractionStatus, { stats, call, t, locale, onSaved: load }),
+              h(RecallReport, { report: activeSessionPanel?.report ?? null, t, locale, call, onSaved: reloadAfterRecallChange }),
+              h(HealthStatus, { health: stats.health, capture: stats.capture, t, onRepair: repairHealth }),
+              stats.semantic ? h(SemanticModelControls, { call, initial: stats.semantic, t }) : null)) : null)
       }
 
       if (view === 'profile') {
@@ -503,7 +490,7 @@
           pageTop,
           notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
           error === '' ? null : h('p', { className: 'dsh-memory-error-text', role: 'alert' }, error),
-          h(SettingsCard, { stats, call, t, onSaved: load, group: view }))
+          h(SettingsCard, { stats, call, t, onSaved: load, group: view, onRebuild: rebuild, rebuilding: busy === 'rebuild', actionBusy: busy !== '' }))
       }
 
       const suggestionItems = topicSuggestions !== null && Array.isArray(topicSuggestions.suggestions) ? topicSuggestions.suggestions : []
@@ -546,36 +533,56 @@
             h('span', { className: 'dsh-memory-row-meta' }, t('history.time', { time: formatTime(revision.updatedAt, locale) })),
             h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => restoreRevision(revision.revision) }, t('history.restore'))))
       })
-      const historyModal = historyRecord === null ? null : h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dsh-memory-history-title' },
-        h('h3', { className: 'dsh-memory-modal-title', id: 'dsh-memory-history-title' }, t('history.title')),
+      const closeHistory = () => setHistoryRecord(null)
+      const historyModal = historyRecord === null ? null : h(PanelDialog, { title: t('history.title'), onClose: closeHistory },
         historyBusy
           ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('history.loading'))
           : historyError !== ''
             ? h('p', { className: 'dsh-memory-error-text', role: 'alert' }, historyError)
             : h('ul', { className: 'dsh-memory-history' }, revisionRows),
         h('div', { className: 'dsh-memory-modal-actions' },
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setHistoryRecord(null) }, t('actions.close'))))
-      const bulkTagModal = bulkTagOpen ? h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true' },
-        h('h3', { className: 'dsh-memory-modal-title' }, t('bulk.tagTitle')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: closeHistory }, t('actions.close'))))
+      const closeBulkTag = () => { setBulkTagOpen(false); setBulkTagValue('') }
+      const bulkTagModal = bulkTagOpen ? h(PanelDialog, { title: t('bulk.tagTitle'), onClose: closeBulkTag, busy: busy !== '' },
         h('input', {
           className: 'dsh-memory-input',
+          'aria-label': t('bulk.tagTitle'),
           value: bulkTagValue,
           placeholder: t('bulk.tagPlaceholder'),
           onChange: (event) => setBulkTagValue(event.target.value),
         }),
         h('div', { className: 'dsh-memory-modal-actions' },
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => { setBulkTagOpen(false); setBulkTagValue('') } }, t('actions.cancel')),
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: closeBulkTag, disabled: busy !== '' }, t('actions.cancel')),
           h('button', { type: 'button', className: 'dsh-memory-button dsh-memory-button-primary', disabled: bulkTagValue.trim() === '' || busy !== '', onClick: submitBulkTag }, t('bulk.tagApply')))) : null
-      const topicModal = topicSuggestOpen ? h('div', { className: 'dsh-memory-modal', role: 'dialog', 'aria-modal': 'true' },
-        h('h3', { className: 'dsh-memory-modal-title' }, t('topic.mergeTitle')),
+      const closeTopicSuggestions = () => setTopicSuggestOpen(false)
+      const topicModal = topicSuggestOpen ? h(PanelDialog, { title: t('topic.mergeTitle'), onClose: closeTopicSuggestions },
         topicSuggestBusy ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('history.loading')) : suggestionNode,
         h('div', { className: 'dsh-memory-modal-actions' },
-          h('button', { type: 'button', className: 'dsh-memory-button', onClick: () => setTopicSuggestOpen(false) }, t('actions.close')))) : null
+          h('button', { type: 'button', className: 'dsh-memory-button', onClick: closeTopicSuggestions }, t('actions.close')))) : null
+
+      const topics = Object.keys(topicCounts).filter(key => key !== '__none__').sort()
+      const filterCount = Number(status !== '') + Number(topic !== '')
 
       return h('div', { className: 'dsh-memory-root' },
         pageTop,
-        h('div', { className: 'dsh-memory-toolbar', ref: setToolbarNode, 'data-narrow': toolbarNarrow ? 'true' : 'false' },
-          h(Field, { label: t('filter.scope') },
+        h('div', { className: 'dsh-memory-toolbar' },
+          h('div', { className: 'dsh-memory-search-row' },
+            h('input', {
+              className: 'dsh-memory-input',
+              type: 'search',
+              value: queryInput,
+              placeholder: t('filter.searchPlaceholder'),
+              onChange: event => setQueryInput(event.target.value),
+              'aria-label': t('filter.search'),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dsh-memory-button',
+              onClick: () => runAction('refresh', async () => {}, null),
+              disabled: loading || busy !== '',
+            }, t('actions.refresh'))),
+          h('div', { className: 'dsh-memory-scope' },
+            h(Field, { label: t('filter.scope') },
             h(Select, {
               className: 'dsh-memory-select',
               value: scope,
@@ -610,8 +617,10 @@
               onChange: event => selectProject(event.target.value),
               'aria-label': t('filter.project'),
               title: currentProjectKey ?? '',
-            }, projectOptions.map(key => h('option', { key, value: key, title: key }, key)))) : null,
-          h(Field, { label: t('filter.status') },
+            }, projectOptions.map(key => h('option', { key, value: key, title: key }, key)))) : null),
+          h('details', { className: 'dsh-memory-filter-details dsh-memory-disclosure' },
+            h('summary', { className: 'dsh-memory-disclosure-head' }, t('filter.more'), filterCount > 0 ? ' · ' + filterCount : ''),
+            h(Field, { label: t('filter.status') },
             h(Select, {
               className: 'dsh-memory-select',
               value: status,
@@ -623,28 +632,16 @@
             },
             h('option', { value: '' }, t('filter.status.all')),
             STATUSES.map((value) => h('option', { key: value, value }, t('status.' + value))))),
-          h(Field, { label: t('filter.search'), grow: true },
-            h('input', {
-              className: 'dsh-memory-input',
-              type: 'search',
-              value: queryInput,
-              placeholder: t('filter.searchPlaceholder'),
-              onChange: (event) => setQueryInput(event.target.value),
-              'aria-label': t('filter.search'),
-            })),
-          h('div', { className: 'dsh-memory-toolbar-actions' },
-            h('button', {
-              type: 'button',
-              className: 'dsh-memory-button',
-              onClick: () => runAction('refresh', async () => {}, null),
-              disabled: loading || busy !== '',
-            }, t('actions.refresh')),
-            h('button', {
-              type: 'button',
-              className: 'dsh-memory-button dsh-memory-button-primary',
-              onClick: rebuild,
-              disabled: busy !== '',
-            }, busy === 'rebuild' ? t('actions.rebuilding') : t('actions.rebuild')))),
+            h(Field, { label: t('filter.topic') },
+              h(Select, { className: 'dsh-memory-select', value: topic,
+                'aria-label': t('filter.topic'),
+                onChange: event => { setTopic(event.target.value); setPage(0) },
+              },
+              h('option', { value: '' }, t('filter.topic.all')),
+              h('option', { value: '__none__' }, t('filter.topic.none')),
+              topics.map(key => h('option', { key, value: key }, key + ' (' + String(topicCounts[key]) + ')')))),
+            topics.length > 1 ? h('div', { className: 'dsh-memory-filter-actions' },
+              h('button', { type: 'button', className: 'dsh-memory-button', onClick: openTopicSuggestions }, t('topic.suggest'))) : null)),
         notice === '' ? null : h('p', { className: 'dsh-memory-notice', role: 'status' }, notice),
         error === '' ? null : h('div', { className: 'dsh-memory-error-card', role: 'alert' },
           h('h3', { className: 'dsh-memory-error-title' }, t('list.error.title')),
@@ -679,30 +676,10 @@
                 setPage(0)
               },
             }, t('kind.' + value), h('span', { className: 'dsh-memory-kind-count' }, String(kindCounts[value] ?? 0))))),
-          h('div', { className: 'dsh-memory-list-tools' },
-            h(Select, {
-              className: 'dsh-memory-select dsh-memory-topic-select',
-              value: topic,
-              onChange: (event) => {
-                setTopic(event.target.value)
-                setPage(0)
-              },
-              'aria-label': t('filter.topic'),
-            },
-            h('option', { value: '' }, t('filter.topic.all')),
-            h('option', { value: '__none__' }, t('filter.topic.none')),
-            Object.keys(topicCounts).filter((key) => key !== '__none__').sort().map((key) =>
-              h('option', { key, value: key }, key + ' (' + String(topicCounts[key]) + ')'))),
-            Object.keys(topicCounts).filter((key) => key !== '__none__').length > 1
-              ? h('button', {
-                type: 'button',
-                className: 'dsh-memory-button',
-                onClick: openTopicSuggestions,
-              }, t('topic.suggest'))
-              : null,
-            h('span', { className: 'dsh-memory-list-total' }, t('pager.total', { total: String(total) })))),
+          kind === '' && total === kindCountsTotal ? null
+            : h('span', { className: 'dsh-memory-list-total' }, t('pager.total', { total: String(total) }))),
         loading && data === null ? h('p', { className: 'dsh-memory-muted', role: 'status' }, t('list.loading')) : null,
-        error !== '' ? null : items.length === 0
+        error !== '' || (loading && data === null) ? null : items.length === 0
           ? h('div', { className: 'dsh-memory-empty' },
             h('p', { className: 'dsh-memory-empty-title' }, filtering ? t('list.noMatch') : t('list.empty.title')),
             filtering || showMissingProject
@@ -730,8 +707,17 @@
                   : h('div', { className: 'dsh-memory-danger-actions' }, h('button', { type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', onClick: () => bulk('delete') }, t('bulk.delete'))))),
             h('ul', { key: 'list', className: 'dsh-memory-list' },
             items.map((record) => {
-              const isConfirming = confirmingId === record.id
+              const deleted = record.status === 'deleted'
+              const isConfirming = (deleted ? purgingId : confirmingId) === record.id
               const actionBusy = busy !== ''
+              const deleteLabel = deleted ? (isConfirming ? 'actions.purgeConfirm' : 'actions.purge')
+                : (isConfirming ? 'actions.deleteConfirm' : 'actions.delete')
+              const deleteRecord = () => {
+                if (deleted) { void purge(record); return }
+                if (!isConfirming) { setConfirmingId(record.id); return }
+                setConfirmingId('')
+                void remove(record)
+              }
               return h('li', { key: record.id, className: 'dsh-memory-row', 'data-kind': record.kind, 'data-selected': selected.includes(record.id) },
                 h('div', { className: 'dsh-memory-row-head' },
                   h('label', { className: 'dsh-memory-row-select' }, h('input', {
@@ -752,8 +738,8 @@
                   Array.isArray(record.tags) && record.tags.length > 0
                     ? h('ul', { className: 'dsh-memory-tags' }, record.tags.map((tag, index) => h('li', { key: tag + ':' + index, className: 'dsh-memory-tag' }, tag)))
                     : null,
-                h('div', { className: 'dsh-memory-row-actions' },
-                  record.status === 'deleted'
+                  h('div', { className: 'dsh-memory-row-actions' },
+                    deleted
                     ? [
                       h('button', {
                         key: 'restore',
@@ -769,15 +755,6 @@
                         onClick: () => openHistory(record),
                         disabled: actionBusy,
                       }, t('actions.history')),
-                      h('button', {
-                        key: 'purge',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        'data-danger': 'true',
-                        'data-confirming': purgingId === record.id,
-                        onClick: () => purge(record),
-                        disabled: actionBusy,
-                      }, purgingId === record.id ? t('actions.purgeConfirm') : t('actions.purge')),
                     ]
                     : [
                       h('button', {
@@ -815,23 +792,15 @@
                         onClick: () => openHistory(record),
                         disabled: actionBusy,
                       }, t('actions.history')),
-                      h('button', {
-                        key: 'delete',
-                        type: 'button',
-                        className: 'dsh-memory-button',
-                        'data-danger': 'true',
-                        'data-confirming': isConfirming,
-                        onClick: () => {
-                          if (!isConfirming) {
-                            setConfirmingId(record.id)
-                            return
-                          }
-                          setConfirmingId('')
-                          void remove(record)
-                        },
-                        disabled: actionBusy,
-                      }, isConfirming ? t('actions.deleteConfirm') : t('actions.delete')),
-                    ])))
+                    ]),
+                  h('div', { className: 'dsh-memory-row-danger' }, h('button', {
+                    type: 'button',
+                    className: 'dsh-memory-button',
+                    'data-danger': 'true',
+                    'data-confirming': isConfirming,
+                    onClick: deleteRecord,
+                    disabled: actionBusy,
+                  }, t(deleteLabel)))))
             }))],
         data === null || total === 0 ? null : h('div', { className: 'dsh-memory-pager' },
           h('span', null, t('pager.summary', { page: String(page + 1), pages: String(pageCount), total: String(total) })),

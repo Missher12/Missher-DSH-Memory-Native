@@ -13,24 +13,31 @@
         try{await call(method,input);const current=await call('obsidianStatus',{});setStatus(current.automatic);setStatusError('')}
         catch(e){setActionError(messageOf(e))}finally{setBusy(false)}
       }
-      return h('div',null,
-        h('p',{className:'dsh-memory-muted',role:'status'},status?.at?t('obsidian.syncStatus',{time:new Date(status.at).toLocaleTimeString(),sent:status.exported,received:status.imported,conflicts:status.conflicts.length})+' · '+t('obsidian.mode.'+(status.mode==='full'?'full':'incremental')):t('obsidian.notYet')),
-        status?.pendingFiles?h('p',{className:'dsh-memory-muted'},t('obsidian.pending',{count:status.pendingFiles})):null,
-        status?.fullScanPending?h('p',{className:'dsh-memory-muted'},t('obsidian.fullPending')):null,
-        h('button',{type:'button',className:'dsh-memory-button',disabled:disabled||busy||!call,onClick:()=>action('obsidianSync',{fullScan:true})},t('obsidian.fullScan')),
+      const summary = status?.at
+        ? t('obsidian.syncStatus', {
+          time: new Date(status.at).toLocaleTimeString(), sent: status.exported,
+          received: status.imported, conflicts: status.conflicts.length,
+        }) + ' · ' + t('obsidian.mode.' + (status.mode === 'full' ? 'full' : 'incremental'))
+        : t('obsidian.notYet')
+      return h(React.Fragment, null,
+        h(SettingRow, { label: t('obsidian.status'), hint: h('span', { role: 'status' }, summary) },
+          h('button', { type: 'button', className: 'dsh-memory-button', disabled: disabled || busy || !call,
+            onClick: () => action('obsidianSync', { fullScan: true }) }, t(busy ? 'obsidian.syncing' : 'obsidian.fullScan'))),
+        status?.pendingFiles ? h('p', { className: 'dsh-memory-help' }, t('obsidian.pending', { count: status.pendingFiles })) : null,
+        status?.fullScanPending ? h('p', { className: 'dsh-memory-help' }, t('obsidian.fullPending')) : null,
         statusError?h('p',{className:'dsh-memory-error-text',role:'alert'},statusError):null,
         actionError?h('p',{className:'dsh-memory-error-text',role:'alert'},actionError):null,
         (status?.errors??[]).map((e,i)=>h('p',{key:i,className:'dsh-memory-error-text'},e.file+': '+e.message)),
-        (status?.conflicts??[]).map(c=>h('details',{key:c.key,className:'dsh-memory-card'},
+        (status?.conflicts??[]).map(c=>h('details',{key:c.key,className:'dsh-memory-sync-conflict'},
           h('summary',null,c.file+' · '+c.reason),
-          h('p',{className:'dsh-memory-muted',style:{overflowWrap:'anywhere'}},c.copies.join('\n')),
-          h('strong',null,'Memory'),h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},c.memoryText??t('obsidian.deleted')),
-          h('strong',null,'Obsidian'),h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},c.vaultText??t('obsidian.deleted')),
+          h('p',{className:'dsh-memory-muted'},c.copies.join('\n')),
+          h('strong',null,'Memory'),h('pre',null,c.memoryText??t('obsidian.deleted')),
+          h('strong',null,'Obsidian'),h('pre',null,c.vaultText??t('obsidian.deleted')),
           h('div',{className:'dsh-memory-settings-buttons'},['memory','vault'].map(side=>h('button',{key:side,type:'button',className:'dsh-memory-button',disabled:disabled||busy,onClick:()=>action('obsidianResolve',{key:c.key,token:c.token,side})},t(side==='memory'?'obsidian.keepMemory':'obsidian.keepVault')))))))
     }
 
     function SettingsCard(props) {
-      const { stats, call, t, onSaved, group = 'capture' } = props
+      const { stats, call, t, onSaved, onRebuild, rebuilding, actionBusy, group = 'capture' } = props
       const [capture, setCapture] = React.useState(true)
       const [inject, setInject] = React.useState(true)
       const [budget, setBudget] = React.useState('360')
@@ -44,6 +51,7 @@
       const draftRef = React.useRef(null)
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState('')
+      const [noticeArea, setNoticeArea] = React.useState('')
       const [fieldErrors, setFieldErrors] = React.useState({})
       const [sharingUrl, setSharingUrl] = React.useState('')
       const fileRef = React.useRef(null)
@@ -131,8 +139,9 @@
       const numbersValid = budgetValid && retentionValid
       const canSave = repairing ? numbersValid : group !== 'capture' || numbersValid
       const save = async () => {
-        if (call === null || busy || !dirty || !canSave) return
+        if (call === null || busy || actionBusy || !dirty || !canSave) return
         setBusy(true)
+        setNoticeArea(group)
         setNotice('')
         setFieldErrors({})
         try {
@@ -203,6 +212,7 @@
       const exportAll = async () => {
         if (call === null || busy) return
         setBusy(true)
+        setNoticeArea('records')
         setNotice('')
         try {
           const data = await call('exportData', {})
@@ -226,6 +236,7 @@
         const file = event.target.files !== null && event.target.files.length > 0 ? event.target.files[0] : null
         if (file === null) return
         setBusy(true)
+        setNoticeArea('records')
         setNotice('')
         try {
           const payload = JSON.parse(await file.text())
@@ -249,6 +260,7 @@
       const backupNow = async () => {
         if (call === null || busy) return
         setBusy(true)
+        setNoticeArea('backup')
         setNotice('')
         try {
           const result = await call('backup', {})
@@ -265,6 +277,7 @@
         let popup = null
         try { popup = window.open('about:blank', '_blank'); if (popup) popup.opener = null } catch {}
         setBusy(true)
+        setNoticeArea('sharing')
         setNotice('')
         try {
           const result = await call('localSharing', { action: 'start' })
@@ -280,6 +293,7 @@
       const stopLocalSharing = async () => {
         if (call === null || busy) return
         setBusy(true)
+        setNoticeArea('sharing')
         setNotice('')
         try {
           await call('localSharing', { action: 'stop' })
@@ -292,6 +306,7 @@
       const transfer = async (kind, direction) => {
         if (!call || busy || dirty) return
         setBusy(true)
+        setNoticeArea('sync')
         setNotice('')
         try {
           const result = kind === 'notes'
@@ -307,100 +322,94 @@
         finally { setBusy(false) }
       }
 
-      const switchRow = (label, checked, onChange) => h('div', { className: 'dsh-memory-settings-row' },
-        h('span', { className: 'dsh-memory-settings-label' }, label),
-        h('button', {
+      const switchRow = (label, checked, onChange, hint) => h(SettingRow, { label, hint },
+        description => h('button', {
           type: 'button',
           className: 'dsh-memory-switch',
           role: 'switch',
-          'aria-checked': checked ? 'true' : 'false',
+          'aria-checked': checked,
           'aria-label': label,
+          'aria-describedby': description,
           onClick: () => onChange(!checked),
         }, h('span', { className: 'dsh-memory-switch-knob' })))
-      const fieldError = message => message ? h('p', { className: 'dsh-memory-field-error', role: 'alert' }, message) : null
-      const numberRow = (label, value, unit, min, max, step, error, onChange) => h(React.Fragment, null,
-        h('div', { className: 'dsh-memory-settings-row' },
-          h('span', { className: 'dsh-memory-settings-label' }, label),
-          h('span', { className: 'dsh-memory-number' },
-            h('input', { type: 'number', min, max, step, value, 'aria-label': label, 'aria-invalid': error ? 'true' : undefined, onChange }),
-            h('em', null, unit))),
-        fieldError(error))
-      const textRow = (label, value, placeholder, error, maxLength, onChange) => h(React.Fragment, null,
-        h('div', { className: 'dsh-memory-settings-row' },
-          h('span', { className: 'dsh-memory-settings-label' }, label),
-          h('input', {
-            className: 'dsh-memory-settings-input',
-            type: 'text',
-            value,
-            placeholder,
-            maxLength,
-            'aria-label': label,
-            'aria-invalid': error ? 'true' : undefined,
-            onChange,
-          })),
-        fieldError(error))
-      const groupSection = (title, content) => h('div', { className: 'dsh-memory-settings-group' },
-        h('h2', { className: 'dsh-memory-settings-group-title' }, t('settings.group.' + title)), content)
+      const numberRow = (label, value, unit, min, max, hint, error, onChange) => h(SettingRow, { label, hint, error },
+        description => h('span', { className: 'dsh-memory-number' },
+          h('input', { type: 'number', min, max, step: 1, value, 'aria-label': label,
+            'aria-describedby': description, 'aria-invalid': Boolean(error), onChange }),
+          h('span', { 'aria-hidden': true }, unit)))
+      const textRow = (label, value, placeholder, error, maxLength, onChange) => h(SettingRow, { label, error },
+        description => h('input', {
+          className: 'dsh-memory-settings-input',
+          type: 'text',
+          value,
+          title: value || undefined,
+          placeholder,
+          maxLength,
+          'aria-label': label,
+          'aria-describedby': description,
+          'aria-invalid': Boolean(error),
+          onChange,
+        }))
+      const groupSection = (title, ...content) => h('section', { className: 'dsh-memory-settings-group' },
+        h('h3', { className: 'dsh-memory-settings-group-title' }, t('settings.group.' + title)), ...content)
       const button = (label, onClick) => h('button', {
         type: 'button',
         className: 'dsh-memory-button',
         onClick,
         disabled: busy,
       }, label)
+      const feedbackAt = area => notice !== '' && noticeArea === area
+        ? h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice) : null
 
       const budgetError = !budgetValid && (dirtyFields.includes('budget') || repairing) ? t('settings.invalid.budget') : ''
       const retentionError = !retentionValid && (dirtyFields.includes('retention') || repairing) ? t('settings.invalid.retention') : ''
       const behavior = h(React.Fragment, null,
-        groupSection('capture', h(React.Fragment, null,
+        groupSection('capture',
           switchRow(t('settings.capture'), capture, value => updateDraft('capture', value, setCapture)),
           switchRow(t('settings.inject'), inject, value => updateDraft('inject', value, setInject)),
-          numberRow(t('settings.budget'), budget, 'token', '100', '8000', '1', budgetError,
-            event => updateDraft('budget', event.target.value, setBudget)),
-          h('p', { className: 'dsh-memory-muted' }, t('settings.budgetHint')))),
-        groupSection('retention', h(React.Fragment, null,
-          numberRow(t('settings.retention'), retention, t('settings.days'), '0', '36500', '1', retentionError,
+          numberRow(t('settings.budget'), budget, 'Token', 100, 8000, t('settings.budgetHint'), budgetError,
+            event => updateDraft('budget', event.target.value, setBudget))),
+        groupSection('retention',
+          numberRow(t('settings.retention'), retention, t('settings.days'), 0, 36500, t('settings.retentionHint'), retentionError,
             event => updateDraft('retention', event.target.value, setRetention)),
-          h('p', { className: 'dsh-memory-muted' }, t('settings.retentionHint')),
-          switchRow(t('settings.maintenance'), maintenance, value => updateDraft('maintenance', value, setMaintenance)))))
+          switchRow(t('settings.maintenance'), maintenance, value => updateDraft('maintenance', value, setMaintenance)),
+          h(SettingRow, { label: t('settings.index') },
+            h('button', { type: 'button', className: 'dsh-memory-button', onClick: onRebuild, disabled: busy || actionBusy },
+              t(rebuilding ? 'actions.rebuilding' : 'actions.rebuild')))))
       const dataSettings = h(React.Fragment, null,
-        groupSection('records', h('div', { className: 'dsh-memory-settings-row' },
-          h('span', { className: 'dsh-memory-settings-label' }, t('settings.data.records')),
-          h('div', { className: 'dsh-memory-settings-buttons' },
+        groupSection('records',
+          h(SettingRow, { label: t('settings.data.records') },
             button(t('data.export'), exportAll),
             button(t('data.import'), () => fileRef.current?.click()),
-            h('input', { ref: fileRef, type: 'file', accept: 'application/json', className: 'dsh-memory-file-input', onChange: importAll })))),
-        groupSection('backup', h(React.Fragment, null,
-          h('div', { className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, t('data.backup')),
-            h('div', { className: 'dsh-memory-settings-buttons' }, button(t('data.backupAction'), backupNow))),
-          h('p', { className: 'dsh-memory-muted' }, t('data.backupHint')))),
-        groupSection('sharing', h(React.Fragment, null,
-          h('div', { className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, t('data.localSharing')),
-            h('div', { className: 'dsh-memory-settings-buttons' },
-              button(t('data.openSharing'), openLocalSharing), button(t('data.stopSharing'), stopLocalSharing))),
-          sharingUrl ? h('div', { className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, ''),
-            h('a', { href: sharingUrl, target: '_blank', rel: 'noopener noreferrer' }, t('data.sharingLink'))) : null)))
-      const obsidianSettings = groupSection('obsidian', h(React.Fragment, null,
-        switchRow(t('obsidian.auto'), obsidianAuto, value => updateDraft('obsidianAuto', value, setObsidianAuto)),
-        h('p', { className: 'dsh-memory-muted' }, t('obsidian.autoHint')),
-        textRow(t('obsidian.vault'), obsidianVault, '/Users/me/Vault', fieldErrors.obsidianVaultPath, 1024,
-          event => updateDraft('obsidianVault', event.target.value, setObsidianVault)),
-        textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', fieldErrors.obsidianFolder, 64,
-          event => updateDraft('obsidianFolder', event.target.value, setObsidianFolder)),
-        h(ObsidianSyncStatus, { call, t, disabled: busy || dirty }),
-        h('details', { className: 'dsh-memory-manual-sync' },
-          h('summary', null, t('sync.manual')),
-          ['memories', 'notes'].map(kind => h('div', { key: kind, className: 'dsh-memory-settings-row' },
-            h('span', { className: 'dsh-memory-settings-label' }, t('sync.' + kind)),
-            h('div', { className: 'dsh-memory-settings-buttons' },
+            h('input', { ref: fileRef, type: 'file', accept: 'application/json', className: 'dsh-memory-file-input', onChange: importAll })),
+          feedbackAt('records'),
+          h(SettingRow, { label: t('data.backup'), hint: t('data.backupHint') },
+            button(t('data.backupAction'), backupNow)),
+          feedbackAt('backup')),
+        groupSection('sharing',
+          h(SettingRow, { label: t('data.localSharing'), hint: sharingUrl
+            ? h('a', { href: sharingUrl, target: '_blank', rel: 'noopener noreferrer' }, t('data.sharingLink')) : null },
+            button(t('data.openSharing'), openLocalSharing), button(t('data.stopSharing'), stopLocalSharing)),
+          feedbackAt('sharing')))
+      const obsidianSettings = h(React.Fragment, null,
+        groupSection('obsidian',
+          textRow(t('obsidian.vault'), obsidianVault, t('obsidian.vaultPlaceholder'), fieldErrors.obsidianVaultPath, 1024,
+            event => updateDraft('obsidianVault', event.target.value, setObsidianVault)),
+          textRow(t('obsidian.folder'), obsidianFolder, 'DSH Memory', fieldErrors.obsidianFolder, 64,
+            event => updateDraft('obsidianFolder', event.target.value, setObsidianFolder)),
+          switchRow(t('obsidian.auto'), obsidianAuto, value => updateDraft('obsidianAuto', value, setObsidianAuto), t('obsidian.autoHint'))),
+        groupSection('sync',
+          h(ObsidianSyncStatus, { call, t, disabled: busy || dirty }),
+          h('details', { className: 'dsh-memory-manual-sync dsh-memory-disclosure' },
+            h('summary', { className: 'dsh-memory-disclosure-head' }, t('sync.manual')),
+            ['memories', 'notes'].map(kind => h(SettingRow, { key: kind, label: t('sync.' + kind) },
               ['export', 'import'].map(direction => h('button', {
                 key: direction, type: 'button', className: 'dsh-memory-button',
                 'aria-label': t('data.' + direction) + ' · ' + t('sync.' + kind),
                 disabled: !call || busy || dirty || !baselineRef.current?.obsidianVault,
                 onClick: () => transfer(kind, direction),
-              }, t('data.' + direction)))))))))
+              }, t('data.' + direction)))))),
+          feedbackAt('sync')))
       const content = group === 'capture' ? behavior : group === 'data' ? dataSettings : obsidianSettings
       return h('section', { className: 'dsh-memory-settings', 'aria-label': t('view.' + group) },
         stats?.settingsIssue ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.settingsIssue.message) : null,
@@ -409,11 +418,10 @@
         baseline !== null && stats?.maintenance?.backupError && group === 'capture'
           ? h('p', { className: 'dsh-memory-error', role: 'alert' }, stats.maintenance.backupError.message) : null,
         baseline === null ? null : content,
-        baseline === null || notice === '' ? null : h('p', { className: 'dsh-memory-settings-notice', role: 'status' }, notice),
         baseline === null || group === 'data' ? null : h('div', { className: 'dsh-memory-settings-foot' },
-          dirty ? h('span', { className: 'dsh-memory-settings-state' }, t('settings.state.dirty')) : null,
+          feedbackAt(group) ?? (dirty ? h('span', { className: 'dsh-memory-settings-state' }, t('settings.state.dirty')) : null),
           h('button', {
             type: 'button', className: 'dsh-memory-button dsh-memory-button-primary', onClick: save,
-            disabled: busy || !dirty || !canSave,
+            disabled: busy || actionBusy || !dirty || !canSave,
           }, busy ? t('settings.saving') : t('settings.save'))))
     }
