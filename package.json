@@ -1,6 +1,6 @@
 {
   "name": "@missher/dsh-memory",
-  "version": "1.7.5-native.20261119.0",
+  "version": "1.8.0-native.20261119.0",
   "private": true,
   "description": "Local-first long-term memory for DeepSeek Harness: automatic capture, context injection and a native management panel.",
   "type": "module",
@@ -24,10 +24,14 @@
     "index.js",
     "client.js",
     "host",
+    "local-server.js",
+    "web",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
     "README.md",
+    "LOCAL-SHARING.md",
+    "THIRD_PARTY_NOTICES.md",
     "vendor"
   ],
   "dsh": {

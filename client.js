@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const NAMESPACE = 'dshMemory'
     const SERVICE_KEY = 'remote.' + NAMESPACE
     const NS = 'dsh-memory'
-    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'semanticModel', 'projectBrief']
+    const METHODS = ['list', 'stats', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'semanticModel', 'projectBrief', 'localSharing']
     const RESULT_TYPES = {
       list: 'MemoryList',
       stats: 'MemoryStats',
@@ -58,6 +58,7 @@ window.__ModuleLoader__.load({
       captureRetry: 'MemoryCaptureRetry',
       semanticModel: 'MemorySemanticModel',
       projectBrief: 'MemoryProjectBrief',
+      localSharing: 'MemoryLocalSharingAction',
     }
     const KINDS = ['preference', 'fact', 'decision', 'episode']
     const STATUSES = ['active', 'candidate', 'archived', 'superseded', 'deleted']
@@ -212,6 +213,12 @@ window.__ModuleLoader__.load({
         'data.import': 'Import',
         'data.backup': 'Complete backup',
         'data.backupHint': 'Export saves current records. Full backups also retain sources, history, settings and receipts.',
+        'data.localSharing': 'Share this profile locally',
+        'data.openSharing': 'Open local sharing',
+        'data.stopSharing': 'Stop sharing',
+        'data.sharingLink': 'Open local memory',
+        'data.sharingReady': 'Local sharing is ready.',
+        'data.sharingStopped': 'Local sharing stopped.',
         'data.exported': 'Exported',
         'data.imported': 'Imported {imported}, skipped {skipped}',
         'data.protectedDeleted': 'Kept {count} locally forgotten records deleted.',
@@ -648,6 +655,12 @@ window.__ModuleLoader__.load({
         'health.capture-unknown': '待核实任务暂停重发，避免重复计费。',
         'data.backup': '完整备份',
         'data.backupHint': '导出保存当前记录，完整备份另含原文、历史、设置和调用记录。',
+        'data.localSharing': '\u672c\u673a\u5171\u4eab\u8bb0\u5fc6',
+        'data.openSharing': '\u6253\u5f00\u672c\u673a\u5171\u4eab',
+        'data.stopSharing': '\u505c\u6b62\u5171\u4eab',
+        'data.sharingLink': '\u6253\u5f00\u672c\u673a\u8bb0\u5fc6',
+        'data.sharingReady': '\u672c\u673a\u5171\u4eab\u5df2\u542f\u52a8\u3002',
+        'data.sharingStopped': '\u672c\u673a\u5171\u4eab\u5df2\u505c\u6b62\u3002',
         'data.exported': '\u5df2\u5bfc\u51fa',
         'data.imported': '\u5df2\u5bfc\u5165 {imported} \u6761\uff0c\u8df3\u8fc7 {skipped} \u6761',
         'data.protectedDeleted': '已保留 {count} 条本地记忆的遗忘状态。',
@@ -2058,6 +2071,7 @@ window.__ModuleLoader__.load({
       const [baseline, setBaseline] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const [notice, setNotice] = React.useState('')
+      const [sharingUrl, setSharingUrl] = React.useState('')
       const fileRef = React.useRef(null)
 
       React.useEffect(() => {
@@ -2173,6 +2187,35 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const openLocalSharing = async () => {
+        if (call === null || busy) return
+        let popup = null
+        try { popup = window.open('about:blank', '_blank'); if (popup) popup.opener = null } catch {}
+        setBusy(true)
+        setNotice('')
+        try {
+          const result = await call('localSharing', { action: 'start' })
+          setSharingUrl(result.url)
+          if (popup) popup.location.replace(result.url)
+          setNotice(t('data.sharingReady'))
+        } catch (failure) {
+          try { popup?.close() } catch {}
+          setNotice(t('data.failed', { reason: messageOf(failure) }))
+        } finally { setBusy(false) }
+      }
+
+      const stopLocalSharing = async () => {
+        if (call === null || busy) return
+        setBusy(true)
+        setNotice('')
+        try {
+          await call('localSharing', { action: 'stop' })
+          setSharingUrl('')
+          setNotice(t('data.sharingStopped'))
+        } catch (failure) { setNotice(t('data.failed', { reason: messageOf(failure) })) }
+        finally { setBusy(false) }
+      }
+
       const transfer = async (kind, direction) => {
         if (!call || busy || dirty) return
         setBusy(true)
@@ -2250,7 +2293,15 @@ window.__ModuleLoader__.load({
                       accept: 'application/json',
                       className: 'dsh-memory-file-input',
                       onChange: importAll,
-                    }))))
+                    }))),
+                h('div', { className: 'dsh-memory-settings-row' },
+                  h('span', { className: 'dsh-memory-settings-label' }, t('data.localSharing')),
+                  h('div', { className: 'dsh-memory-settings-buttons' },
+                    button(t('data.openSharing'), openLocalSharing),
+                    button(t('data.stopSharing'), stopLocalSharing))),
+                sharingUrl ? h('div', { className: 'dsh-memory-settings-row' },
+                  h('span', { className: 'dsh-memory-settings-label' }, ''),
+                  h('a', { href: sharingUrl, target: '_blank', rel: 'noopener noreferrer' }, t('data.sharingLink'))) : null)
               : h('div', { className: 'dsh-memory-settings-group' },
                 switchRow(t('obsidian.auto'), obsidianAuto, setObsidianAuto),
                 h('p', { className:'dsh-memory-muted' }, t('obsidian.autoHint')),

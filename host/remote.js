@@ -136,6 +136,7 @@ export function createPanelBackend(options) {
     getHealthChecks: typeof options.getHealthChecks === 'function' ? options.getHealthChecks : null,
     onPanelRequest: typeof options.onPanelRequest === 'function' ? options.onPanelRequest : null,
     retryCapture: typeof options.retryCapture === 'function' ? options.retryCapture : null,
+    runLocalSharing: typeof options.runLocalSharing === 'function' ? options.runLocalSharing : null,
     refreshKnowledge: typeof options.refreshKnowledge === 'function' ? options.refreshKnowledge : null,
     get config() {
       return typeof options.getConfig === 'function' ? options.getConfig() : (options.config ?? {})
@@ -203,6 +204,12 @@ export function createPanelBackend(options) {
   backend.captureStatus = () => captureStatus(backend)
   backend.captureRetry = (input) => captureRetry(backend, input)
   backend.semanticModel = (input) => semanticModel(backend, input)
+  backend.localSharing = (input = {}) => {
+    if (!backend.runLocalSharing) throw new PanelInputError('本机共享服务未配置')
+    const action = input?.action ?? 'start'
+    if (!['start', 'stop', 'status'].includes(action)) throw new PanelInputError('action must be start, stop, or status')
+    return backend.runLocalSharing(action)
+  }
   const logCall = makePanelCallLogger(backend.root)
   for (const method of PANEL_METHODS) {
     const operation = backend[method]
@@ -390,6 +397,10 @@ export async function bindTypertRemote(ctx, backend) {
 
     async semanticModel(input) {
       return this.delegate.semanticModel(input)
+    }
+
+    async localSharing(input) {
+      return this.delegate.localSharing(input)
     }
   }
 

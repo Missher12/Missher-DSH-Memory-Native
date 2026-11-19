@@ -37,7 +37,7 @@ test('per-session report writes are private, replace atomically, and reject pend
   store.write('private-session-a', PROJECT, first)
   const reportsDir = join(root, 'recall-reports')
   const files = fs.readdirSync(reportsDir)
-  assert.equal(files.length, 1)
+  assert.equal(files.filter(name => /^[a-f0-9]{64}\.json$/u.test(name)).length, 1)
   assert.equal(files.some(name => name.includes('private-session-a')), false)
   assert.equal(fs.statSync(reportsDir).mode & 0o777, 0o700)
   assert.equal(fs.statSync(join(reportsDir, files[0])).mode & 0o777, 0o600)
@@ -105,6 +105,57 @@ test('cached reports in another instance and leftover files obey the persisted f
     'a report left behind after a crash cannot override a persisted forget')
 })
 
+test('a session cache notices a report created or replaced by another process', t => {
+  const root = rootFor(t)
+  const writer = createRecallReportStore(root, PROFILE)
+  const reader = createRecallReportStore(root, PROFILE)
+  assert.equal(reader.get('shared-session', PROJECT), null)
+
+  const first = report('first report', 'mem_first', SOURCE_A)
+  writer.write('shared-session', PROJECT, first)
+  assert.deepEqual(reader.get('shared-session', PROJECT), first,
+    'a cached miss must be refreshed after another process writes this session')
+
+  const replacement = report('second report', 'mem_second', SOURCE_B)
+  writer.write('shared-session', PROJECT, replacement)
+  assert.deepEqual(reader.get('shared-session', PROJECT), replacement,
+    'the latest report for a session must replace the reader process cache')
+  const recent = reader.listRecent(PROJECT)
+  assert.equal(recent.length, 1)
+  assert.deepEqual(recent[0].report, replacement)
+  assert.equal(recent[0].sessionKey, createHash('sha256').update('shared-session').digest('hex'))
+})
+
+test('pending reports are visible but require the host stop event before an answer is marked observed', t => {
+  const root = rootFor(t)
+  const store = createRecallReportStore(root, PROFILE)
+  const pending = { ...report('question pending', 'mem_pending', SOURCE_A), outcome: 'pending',
+    questions: [{ ...report('question pending', 'mem_pending', SOURCE_A).questions[0],
+      answerCoverage: 'pending', answerExcerpt: null }] }
+  assert.equal(store.writePending('pending-session', PROJECT, pending), true)
+  assert.deepEqual(store.get('pending-session', PROJECT), pending)
+  assert.throws(() => store.write('pending-session', PROJECT, pending), /finalized/u)
+})
+
+test('legacy profiles build the recent-session index once and pages retain independent project history', t => {
+  const root = rootFor(t)
+  const directory = join(root, 'recall-reports')
+  fs.mkdirSync(directory, { recursive: true })
+  const sessionA1 = createHash('sha256').update('legacy-a1').digest('hex')
+  const sessionA2 = createHash('sha256').update('legacy-a2').digest('hex')
+  const sessionB = createHash('sha256').update('legacy-b').digest('hex')
+  for (const [sessionKey, projectKey, query] of [[sessionA1, PROJECT, 'old A one'], [sessionA2, PROJECT, 'old A two'],
+    [sessionB, 'c'.repeat(64), 'old B']]) {
+    const legacy = { version: 1, sessionKey, profileIdentity: PROFILE, projectKey,
+      report: { ...report(query, `mem_${query.replaceAll(' ', '_')}`, SOURCE_A), projectKey } }
+    fs.writeFileSync(join(directory, `${sessionKey}.json`), JSON.stringify(legacy), { mode: 0o600 })
+  }
+  const store = createRecallReportStore(root, PROFILE)
+  assert.equal(store.listRecent(PROJECT, 1, 0).length, 1)
+  assert.equal(store.listRecent(PROJECT, 1, 1).length, 1)
+  assert.equal(store.listRecent('c'.repeat(64), 5).length, 1)
+})
+
 test('missing and corrupt report reads are memoized, and uncertain files are removed on forget', t => {
   const root = rootFor(t)
   const store = createRecallReportStore(root, PROFILE)
@@ -122,7 +173,7 @@ test('missing and corrupt report reads are memoized, and uncertain files are rem
   }
 
   store.write('corrupt-session', PROJECT, report('corrupt', 'mem_corrupt', SOURCE_A))
-  const file = join(root, 'recall-reports', fs.readdirSync(join(root, 'recall-reports')).find(name => name.endsWith('.json')))
+  const file = join(root, 'recall-reports', fs.readdirSync(join(root, 'recall-reports')).find(name => /^[a-f0-9]{64}\.json$/u.test(name)))
   fs.writeFileSync(file, '{broken', { mode: 0o600 })
   const reader = createRecallReportStore(root, PROFILE)
   assert.equal(reader.get('corrupt-session', PROJECT), null)

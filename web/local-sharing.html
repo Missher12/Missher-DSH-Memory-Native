@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DSH Memory</title>
+    <link rel="stylesheet" href="/app.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>DSH Memory</h1>
+        </div>
+        <button id="refresh" type="button">刷新</button>
+      </header>
+
+      <div id="notice" role="status" aria-live="polite">正在连接本机记忆服务…</div>
+
+      <section class="settings-row">
+        <label for="project">项目</label>
+        <select id="project" disabled></select>
+      </section>
+
+      <section>
+        <h2>最近召回</h2>
+        <div id="reports" class="list muted">正在读取…</div>
+        <button id="more-reports" type="button" class="secondary" hidden>继续查看</button>
+      </section>
+
+      <section>
+        <h2>查找记忆与原文</h2>
+        <form id="search-form">
+          <label class="visually-hidden" for="query">查找内容</label>
+          <input id="query" type="search" placeholder="输入项目、时间、原因或原文关键词" maxlength="1000" required>
+          <button type="submit">查找</button>
+        </form>
+        <div id="results" class="list" aria-live="polite"></div>
+      </section>
+
+      <section>
+        <h2>明确记住</h2>
+        <form id="remember-form">
+          <label class="visually-hidden" for="original-user-message">完整原话</label>
+          <textarea id="original-user-message" rows="4" maxlength="20000" placeholder="记住：……" required></textarea>
+          <button type="submit">保存原话</button>
+        </form>
+      </section>
+
+      <section>
+        <details id="archive-details">
+          <summary>项目档案与场景</summary>
+          <button id="load-brief" type="button" class="secondary">查看当前项目</button>
+          <div id="brief" class="list"></div>
+          <div id="scenes" class="list"></div>
+        </details>
+      </section>
+
+      <section>
+        <details id="rules-details">
+          <summary>长期规则</summary>
+          <button id="load-rules" type="button" class="secondary">查看长期规则</button>
+          <div id="rules" class="list"></div>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>

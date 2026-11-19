@@ -46,7 +46,7 @@ export const PANEL_PACKAGE = '@missher/dsh-memory'
 export const PANEL_SERVICE = 'dshMemory'
 export const PANEL_NAMESPACE = 'dshMemory'
 /** Every endpoint the panel mounts, in declaration order. */
-export const PANEL_METHODS = Object.freeze(['list', 'stats', 'projectBrief', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'semanticModel'])
+export const PANEL_METHODS = Object.freeze(['list', 'stats', 'projectBrief', 'activity', 'profile', 'update', 'removeMemory', 'rebuildIndex', 'updateSettings', 'exportData', 'importData', 'backup', 'restoreMemory', 'purgeMemory', 'history', 'restoreRevision', 'bulkAction', 'topicSuggestions', 'mergeTopics', 'obsidianExport', 'obsidianImport', 'obsidianStatus', 'obsidianSync', 'obsidianResolve', 'knowledgeGraph', 'knowledgePromote', 'knowledgeList', 'knowledgeNote', 'knowledgeSave', 'knowledgeSync', 'captureStatus', 'captureRetry', 'semanticModel', 'localSharing'])
 /** The single JSON argument wire field of every endpoint. */
 export const PANEL_INPUT_WIRE = 'input'
 /** Maximum records returned by one `list` call. */

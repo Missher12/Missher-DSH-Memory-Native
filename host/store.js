@@ -28,7 +28,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { blockSourceRecall } from './capture-journal.js'
+import { blockSourceRecall, canReadSource } from './capture-journal.js'
 
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { buildRecord, nextRevision } from './records.js'
@@ -348,6 +348,16 @@ export class MemoryStore {
     return records
   }
 
+  /** Refresh one authority file after another process may have changed it. */
+  refreshScope(scope, projectKey = null) {
+    const key = scope === 'global' ? 'global' : `project:${projectKey}`
+    const wasLoaded = this.#scopes.has(key)
+    const state = this.#state(scope, projectKey)
+    if (wasLoaded) return this.#refreshState(state)
+    this.#notifyChange({ type: 'refresh', state, previousRecords: [], records: [...state.records.values()] })
+    return true
+  }
+
   /** Find one current revision across the given scopes (loaded on demand). */
   find(id, scopes = [{ scope: 'global', projectKey: null }]) {
     for (const { scope, projectKey } of scopes) {
@@ -428,6 +438,97 @@ export class MemoryStore {
     if (outcome.changed) this.#notifyChange({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
     if (outcome.compact) this.compact(record.scope, record.projectKey)
     return options.importOnly ? outcome : outcome.record
+  }
+
+  /** Append a same-scope record set as one rollback-safe JSONL write. */
+  appendBatch(records) {
+    if (!Array.isArray(records) || records.length === 0 || records.some(record => !isRecordRevision(record))) {
+      throw new Error('appendBatch requires one or more complete memory records')
+    }
+    const first = records[0]
+    if (records.some(record => record.scope !== first.scope || record.projectKey !== first.projectKey) ||
+        new Set(records.map(record => record.id)).size !== records.length) {
+      throw new Error('appendBatch records must have unique ids in one scope')
+    }
+    this.#beforeWrite?.()
+    const state = this.#state(first.scope, first.projectKey)
+    const outcome = this.#withLock(() => {
+      this.#refreshState(state)
+      for (const sourceId of new Set(records.flatMap(record => (record.sourceRefs ?? [])
+        .map(ref => ref?.sourceId).filter(value => typeof value === 'string' && value !== '')))) {
+        if (!canReadSource(this.#root, sourceId)) {
+          const error = new Error('memory source was revoked before the record batch could commit')
+          error.code = 'source-revoked'
+          throw error
+        }
+      }
+      const changes = []
+      const lines = []
+      for (const input of records) {
+        const current = state.records.get(input.id)
+        if (current && input.content === current.content && input.status === current.status) {
+          changes.push({ record: current, previous: current, changed: false })
+          continue
+        }
+        const next = current && input.revision <= current.revision
+          ? { ...input, revision: current.revision + 1 }
+          : input
+        const revokesCurrent = current && (current.content !== next.content ||
+          (current.status === 'active' && next.status !== 'active') || next.status === 'deleted')
+        const revokesNext = next.status === 'deleted'
+        if (revokesCurrent || revokesNext) {
+          const revoked = [revokesCurrent ? current : null, revokesNext ? next : null].filter(Boolean)
+          this.#onRecallRevoke?.({ recordRevisions: revokesCurrent ? [{ id: current.id, revision: current.revision }] : [],
+            sourceIds: [...new Set(revoked.flatMap(record => (record.sourceRefs ?? [])
+              .map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '')))],
+            ...(next.status === 'deleted' ? { reason: 'delete' } : {}) })
+        }
+        if (revokesCurrent) blockSourceRecall(this.#root, current)
+        if (revokesNext) blockSourceRecall(this.#root, next)
+        const line = `${JSON.stringify(next)}\n`
+        lines.push(line)
+        changes.push({ record: next, previous: current, changed: true })
+      }
+      if (lines.length === 0) return { changes, compact: false }
+      mkdirSync(state.dir, { recursive: true, mode: 0o700 })
+      const fd = openSync(state.file, 'a+', 0o600)
+      const originalSize = fstatSync(fd).size
+      let separatorBytes = 0
+      const text = lines.join('')
+      try {
+        if (originalSize > 0) {
+          const tail = Buffer.alloc(1)
+          if (readSync(fd, tail, 0, 1, originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
+          if (tail[0] !== 10) { writeAll(fd, '\n'); separatorBytes = 1 }
+        }
+        writeAll(fd, text)
+        fsyncSync(fd)
+      } catch (error) {
+        try { truncateFile(state.file, originalSize) }
+        catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
+        throw error
+      } finally { closeSync(fd) }
+      for (const change of changes) {
+        if (!change.changed) continue
+        const line = `${JSON.stringify(change.record)}\n`
+        state.records.set(change.record.id, change.record)
+        this.#adjustAggregate(state, change.previous, change.record)
+        rememberAuthority(change.record, line.slice(0, -1))
+        state.lines += 1
+      }
+      state.bytes += Buffer.byteLength(text) + separatorBytes
+      state.stamp = fileStamp(state.file)
+      this.#touch()
+      const redundant = state.lines - state.records.size
+      const compact = (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
+        redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+      return { changes, compact }
+    })
+    const changed = outcome.changes.filter(item => item.changed)
+    if (changed.length) this.#notifyChange({ type: 'upsert', records: changed.map(item => item.record),
+      previous: changed.map(item => item.previous), state })
+    if (outcome.compact) this.compact(first.scope, first.projectKey)
+    return outcome.changes.map(item => item.record)
   }
 
   /**
@@ -699,8 +800,9 @@ export class MemoryStore {
   /** Re-read one authority file when another process changed it. */
   #refreshState(state) {
     const stamp = fileStamp(state.file)
+    if (stamp === state.stamp) return false
+    const previousRecords = [...state.records.values()]
     const parsed = readJsonl(state.file)
-    if (stamp === state.stamp) return
     state.records = new Map(latestRevisions(parsed.records).map((record) => [record.id, record]))
     if (state.aggregate != null) state.aggregate = buildAggregate(state.records.values())
     state.lines = parsed.lines
@@ -708,7 +810,8 @@ export class MemoryStore {
     state.corrupt = parsed.corrupt
     state.stamp = stamp
     if (parsed.corrupt > 0) this.#quarantine(state.file, parsed.corruptLines)
-    this.#notifyChange({ type: 'refresh', state })
+    this.#notifyChange({ type: 'refresh', state, previousRecords, records: [...state.records.values()] })
+    return true
   }
 
   #adjustAggregate(state, previous, next) {

@@ -159,6 +159,33 @@ test('writes, replacement, deletion, import and purge refresh the cache automati
   assert.ok(reopened.store.history('a', scopeA).length >= 2)
 })
 
+test('refreshing one externally changed project updates its search index without scanning the whole store', t => {
+  const root = createFixture(t)
+  const runtime = openMemoryRuntime({ root, clock: () => fixedNow })
+  t.after(() => runtime.dispose())
+  const writer = new MemoryStore({ root, clock: () => fixedNow }).open()
+  assert.ok(writer.write({ id: 'external-a', scope: 'project', projectKey: 'project-a', kind: 'fact',
+    content: 'CROSS-PROCESS-SHARED-VALUE', confidence: .9 }, { id: 'external-a', now: fixedNow }).ok)
+
+  let listAllCalls = 0
+  const listAll = runtime.store.listAll.bind(runtime.store)
+  runtime.store.listAll = (...args) => { listAllCalls++; return listAll(...args) }
+  let listProjectsCalls = 0
+  const listProjects = runtime.store.listProjects.bind(runtime.store)
+  runtime.store.listProjects = (...args) => { listProjectsCalls++; return listProjects(...args) }
+  assert.equal(runtime.refreshScope('project', 'project-a'), true)
+  assert.equal(listAllCalls, 0, 'routine project refresh must not invoke the full-store rebuild path')
+  assert.equal(search(runtime, 'CROSS-PROCESS-SHARED-VALUE', 'project-a').hits[0].record.id, 'external-a')
+  assert.equal(runtime.synchronize('project-a'), true, 'the next native DSH sync must refresh only the active project and global scope')
+  assert.equal(listProjectsCalls, 0, 'active-project refresh must not enumerate every project')
+  assert.equal(listAllCalls, 0, 'the active-project sync must not rebuild the whole store')
+  assert.equal(search(runtime, 'CROSS-PROCESS-SHARED-VALUE', 'project-a').hits[0].record.id, 'external-a')
+  assert.equal(runtime.refreshScope('project', 'project-a'), false, 'unchanged file stamps are a cheap no-op')
+  runtime.store.listProjects = listProjects
+  assert.equal(runtime.synchronize('project-a'), false)
+  assert.equal(listAllCalls, 0)
+})
+
 test('corrupt or missing cache and same-size external rewrites recover from the authority', (t) => {
   const root = createFixture(t)
   const live = openMemoryRuntime({ root, clock: () => fixedNow })

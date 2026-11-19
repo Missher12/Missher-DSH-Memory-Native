@@ -2,8 +2,8 @@
 """Build a clean plugin tarball without macOS AppleDouble/xattr members.
 
 Usage: python3 scripts/pack-plugin.py [output.tgz]
-The package list is deliberately explicit: runtime files/README only. Locale
-files are whitelisted by language id so `._en.json` can never be published.
+The package list is deliberately explicit. Locale files are whitelisted by
+language id so `._en.json` can never be published.
 """
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = ["package.json", "index.js", "client.js", "cordis.patch.yml", "icon.svg", "README.md"]
+FILES = ["package.json", "index.js", "client.js", "local-server.js", "cordis.patch.yml", "icon.svg",
+         "README.md", "LOCAL-SHARING.md", "THIRD_PARTY_NOTICES.md"]
 HOST_SUFFIX = ".js"
 LOCALE = {"en.json", "zh.json"}
+WEB = {"local-sharing.html", "local-sharing.js", "local-sharing.css"}
 EMBEDDING = {"ort.wasm.min.mjs", "ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm",
              "transformers.min.mjs", "onnxruntime-LICENSE.txt", "transformers-LICENSE.txt", "README.md"}
 BAD_MAGIC = b"\x00\x05\x16\x07\x00\x02\x00\x00"
@@ -34,6 +36,8 @@ def collect() -> list[str]:
     for name in sorted(LOCALE):
         if (ROOT / "locale" / name).is_file():
             names.append(f"locale/{name}")
+    for name in sorted(WEB):
+        names.append(f"web/{name}")
     for name in sorted(EMBEDDING):
         names.append(f"vendor/embedding/{name}")
     return names
@@ -94,7 +98,10 @@ def main() -> int:
                 if data == BAD_MAGIC:
                     raise SystemExit(f"refusing AppleDouble member: {member.name}")
         names_in_archive = {m.name for m in members}
-        required = {"package/package.json", "package/index.js", "package/client.js", "package/locale/en.json", "package/locale/zh.json"}
+        required = {"package/package.json", "package/index.js", "package/client.js", "package/local-server.js",
+                    "package/LOCAL-SHARING.md", "package/THIRD_PARTY_NOTICES.md", "package/web/local-sharing.html",
+                    "package/web/local-sharing.js", "package/web/local-sharing.css",
+                    "package/locale/en.json", "package/locale/zh.json"}
         if not required.issubset(names_in_archive):
             raise SystemExit("package is missing required files")
     digest = hashlib.sha256(output.read_bytes()).hexdigest()

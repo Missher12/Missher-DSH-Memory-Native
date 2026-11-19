@@ -9,6 +9,7 @@ import { CACHE_FILE, hotRecord, packRecords, unpackRecords } from './cache-recor
 import { advanceProfileView, prepareProfileView, profileViewResult } from './profile.js'
 import { MemoryIndex } from './search.js'
 import { fileStamp, MemoryStore } from './store.js'
+import { isValidProjectKey } from './paths.js'
 
 const CACHE_VERSION = 2
 
@@ -16,6 +17,12 @@ function authorityStamp(store) {
   const root = store.root
   return [['global', fileStamp(join(root, 'global', 'memories.jsonl'))],
     ...store.listProjects().map((key) => [`project:${key}`, fileStamp(join(root, 'projects', key, 'memories.jsonl'))])]
+}
+
+function selectedAuthorityStamp(store, projectKey) {
+  const root = store.root
+  return [['global', fileStamp(join(root, 'global', 'memories.jsonl'))],
+    [`project:${projectKey}`, fileStamp(join(root, 'projects', projectKey, 'memories.jsonl'))]]
 }
 
 function same(left, right) { return JSON.stringify(left) === JSON.stringify(right) }
@@ -31,7 +38,7 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
   const index = new MemoryIndex()
   const cacheFile = join(root, CACHE_FILE)
   const metrics = { cacheHit: false, loadMs: 0, indexMs: 0, profileMs: 0, cacheWriteMs: 0 }
-  let stamp = authorityStamp(store), profile, graph, timer = null, profileTimer = null
+  let stamp = authorityStamp(store), profile, graph, profileDirty = false, graphDirty = false, timer = null, profileTimer = null
 
   const loadCache = () => {
     try {
@@ -50,6 +57,8 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
       index.restore(restored.index)
       profile = data.profile
       graph = restored.graph
+      profileDirty = false
+      graphDirty = false
       return true
     } catch {
       store.reset()
@@ -70,6 +79,8 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
       const startProfile = performance.now()
       profile = prepareProfileView(records, clock())
       graph = graphView(records)
+      profileDirty = false
+      graphDirty = false
       metrics.profileMs = performance.now() - startProfile
       const after = authorityStamp(store)
       if (same(before, after)) { stamp = after; return }
@@ -82,7 +93,7 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
     const start = performance.now()
     let temp
     try {
-      if (!same(stamp, authorityStamp(store))) return false
+      if (profileDirty || graphDirty || !same(stamp, authorityStamp(store))) return false
       const packed = packRecords(store.snapshot(), index.snapshot(), graph)
       const packedProfile = profile.bytes ? profile : { bytes: serialize(profile), nextFutureAt: profile.nextFutureAt }
       const body = packCache({ ...packed, profile: packedProfile })
@@ -121,6 +132,11 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
   }
 
   function currentProfile() {
+    if (profileDirty) {
+      profile = prepareProfileView(store.listAll(), clock())
+      profileDirty = false
+      armProfile()
+    }
     if (profile.bytes) {
       try {
         const view = deserialize(profile.bytes)
@@ -129,6 +145,8 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
         profile = view
       } catch {
         profile = prepareProfileView(store.listAll(), clock())
+        profileDirty = false
+        armProfile()
         scheduleCache()
       }
     }
@@ -147,13 +165,42 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
     profileTimer.unref?.()
   }
 
-  const synchronize = () => {
-    const current = authorityStamp(store)
-    if (same(stamp, current)) return false
-    rebuild()
-    armProfile()
-    scheduleCache()
-    return true
+  const synchronize = (projectKey = null) => {
+    if (projectKey !== null && projectKey !== undefined) {
+      if (!isValidProjectKey(projectKey)) throw new TypeError('project key is invalid')
+      const known = new Map(stamp)
+      const current = selectedAuthorityStamp(store, projectKey)
+      if (current.every(([key, value]) => known.get(key) === value)) return false
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const before = selectedAuthorityStamp(store, projectKey)
+        store.refreshScope('global', null)
+        store.refreshScope('project', projectKey)
+        const after = selectedAuthorityStamp(store, projectKey)
+        if (!same(before, after)) continue
+        for (const [key, value] of after) known.set(key, value)
+        stamp = [...known].sort(([left], [right]) => left.localeCompare(right))
+        profileDirty = true
+        graphDirty = true
+        return true
+      }
+      throw new Error('memory authority changed repeatedly during targeted refresh')
+    }
+    if (same(stamp, authorityStamp(store))) return false
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = authorityStamp(store)
+      const loadedProjects = [...store.snapshot().keys()].filter(key => key.startsWith('project:')).map(key => key.slice(8))
+      const projectKeys = new Set([...loadedProjects, ...store.listProjects()])
+      store.refreshScope('global', null)
+      for (const key of projectKeys) store.refreshScope('project', key)
+      const after = authorityStamp(store)
+      if (!same(before, after)) continue
+      stamp = after
+      profileDirty = true
+      graphDirty = true
+      armProfile()
+      return true
+    }
+    throw new Error('memory authority changed repeatedly during refresh')
   }
 
   const loadStarted = performance.now()
@@ -172,9 +219,17 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
     onRecallRevoke,
     onChange(event) {
       if (event.type === 'refresh') {
-        rebuild(event.state)
-        armProfile()
-        scheduleCache()
+        const previous = new Map((event.previousRecords ?? []).map(record => [record.id, record]))
+        const current = new Map((event.records ?? []).map(record => [record.id, record]))
+        for (const [id, record] of previous) {
+          const next = current.get(id)
+          if (!next) index.remove(id)
+          else if (next.revision !== record.revision || next.content !== record.content || next.contentHash !== record.contentHash ||
+            next.status !== record.status || next.topic !== record.topic || JSON.stringify(next.tags) !== JSON.stringify(record.tags)) index.upsert(next)
+        }
+        for (const [id, record] of current) if (!previous.has(id)) index.upsert(record)
+        profileDirty = true
+        graphDirty = true
         return
       }
       const current = authorityStamp(store)
@@ -190,11 +245,13 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
           if (record?.status === 'deleted') index.remove(record.id)
           else if (record) index.upsert(record)
         }
-        const records = store.listAll()
-        if (event.type === 'rewrite' && event.changed) index.rebuild(records)
-        graph = graphView(records)
+      const records = store.listAll()
+      if (event.type === 'rewrite' && event.changed) index.rebuild(records)
+      graph = graphView(records)
+      graphDirty = false
         if (event.type === 'rewrite' || [...(event.records ?? []), ...(event.previous ?? [])].some((record) => record?.kind === 'preference')) {
           profile = prepareProfileView(records, clock())
+        profileDirty = false
           armProfile()
         }
       }
@@ -204,12 +261,16 @@ export function openMemoryRuntime({ root, clock = () => Date.now(), onRecallRevo
 
   metrics.readyMs = performance.now() - started
   return { store, index, metrics, synchronize,
+    refreshScope(scope, projectKey = null) { return store.refreshScope(scope, projectKey) },
+    graph() {
+      if (graphDirty) { graph = graphView(store.listAll()); graphDirty = false }
+      return graph
+    },
     profile(limit, now = clock()) {
       const advanced = advanceProfileView(currentProfile(), now)
       if (advanced !== profile) { profile = advanced; armProfile(); scheduleCache() }
       return profileViewResult(profile, { limit, now })
     },
-    graph: () => graph,
     dispose() { if (timer !== null) clearTimeout(timer); if (profileTimer !== null) clearTimeout(profileTimer); store.setLifecycle() },
   }
 }

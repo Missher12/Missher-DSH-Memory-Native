@@ -8,6 +8,7 @@ import { isValidProjectKey } from './paths.js'
 const VERSION = 1
 const MAX_REPORT_BYTES = 8 * 1024 * 1024
 const INVALIDATED_FILE = 'invalidated-references.json'
+const SESSION_INDEX_FILE = 'sessions-index.json'
 const sessionKey = id => createHash('sha256').update(id).digest('hex')
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const uniqueStrings = values => [...new Set(values && typeof values[Symbol.iterator] === 'function' && typeof values !== 'string'
@@ -71,10 +72,18 @@ function finalizedReport(report) {
       Number.isFinite(report.localDeepRecall.tokens) && Number.isFinite(report.localDeepRecall.limit))
 }
 
+function pendingReport(report) {
+  return isObject(report) && report.outcome === 'pending' &&
+    report.questions?.every(question => question.answerCoverage === 'pending' && question.answerExcerpt === null) === true &&
+    finalizedReport({ ...report, outcome: 'completed' })
+}
+
+function validReport(report) { return finalizedReport(report) || pendingReport(report) }
+
 function validEnvelope(value, expectedKey, profileIdentity) {
   return isObject(value) && value.version === VERSION && value.sessionKey === expectedKey &&
     value.profileIdentity === profileIdentity && isValidProjectKey(value.projectKey) &&
-    finalizedReport(value.report) && value.report.projectKey === value.projectKey
+    validReport(value.report) && value.report.projectKey === value.projectKey
 }
 
 function readTombstones(file) {
@@ -102,11 +111,26 @@ function envelopeMatches(value, expectedKey, profileIdentity) {
   return validEnvelope(value, expectedKey, profileIdentity)
 }
 
+function readSessionIndex(file) {
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8'))
+    if (!isObject(value) || value.version !== VERSION || !Array.isArray(value.sessions) ||
+        !value.sessions.every(item => isObject(item) && /^[a-f0-9]{64}$/u.test(item.sessionKey) &&
+          isValidProjectKey(item.projectKey) && Number.isFinite(item.at))) throw new Error('recall report index is malformed')
+    return value.sessions
+  } catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
+}
+
 export function createRecallReportStore(root, profileIdentity) {
   const directory = join(root, 'recall-reports')
   const lockFile = join(directory, '.reports.lock')
   const tombstoneFile = join(directory, INVALIDATED_FILE)
+  const sessionIndexFile = join(directory, SESSION_INDEX_FILE)
   const cache = new Map()
+  const sessionStamps = new Map()
   let invalidated = { recordIds: new Set(), recordRevisions: new Map(), sourceIds: new Set() }
   let invalidationStamp = null
 
@@ -132,12 +156,56 @@ export function createRecallReportStore(root, profileIdentity) {
     }
   }
 
+  function ensureSessionIndex() {
+    ensureDirectory()
+    try {
+      const stat = lstatSync(sessionIndexFile)
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('recall report index is not a regular file')
+      return readSessionIndex(sessionIndexFile)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+    return withFileLock(lockFile, () => {
+      try {
+        const stat = lstatSync(sessionIndexFile)
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('recall report index is not a regular file')
+        return readSessionIndex(sessionIndexFile)
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      const sessions = []
+      for (const name of readdirSync(directory)) {
+        if (!/^[a-f0-9]{64}\.json$/u.test(name)) continue
+        const file = join(directory, name), key = name.slice(0, -5)
+        try {
+          const stat = lstatSync(file)
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REPORT_BYTES) continue
+          const value = JSON.parse(readFileSync(file, 'utf8'))
+          if (validEnvelope(value, key, profileIdentity)) sessions.push({ sessionKey: key,
+            projectKey: value.projectKey, at: Number.isFinite(value.report.at) ? value.report.at : stat.mtimeMs })
+        } catch { /* Only valid reports from this profile enter the one-time index. */ }
+      }
+      sessions.sort((left, right) => right.at - left.at)
+      atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
+      return sessions
+    })
+  }
+
   function readSession(key) {
     refreshInvalidations()
-    if (cache.has(key)) return cache.get(key)
+    const file = join(directory, `${key}.json`)
+    let stamp
+    try {
+      const stat = lstatSync(file, { bigint: true })
+      stamp = stat.isFile() && !stat.isSymbolicLink()
+        ? [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':') : 'unsupported'
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      stamp = 'absent'
+    }
+    if (cache.has(key) && sessionStamps.get(key) === stamp) return cache.get(key)
     let value = null
     try {
-      const file = join(directory, `${key}.json`)
       const stat = lstatSync(file)
       if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= MAX_REPORT_BYTES) {
         const parsed = JSON.parse(readFileSync(file, 'utf8'))
@@ -145,6 +213,7 @@ export function createRecallReportStore(root, profileIdentity) {
       }
     } catch { /* Missing and corrupt reports both memoize as absent. */ }
     cache.set(key, value)
+    sessionStamps.set(key, stamp)
     return value
   }
 
@@ -176,6 +245,31 @@ export function createRecallReportStore(root, profileIdentity) {
       try { return readSession(key) !== null } catch { return false }
     },
 
+    listRecent(projectKey, limit = 20, offset = 0) {
+      if (!isValidProjectKey(projectKey) || !Number.isInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) return []
+      let entries
+      try { refreshInvalidations(); entries = ensureSessionIndex() } catch { return [] }
+      return entries.filter(item => item.projectKey === projectKey).sort((a, b) => b.at - a.at).slice(offset, offset + limit)
+        .flatMap(item => {
+          try {
+            const file = join(directory, `${item.sessionKey}.json`)
+            const stat = lstatSync(file)
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REPORT_BYTES) return []
+            const value = JSON.parse(readFileSync(file, 'utf8'))
+            if (!validEnvelope(value, item.sessionKey, profileIdentity) || value.projectKey !== projectKey ||
+                recallReportReferences(value.report, invalidated)) return []
+            return [{ sessionKey: item.sessionKey, projectKey, at: item.at, report: value.report }]
+          } catch { return [] }
+        })
+    },
+
+    listProjects() {
+      let entries
+      try { refreshInvalidations(); entries = ensureSessionIndex() } catch { return [] }
+      return [...new Set(entries.map(item => item.projectKey))].filter(key => this.listRecent(key, 1).length > 0)
+    },
+
     write(sessionId, projectKey, report) {
       const key = recallReportSessionKey(sessionId)
       if (key === null || !isValidProjectKey(projectKey) || !finalizedReport(report) || report.projectKey !== projectKey) {
@@ -185,6 +279,7 @@ export function createRecallReportStore(root, profileIdentity) {
       const serialized = `${JSON.stringify(envelope)}\n`
       if (Buffer.byteLength(serialized) > MAX_REPORT_BYTES) throw new Error('recall report exceeds the storage limit')
       ensureDirectory()
+      ensureSessionIndex()
       return withFileLock(lockFile, () => {
         refreshInvalidations()
         if (recallReportReferences(report, invalidated)) {
@@ -192,7 +287,37 @@ export function createRecallReportStore(root, profileIdentity) {
           return false
         }
         atomicWritePrivate(join(directory, `${key}.json`), serialized)
+        const sessions = readSessionIndex(sessionIndexFile).filter(item => item.sessionKey !== key)
+        sessions.push({ sessionKey: key, projectKey, at: typeof report.at === 'number' ? report.at : Date.now() })
+        sessions.sort((left, right) => right.at - left.at)
+        atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
         cache.set(key, envelope)
+        sessionStamps.delete(key)
+        return true
+      })
+    },
+
+    writePending(sessionId, projectKey, report) {
+      const key = recallReportSessionKey(sessionId)
+      const pending = { ...report, outcome: 'pending' }
+      if (key === null || !isValidProjectKey(projectKey) || !pendingReport(pending) || pending.projectKey !== projectKey) {
+        throw new Error('pending report must be bound to its session project and contain no answer excerpt')
+      }
+      const envelope = { version: VERSION, sessionKey: key, profileIdentity, projectKey, report: pending }
+      const serialized = `${JSON.stringify(envelope)}\n`
+      if (Buffer.byteLength(serialized) > MAX_REPORT_BYTES) throw new Error('recall report exceeds the storage limit')
+      ensureDirectory()
+      ensureSessionIndex()
+      return withFileLock(lockFile, () => {
+        refreshInvalidations()
+        if (recallReportReferences(pending, invalidated)) { cache.set(key, null); return false }
+        atomicWritePrivate(join(directory, `${key}.json`), serialized)
+        const sessions = readSessionIndex(sessionIndexFile).filter(item => item.sessionKey !== key)
+        sessions.push({ sessionKey: key, projectKey, at: typeof pending.at === 'number' ? pending.at : Date.now() })
+        sessions.sort((left, right) => right.at - left.at)
+        atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
+        cache.set(key, envelope)
+        sessionStamps.delete(key)
         return true
       })
     },
@@ -201,6 +326,7 @@ export function createRecallReportStore(root, profileIdentity) {
       const targets = { recordIds: uniqueStrings(recordIds), recordRevisions: uniqueRecordRevisions(recordRevisions), sourceIds: uniqueStrings(sourceIds) }
       if (targets.recordIds.length === 0 && targets.recordRevisions.length === 0 && targets.sourceIds.length === 0) return new Set()
       ensureDirectory()
+      ensureSessionIndex()
       return withFileLock(lockFile, () => {
         refreshInvalidations()
         for (const id of targets.recordIds) invalidated.recordIds.add(id)
@@ -220,7 +346,7 @@ export function createRecallReportStore(root, profileIdentity) {
 
         const removed = new Set()
         for (const name of readdirSync(directory)) {
-          if (!name.endsWith('.json') || name === INVALIDATED_FILE) continue
+          if (!name.endsWith('.json') || name === INVALIDATED_FILE || name === SESSION_INDEX_FILE) continue
           const key = name.slice(0, -5)
           const file = join(directory, name)
           const stat = lstatSync(file)
@@ -234,7 +360,12 @@ export function createRecallReportStore(root, profileIdentity) {
             unlinkSync(file)
             removed.add(key)
             cache.set(key, null)
+            sessionStamps.delete(key)
           }
+        }
+        if (removed.size > 0) {
+          const sessions = readSessionIndex(sessionIndexFile).filter(item => !removed.has(item.sessionKey))
+          atomicWritePrivate(sessionIndexFile, `${JSON.stringify({ version: VERSION, sessions })}\n`)
         }
         if (removed.size > 0) syncDirectory(directory)
         return removed

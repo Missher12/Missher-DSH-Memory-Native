@@ -1,9 +1,9 @@
 /** Project-private original passages. Grants are authority; the index is disposable. */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { canReadSource, readSource, blockSourceRecall, readCaptureTasks, updateCaptureTask } from './capture-journal.js'
-import { atomicWritePrivate } from './persistence.js'
+import { atomicWritePrivate, withFileLock } from './persistence.js'
 import { isValidProjectKey } from './paths.js'
 import { looksSensitive } from './records.js'
 import { estimateTokens } from './recall.js'
@@ -14,6 +14,14 @@ const sourcePattern = /^src_[a-f0-9]{24}$/u
 export const DEEP_RECALL_TOKEN_LIMIT = 50000
 const hash = text => createHash('sha256').update(text).digest('hex')
 const directory = (root, projectKey) => join(root, 'capture', 'recall-grants', projectKey)
+const sourceLock = (root, sourceId) => join(root, 'capture', 'source-locks', `${sourceId}.lock`)
+
+export function withSourceRecallLock(root, sourceId, callback) {
+  if (!sourcePattern.test(sourceId ?? '')) throw new TypeError('source id is invalid')
+  const lockDir = join(root, 'capture', 'source-locks')
+  mkdirSync(lockDir, { recursive: true, mode: 0o700 })
+  return withFileLock(sourceLock(root, sourceId), callback)
+}
 export function isRecallSourceStatement(text) {
   const value = (explicitRememberText(text) ?? text).trim()
   return value.length > 3 && !/[？?]/u.test(value) &&
@@ -29,7 +37,9 @@ const permitted = source => source?.role === 'user' && source.sourceKind === 'us
   !/^\s*(?:>|```|引用(?:示例|内容)?[:：]|虚构(?:测试|验收)?(?:材料|资料))/u.test(source.text)
 
 /** Called only after turn-level opt-out checks, never merely because a file exists. */
-export function grantSourceRecall(root, source, projectKey, { remembered = false } = {}) {
+export function grantSourceRecall(root, source, projectKey, { remembered = false, locked = false } = {}) {
+  if (source?.id && !locked) return withSourceRecallLock(root, source.id,
+    () => grantSourceRecall(root, source, projectKey, { remembered, locked: true }))
   if (!isValidProjectKey(projectKey) || source?.projectKey !== projectKey ||
       !sourcePattern.test(source?.id ?? '') || !permitted(source) || !canReadSource(root, source.id)) return false
   const dir = directory(root, projectKey)
@@ -46,6 +56,19 @@ export function grantSourceRecall(root, source, projectKey, { remembered = false
     ...(remembered ? { remembered: true } : {}),
   }) + '\n')
   return true
+}
+
+export function hasSourceRecallGrant(root, sourceId, projectKey) {
+  return sourcePattern.test(sourceId ?? '') && authorized(root, sourceId, projectKey) !== null
+}
+
+/** Revoke a not-yet-committed grant so a failed multi-record save stays invisible. */
+export function revokeSourceRecallGrant(root, sourceId, projectKey, { locked = false } = {}) {
+  if (!locked && sourcePattern.test(sourceId ?? '')) return withSourceRecallLock(root, sourceId,
+    () => revokeSourceRecallGrant(root, sourceId, projectKey, { locked: true }))
+  if (!isValidProjectKey(projectKey) || !sourcePattern.test(sourceId ?? '')) return false
+  try { unlinkSync(join(directory(root, projectKey), `${sourceId}.json`)); return true }
+  catch (error) { if (error?.code === 'ENOENT') return false; throw error }
 }
 
 function authorized(root, sourceId, projectKey, allowBlocked = false) {
@@ -193,18 +216,23 @@ export class SourcePassageIndex {
 /** Forgetting an original passage blocks its entire source, including extracted facts. */
 export function forgetSourcePassage(root, id, projectKey, store, index, invalidateRecallReferences) {
   const match = /^source:(src_[a-f0-9]{24}):\d+:\d+$/u.exec(id)
-  if (!match || !authorized(root, match[1], projectKey, true)) return null
-  const derived = [...store.list('project', projectKey), ...store.list('global', null)]
-    .filter(record => record.sourceRefs?.some(ref => ref.sourceId === match[1]))
-  invalidateRecallReferences?.({ sourceIds: [match[1]] })
-  blockSourceRecall(root, { sourceRefs: [{ sourceId: match[1] }] })
-  for (const record of derived) {
-    store.remove(record.id, [{ scope: record.scope, projectKey: record.projectKey ?? null }]); index.remove(record.id)
-  }
-  for (const task of readCaptureTasks(root)) {
-    if (task.projectKey !== projectKey || !task.sourceIds?.includes(match[1]) ||
-        task.status !== 'pending' || task.callState !== 'not-sent') continue
-    updateCaptureTask(root, task.id, { status: 'skipped', reason: '用户已遗忘该原始消息，未发送的提炼任务已撤销' })
-  }
-  return { id, status: 'deleted', revision: 1 }
+  if (!match) return null
+  return withSourceRecallLock(root, match[1], () => {
+    if (!authorized(root, match[1], projectKey, true)) return null
+    store.refreshScope?.('project', projectKey)
+    store.refreshScope?.('global', null)
+    const derived = [...store.list('project', projectKey), ...store.list('global', null)]
+      .filter(record => record.sourceRefs?.some(ref => ref.sourceId === match[1]))
+    invalidateRecallReferences?.({ sourceIds: [match[1]] })
+    blockSourceRecall(root, { sourceRefs: [{ sourceId: match[1] }] })
+    for (const record of derived) {
+      store.remove(record.id, [{ scope: record.scope, projectKey: record.projectKey ?? null }]); index.remove(record.id)
+    }
+    for (const task of readCaptureTasks(root)) {
+      if (task.projectKey !== projectKey || !task.sourceIds?.includes(match[1]) ||
+          task.status !== 'pending' || task.callState !== 'not-sent') continue
+      updateCaptureTask(root, task.id, { status: 'skipped', reason: '用户已遗忘该原始消息，未发送的提炼任务已撤销' })
+    }
+    return { id, status: 'deleted', revision: 1 }
+  })
 }
