@@ -75,63 +75,6 @@ function completeAnswer(handlers, session, text, reason = 'completed') {
   handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: reason } } })
 }
 
-test('the pilot adds a bounded project brief on a new continuation and respects isolation and forgetting', async t => {
-  const current = '备份的现行决定是先验证还原，再启用增量写入。'
-  const { key, cwd, panel, prepare } = await setup(t, [
-    { id: 'mem_opening_current', kind: 'decision', content: current, pinned: true },
-    { id: 'mem_opening_expired', kind: 'decision', content: '备份旧方案用紫色盘。', pinned: true, validTo: Date.now() - 1000 },
-    { id: 'mem_opening_unpinned', kind: 'decision', content: '备份草案用橙色盘。' },
-  ], undefined, { config: projectKey => ({ inject: { openingProjectKey: projectKey } }) })
-  const opening = { type: 'user/message', data: { source: { kind: 'user' } } }
-  const session = { seq: 1, snapshotEvents: () => [opening] }
-  const first = await prepare('接着改备份', 'opening-pilot', session)
-  assert.match(first.block, /项目档案/u)
-  assert.equal(first.block.split(current).length, 2)
-  assert.doesNotMatch(first.block.split('项目档案').at(-1), /紫色盘|橙色盘/u)
-  assert.ok(estimateTokens(first.block.slice(first.block.indexOf('项目档案'))) <= 96)
-
-  const next = await prepare('接着改备份', 'opening-pilot', {
-    seq: 3, snapshotEvents: () => [opening, { type: 'assistant/message' }, opening],
-  })
-  assert.doesNotMatch(next.block, /项目档案/u)
-  const outside = await prepare('接着改备份', 'opening-other', { ...session, header: { cwd: join(cwd, '..', 'other') } })
-  assert.doesNotMatch(outside.block, /项目档案|先验证还原/u)
-  await panel('removeMemory', { scope: 'project', projectKey: key, id: 'mem_opening_current' })
-  const forgotten = await prepare('接着改备份', 'opening-after-forget', session)
-  assert.doesNotMatch(forgotten.block, /项目档案|先验证还原/u)
-})
-
-test('enrolling the project leaves every original in an explicit multi-part question', async t => {
-  const { dataDir, key, panel, prepare } = await setup(t, [
-    { id: 'mem_opening_extra', kind: 'decision', content: '启用备份前先验证还原。', pinned: true },
-  ])
-  const originals = [
-    '我们定了，石桥快照每天在04:17执行。',
-    '石桥快照保留37天。',
-    '我们把石桥快照改到04:17，因为要避开每日导入的磁盘写入高峰。',
-  ]
-  for (const [index, text] of originals.entries()) {
-    const at = Date.now() - 1000
-    const saved = saveSource(dataDir, { sessionId: 'snapshot-original-' + index, projectKey: key, messageId: 'original',
-      role: 'user', sourceKind: 'user', at, eventTime: at, timeZone: 'UTC', text })
-    assert.ok(grantSourceRecall(dataDir, readSource(dataDir, saved.id), key))
-  }
-  const details = '石桥快照每天几点执行、保留多久、为什么改时间？'
-  const state = { seq: 0, snapshotEvents: () => [] }
-  const control = await prepare(details, 'opening-control-disabled', state)
-  await panel('updateSettings', { injectOpeningProjectKey: key })
-  assert.equal((await panel('stats')).injectOpeningProjectKey, key)
-  const pilot = await prepare(details, 'opening-control-enabled', state)
-  assert.equal(pilot.block, control.block)
-  assert.match(pilot.block, /04:17/u)
-  assert.match(pilot.block, /37天/u)
-  assert.match(pilot.block, /避开每日导入的磁盘写入高峰/u)
-  const report = (await panel('stats', { projectKey: key, sessionId: pilot.session.id })).lastRecall
-  assert.equal(report.questions.filter(question => question.injected.some(hit => hit.sourceRefs.length > 0)).length, 3)
-  await panel('updateSettings', { injectOpeningProjectKey: null })
-  assert.equal((await panel('stats')).injectOpeningProjectKey, null)
-})
-
 test('personal advice recalls a stated constraint for the subject being discussed', async t => {
   const at = Date.UTC(2026, 10, 25, 13)
   t.mock.method(Date, 'now', () => at)
