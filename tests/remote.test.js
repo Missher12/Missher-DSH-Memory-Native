@@ -120,6 +120,29 @@ test('stats counts statuses, kinds, projects and capture flag', (t) => {
   assert.equal(typeof stats.lastCapturedAt, 'number')
 })
 
+test('session-only stats avoid the library scan and enforce the host project binding', async () => {
+  const usage = { at: NOW, tokens: 35, items: 1, budget: 360 }
+  const report = { projectKey: KEY }
+  const backend = createPanelBackend({
+    store: { aggregateStats: () => assert.fail('The chat meter must not read library totals') },
+    config: { inject: { enabled: true } },
+    synchronize: () => assert.fail('The chat meter must not synchronize the library'),
+    getCaptureStatus: () => assert.fail('The chat meter must not read capture history'),
+    getSessionProjectKey: async id => id === 'chat-a' ? KEY : null,
+    getContextUsage: id => { assert.equal(id, 'chat-a'); return usage },
+    getLastRecallAsync: (input, project) => input.sessionId === 'chat-a' &&
+      project === KEY && (!input.projectKey || input.projectKey === KEY) ? report : null,
+  })
+  assert.deepEqual(await backend.stats({ sessionId: 'chat-a', sessionOnly: true }), {
+    injectEnabled: true, contextUsage: usage, lastRecall: report,
+  })
+  for (const input of [{ sessionId: 'chat-b' }, { sessionId: 'chat-a', scope: 'project', projectKey: OTHER_KEY }, {}]) {
+    assert.deepEqual(await backend.stats({ ...input, sessionOnly: true }), {
+      injectEnabled: true, contextUsage: null, lastRecall: null,
+    })
+  }
+})
+
 test('list paginates and reports per-kind counts', (t) => {
   const { store, index, backend } = setup(t)
   for (let index2 = 0; index2 < 5; index2 += 1) seed(store, index, { kind: 'fact', content: `事实记录内容第 ${index2} 条，用于分页测试` })

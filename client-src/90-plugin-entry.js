@@ -49,6 +49,7 @@
           store: transport,
           locale: ctx.locale.snapshot?.active,
           sessionSource: ctx.get('uiSession')?.adapter?.current ?? EMPTY_SESSION_SOURCE,
+          sessionStatusSource: ctx.get('uiSession')?.sessionStatus ?? EMPTY_SESSION_SOURCE,
         }),
       }, MemoryPanel))
       return () => {

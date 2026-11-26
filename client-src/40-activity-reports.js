@@ -289,7 +289,7 @@
               labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text)))))
     }
 
-    function ContextUsage({ sessionId, sample, enabled, t, locale }) {
+    function ContextUsage({ sessionId, sample, enabled, preparing, t, locale }) {
       const title = t('contextUsage.title')
       const usage = sample?.sessionId === sessionId ? sample?.usage : null
       const hasUsage = enabled && Number.isInteger(usage?.tokens) && Number.isInteger(usage?.budget) && usage.budget >= 0
@@ -300,7 +300,8 @@
       const value = hasUsage ? Math.min(usage.tokens, usage.budget) : 0
       const detail = hasUsage
         ? t(usage.budget === 0 ? 'contextUsage.noRoom' : usage.tokens === 0 ? 'contextUsage.detailZero' : 'contextUsage.detail', { items: String(usage.items) })
-        : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' : 'contextUsage.empty')
+        : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' :
+          preparing ? 'contextUsage.preparing' : 'contextUsage.empty')
       return h('section', { className: 'dsh-memory-context-usage' },
         h('div', { className: 'dsh-memory-context-usage-head' },
           h('h3', { className: 'dsh-memory-section-title' }, title),

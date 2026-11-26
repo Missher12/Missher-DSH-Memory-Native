@@ -9,6 +9,8 @@
  * @module dsh-memory/host/config
  */
 
+import { isValidProjectKey } from './paths.js'
+
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   dataDir: null,
@@ -32,6 +34,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxTokens: 360,
     maxItems: 12,
     minScore: 0.2,
+    openingProjectKey: null,
   }),
   retention: Object.freeze({
     episodeDays: 90,
@@ -105,6 +108,7 @@ export function resolveConfig(raw) {
       maxTokens: integerIn(inject.maxTokens, DEFAULT_CONFIG.inject.maxTokens, 100, 8000),
       maxItems: integerIn(inject.maxItems, DEFAULT_CONFIG.inject.maxItems, 1, 100),
       minScore: numberIn(inject.minScore, DEFAULT_CONFIG.inject.minScore, 0, 1),
+      openingProjectKey: isValidProjectKey(inject.openingProjectKey) ? inject.openingProjectKey : null,
     }),
     retention: Object.freeze({
       episodeDays: integerIn(retention.episodeDays, DEFAULT_CONFIG.retention.episodeDays, 0, 36500),

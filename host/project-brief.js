@@ -1,5 +1,6 @@
 import { hotRecord } from './cache-records.js'
 import { isValidProjectKey } from './paths.js'
+import { estimateTokens, formatMemoryLine, hasMeaningfulMatch } from './recall.js'
 
 const SECTIONS = [
   ['current', '当前事实与约束'],
@@ -61,4 +62,28 @@ export function deriveProjectBrief(store, input) {
     })) })
   }
   return { projectKey, sections, total, limit, offset, nextOffset: offset + limit < total ? offset + limit : null }
+}
+
+/** Read only the shortlisted current decisions from the warm project index. */
+export function selectOpeningBrief(store, index, {
+  projectKey, subject, now, maxTokens, maxItems, existing, eligible,
+}) {
+  if (maxItems <= 0 || maxTokens <= 0) return null
+  const scopes = [{ scope: 'project', projectKey }]
+  const seen = new Set([...(existing?.ids ?? []), ...(existing?.profileIds ?? [])])
+  const candidates = index.search(subject, { scopes: ['project'], projectKey, statuses: ['active'],
+    kinds: ['decision'], now, limit: 12 })
+  const hits = [], lines = ['[项目档案] 以下是已置顶的项目背景。']
+  for (const hit of candidates) {
+    if (seen.has(hit.record.id) || !hasMeaningfulMatch(hit.matched)) continue
+    const record = store.find(hit.record.id, scopes)
+    if (!record?.pinned || record.revision !== hit.record.revision || !eligible(record)) continue
+    const line = formatMemoryLine(record)
+    if (!line || lines.includes(line) || existing?.text.includes(line)) continue
+    if (estimateTokens([...lines, line].join('\n')) > maxTokens) continue
+    lines.push(line)
+    hits.push({ ...hit, record })
+    if (hits.length === maxItems) break
+  }
+  return hits.length === 0 ? null : { text: lines.join('\n'), hits }
 }

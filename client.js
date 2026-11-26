@@ -258,7 +258,8 @@ window.__ModuleLoader__.load({
         'contextUsage.detailZero': 'No memory added last step',
         'contextUsage.noRoom': 'No room in the last step',
         'contextUsage.noSession': 'No chat selected',
-        'contextUsage.empty': 'Waiting for a model step',
+        'contextUsage.empty': 'No usage yet',
+        'contextUsage.preparing': 'Preparing memory',
         'contextUsage.disabled': 'Memory injection off',
         'usage.title': 'Token usage · last 7 days',
         'usage.total': '{tokens} tokens',
@@ -729,7 +730,8 @@ window.__ModuleLoader__.load({
         'contextUsage.detailZero': '上一轮未注入',
         'contextUsage.noRoom': '上一轮无剩余空间',
         'contextUsage.noSession': '未打开会话',
-        'contextUsage.empty': '等待模型回复',
+        'contextUsage.empty': '暂无用量',
+        'contextUsage.preparing': '正在准备记忆',
         'contextUsage.disabled': '记忆注入已关闭',
         'usage.title': 'Token 用量 · 近 7 天',
         'usage.total': '共 {tokens} token',
@@ -2050,7 +2052,7 @@ window.__ModuleLoader__.load({
               labels.map((label) => h('span', { key: label.week, style: { gridColumn: String(label.week + 1) } }, label.text)))))
     }
 
-    function ContextUsage({ sessionId, sample, enabled, t, locale }) {
+    function ContextUsage({ sessionId, sample, enabled, preparing, t, locale }) {
       const title = t('contextUsage.title')
       const usage = sample?.sessionId === sessionId ? sample?.usage : null
       const hasUsage = enabled && Number.isInteger(usage?.tokens) && Number.isInteger(usage?.budget) && usage.budget >= 0
@@ -2061,7 +2063,8 @@ window.__ModuleLoader__.load({
       const value = hasUsage ? Math.min(usage.tokens, usage.budget) : 0
       const detail = hasUsage
         ? t(usage.budget === 0 ? 'contextUsage.noRoom' : usage.tokens === 0 ? 'contextUsage.detailZero' : 'contextUsage.detail', { items: String(usage.items) })
-        : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' : 'contextUsage.empty')
+        : t(!enabled ? 'contextUsage.disabled' : !sessionId ? 'contextUsage.noSession' :
+          preparing ? 'contextUsage.preparing' : 'contextUsage.empty')
       return h('section', { className: 'dsh-memory-context-usage' },
         h('div', { className: 'dsh-memory-context-usage-head' },
           h('h3', { className: 'dsh-memory-section-title' }, title),
@@ -3136,12 +3139,17 @@ window.__ModuleLoader__.load({
 
     const EMPTY_SESSION_SOURCE = { subscribe: () => () => {}, getSnapshot: () => null }
     function MemoryPanel(props) {
-      const { t, store, sessionSource } = props
+      const { t, store, sessionSource, sessionStatusSource } = props
       const locale = props.locale
       const transport = React.useSyncExternalStore(store.subscribe, store.getState, store.getState)
       const call = transport.status === 'ready' ? transport.call : null
       const session = React.useSyncExternalStore(sessionSource.subscribe, sessionSource.getSnapshot, sessionSource.getSnapshot)
       const sessionId = typeof session?.key === 'string' ? session.key : undefined
+      const readRunning = React.useCallback(
+        () => sessionStatusSource.getSnapshot()?.get(sessionId)?.running,
+        [sessionStatusSource, sessionId],
+      )
+      const sessionRunning = React.useSyncExternalStore(sessionStatusSource.subscribe, readRunning, readRunning)
 
       const [scope, setScope] = React.useState('project')
       const [projectSelection, setProjectSelection] = React.useState({ sessionId: null, key: null })
@@ -3252,29 +3260,51 @@ window.__ModuleLoader__.load({
       }, [load])
 
       const refreshSessionPanel = React.useCallback(async () => {
-        if (!call) return
+        if (!call || !sessionId) return
         const request = ++sessionRequestGeneration.current
         const requestedSessionId = sessionId
         try {
-          const stats = await call('stats', { scope, sessionId: requestedSessionId })
+          const stats = await call('stats', { sessionId: requestedSessionId, sessionOnly: true })
           if (request !== sessionRequestGeneration.current) return
           setSessionPanel({ sessionId: requestedSessionId, usage: stats?.contextUsage,
             report: stats?.lastRecall ?? null, injectEnabled: stats?.injectEnabled })
-          setData(current => current?.stats && current.scope === scope && current.sessionId === requestedSessionId
-            ? { ...current, stats: { ...current.stats,
-              captureStorage: stats?.captureStorage, captureStorageState: stats?.captureStorageState } }
-            : current)
-        } catch (failure) {
-          if (request === sessionRequestGeneration.current) setError(messageOf(failure))
+        } catch {
+          // The next sample retries. Keep the last valid reading visible.
         }
-      }, [call, scope, sessionId])
+      }, [call, sessionId])
+
+      React.useEffect(() => {
+        if (view !== 'activity' || !call || !sessionId) return undefined
+        let disposed = false
+        let timer
+        const interval = sessionRunning === true ? 400 : sessionRunning === false ? 5000 : 1000
+        const poll = async () => {
+          await refreshSessionPanel()
+          if (!disposed) timer = setTimeout(poll, interval)
+        }
+        void poll()
+        return () => { disposed = true; sessionRequestGeneration.current++; clearTimeout(timer) }
+      }, [view, call, refreshSessionPanel, sessionId, sessionRunning])
 
       React.useEffect(() => {
         if (view !== 'activity' || !call) return undefined
-        void refreshSessionPanel()
-        const timer = setInterval(() => { void refreshSessionPanel() }, 5000)
-        return () => { sessionRequestGeneration.current++; clearInterval(timer) }
-      }, [view, call, refreshSessionPanel])
+        let disposed = false
+        let refreshing = false
+        const timer = setInterval(async () => {
+          if (refreshing) return
+          refreshing = true
+          try {
+            const stats = await call('stats', { scope })
+            if (!disposed) setData(current => current?.stats && current.scope === scope
+              ? { ...current, stats: { ...current.stats,
+                captureStorage: stats?.captureStorage, captureStorageState: stats?.captureStorageState } }
+              : current)
+          } catch {
+            // A periodic storage read must not clear the existing activity view.
+          } finally { refreshing = false }
+        }, 5000)
+        return () => { disposed = true; clearInterval(timer) }
+      }, [view, call, scope])
 
       const reloadAfterRecallChange = React.useCallback(async () => {
         await Promise.all([load(), refreshSessionPanel()])
@@ -3593,7 +3623,7 @@ window.__ModuleLoader__.load({
               h(MemoryTotals, { stats, t, locale }),
               h(ContextUsage, { sessionId,
                 sample: activeSessionPanel === null ? null : { sessionId: activeSessionPanel.sessionId, usage: activeSessionPanel.usage },
-                enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, t, locale })),
+                enabled: activeSessionPanel?.injectEnabled ?? stats.injectEnabled, preparing: sessionRunning === true, t, locale })),
             h(ActivityTrends, { stats, activity: data?.activity, t, locale }),
             h('section', { className: 'dsh-memory-activity-operations' },
               h('h3', { className: 'dsh-memory-section-title' }, t('activity.operations')),
@@ -4048,6 +4078,7 @@ window.__ModuleLoader__.load({
           store: transport,
           locale: ctx.locale.snapshot?.active,
           sessionSource: ctx.get('uiSession')?.adapter?.current ?? EMPTY_SESSION_SOURCE,
+          sessionStatusSource: ctx.get('uiSession')?.sessionStatus ?? EMPTY_SESSION_SOURCE,
         }),
       }, MemoryPanel))
       return () => {

@@ -222,6 +222,7 @@ export function createPanelBackend(options) {
     backend[method] = (input) => {
       const at = Date.now()
       backend.onPanelRequest?.(method)
+      const sessionPoll = method === 'stats' && input?.sessionOnly === true
       const refreshKnowledge = (resolved) => {
         const shouldRefresh = method === 'knowledgePromote' || method === 'knowledgeSave' && resolved?.saved !== false ||
           method === 'knowledgeSync' && backend.config?.obsidian?.autoSync !== true
@@ -231,13 +232,13 @@ export function createPanelBackend(options) {
         return resolved
       }
       try {
-        backend.synchronize?.()
+        if (!sessionPoll) backend.synchronize?.()
         const value = operation(input)
         if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
           return value.then(
             (resolved) => {
               refreshKnowledge(resolved)
-              logCall({ at, method, ok: true, size: sizeOf(resolved) })
+              if (!sessionPoll) logCall({ at, method, ok: true, size: sizeOf(resolved) })
               return resolved
             },
             (error) => {
@@ -247,7 +248,7 @@ export function createPanelBackend(options) {
           )
         }
         refreshKnowledge(value)
-        logCall({ at, method, ok: true, size: sizeOf(value) })
+        if (!sessionPoll) logCall({ at, method, ok: true, size: sizeOf(value) })
         return value
       } catch (error) {
         logCall({ at, method, ok: false, error: messageOf(error) })

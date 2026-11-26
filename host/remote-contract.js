@@ -309,6 +309,15 @@ export function computeStats(backend, raw, trustedSessionProjectKey = null) {
   const input = asObject(raw)
   const { scope, projectKey } = normalizeScope(input)
   const sessionId = optionalText(input.sessionId, 'sessionId', 180)
+  if (input.sessionOnly === true) {
+    const matches = sessionId !== undefined && isValidProjectKey(trustedSessionProjectKey) &&
+      (projectKey === null || projectKey === trustedSessionProjectKey)
+    return {
+      injectEnabled: backend.config?.inject?.enabled === true,
+      contextUsage: matches ? (backend.getContextUsage?.(sessionId) ?? null) : null,
+      lastRecall: matches ? (backend.getLastRecall?.(sessionId, projectKey) ?? null) : null,
+    }
+  }
   const aggregate = typeof backend.store.aggregateStats === 'function' ? backend.store.aggregateStats() : null
   let total = aggregate?.total ?? 0
   let deleted = aggregate?.deleted ?? 0
@@ -384,6 +393,7 @@ export function computeStats(backend, raw, trustedSessionProjectKey = null) {
     captureEnabled: backend.config?.capture?.enabled === true,
     injectEnabled: backend.config?.inject?.enabled === true,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
+    injectOpeningProjectKey: backend.config?.inject?.openingProjectKey ?? null,
     retentionEpisodeDays: backend.config?.retention?.episodeDays ?? null,
     maintenanceEnabled: backend.config?.maintenance?.enabled === true,
     obsidianAutoSync: backend.config?.obsidian?.autoSync === true,
@@ -469,6 +479,7 @@ const PANEL_SETTINGS_FIELDS = Object.freeze([
   'captureEnabled',
   'injectEnabled',
   'injectMaxTokens',
+  'injectOpeningProjectKey',
   'retentionEpisodeDays',
   'maintenanceEnabled',
   'obsidianAutoSync',
@@ -504,6 +515,8 @@ export function updateSettings(backend, raw) {
       if (!Number.isInteger(value) || value < (field === 'injectMaxTokens' ? 100 : 0) || value > (field === 'injectMaxTokens' ? 8000 : 36_500)) {
         throw new PanelInputError(`${field} must be a whole number in range`)
       }
+    } else if (field === 'injectOpeningProjectKey') {
+      if (value !== null && !isValidProjectKey(value)) throw new PanelInputError('injectOpeningProjectKey must identify one project or be null')
     } else if (field === 'obsidianVaultPath' || field === 'obsidianFolder') {
       if (typeof value !== 'string') throw new PanelInputError(`${field} must be a string`)
       if (field === 'obsidianVaultPath' && value.length > 1024) throw new PanelInputError('obsidianVaultPath is too long')
@@ -537,6 +550,7 @@ export function updateSettings(backend, raw) {
       captureEnabled: config.capture?.enabled,
       injectEnabled: config.inject?.enabled,
       injectMaxTokens: config.inject?.maxTokens,
+      injectOpeningProjectKey: config.inject?.openingProjectKey ?? null,
       retentionEpisodeDays: config.retention?.episodeDays,
       maintenanceEnabled: config.maintenance?.enabled,
       obsidianAutoSync: config.obsidian?.autoSync,

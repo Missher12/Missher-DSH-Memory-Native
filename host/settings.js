@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { isValidProjectKey } from './paths.js'
 import { atomicWritePrivate, withFileLock } from './persistence.js'
 
 export const SETTINGS_FILE = 'settings.json'
@@ -32,6 +33,9 @@ export function sanitizeSettings(raw) {
   if (typeof input.captureEnabled === 'boolean') out.captureEnabled = input.captureEnabled
   if (typeof input.injectEnabled === 'boolean') out.injectEnabled = input.injectEnabled
   if (typeof input.injectMaxTokens === 'number') out.injectMaxTokens = clampInteger(input.injectMaxTokens, 600, LIMITS.injectMaxTokens)
+  if (input.injectOpeningProjectKey === null || isValidProjectKey(input.injectOpeningProjectKey)) {
+    out.injectOpeningProjectKey = input.injectOpeningProjectKey
+  }
   if (typeof input.retentionEpisodeDays === 'number') out.retentionEpisodeDays = clampInteger(input.retentionEpisodeDays, 90, LIMITS.retentionEpisodeDays)
   if (typeof input.maintenanceEnabled === 'boolean') out.maintenanceEnabled = input.maintenanceEnabled
   if (typeof input.obsidianAutoSync === 'boolean') out.obsidianAutoSync = input.obsidianAutoSync
@@ -53,7 +57,7 @@ export function readSettings(root) {
     const parsed = JSON.parse(text)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('settings must be an object')
     const sanitized = sanitizeSettings(parsed)
-    const known = ['captureEnabled', 'injectEnabled', 'injectMaxTokens', 'retentionEpisodeDays', 'maintenanceEnabled', 'obsidianAutoSync', 'obsidianVaultPath', 'obsidianFolder']
+    const known = ['captureEnabled', 'injectEnabled', 'injectMaxTokens', 'injectOpeningProjectKey', 'retentionEpisodeDays', 'maintenanceEnabled', 'obsidianAutoSync', 'obsidianVaultPath', 'obsidianFolder']
     for (const key of known) {
       if (Object.hasOwn(parsed, key) && !Object.hasOwn(sanitized, key)) throw new Error('invalid setting type')
     }
@@ -112,10 +116,12 @@ export function settingsToConfig(settings) {
   const value = settings !== null && typeof settings === 'object' ? settings : {}
   const out = {}
   if (typeof value.captureEnabled === 'boolean') out.capture = { enabled: value.captureEnabled }
-  if (typeof value.injectEnabled === 'boolean' || typeof value.injectMaxTokens === 'number') {
+  if (typeof value.injectEnabled === 'boolean' || typeof value.injectMaxTokens === 'number' ||
+      Object.hasOwn(value, 'injectOpeningProjectKey')) {
     out.inject = {
       ...(typeof value.injectEnabled === 'boolean' ? { enabled: value.injectEnabled } : {}),
       ...(typeof value.injectMaxTokens === 'number' ? { maxTokens: value.injectMaxTokens } : {}),
+      ...(Object.hasOwn(value, 'injectOpeningProjectKey') ? { openingProjectKey: value.injectOpeningProjectKey } : {}),
     }
   }
   if (typeof value.retentionEpisodeDays === 'number') out.retention = { episodeDays: value.retentionEpisodeDays }

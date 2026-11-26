@@ -2,15 +2,12 @@
 
 ![Memory Native · 长期记忆（品牌插画）](docs/images/cover-v2.png)
 
-当前原生预发行 **1.10.5-native.20261126-local.304** · [Release 和安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.10.5-native.20261126-local.304)
+当前正式版 **1.10.5** · [Release 和安装包](https://github.com/Missher12/Missher-DSH-Memory-Native/releases/tag/v1.10.5)
 本地优先的 DeepSeek Harness 长期记忆插件。自动捕获、按需注入、可视化管理——不依赖外部数据库或云服务。
 
 [仓库](https://github.com/Missher12/Missher-DSH-Memory-Native) · [Releases 下载](https://github.com/Missher12/Missher-DSH-Memory-Native/releases) · [设计文档](docs/design.md) · [验证记录](docs/verification.md)
 
 本机网页与 Codex、Claude Code 配置见 [LOCAL-SHARING.md](LOCAL-SHARING.md)。
-
-
-此预发行已在 DSH 0.2.2-rc.5 的 Intel macOS 验证。
 
 ## 能做什么
 

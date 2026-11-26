@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { memoryBudgetFor } from './context-budget.js'
 import { projectIdentity } from './paths.js'
+import { selectOpeningBrief } from './project-brief.js'
 import { describeQuantities, quantityEvidence, quantityProofKey, quantityResultCovered, unsupportedQuantityResult } from './quantity-recall.js'
 import { deliveredDiscountFact, describeDiscount, discountEvidenceRows, findDiscountEvidence } from './purchase-recall.js'
 import { recallReportReferences, recallReportSessionKey } from './recall-reports.js'
@@ -283,6 +284,20 @@ function completeRecallTurn(reports, turns, generations, session, event, persist
 
 function isRecallQuestion(query) {
   return RECALL_QUESTION_PATTERN.test(String(query ?? ''))
+}
+
+function openingContinuationSubject(query, session, step) {
+  if (isRecallQuestion(query) || (step !== undefined && step !== 1)) return null
+  const subject = /^(?:(?:继续|接着)(?:改(?:一下)?|做|处理|调整|优化|完善)?\s*|(?:continue|resume|get back to)\s+(?:(?:working on|with|the)\s+)*)([\p{L}\p{N}][\p{L}\p{N} ._/-]{1,47})[。.!！]?$/iu.exec(query)?.[1]?.trim()
+  if (!subject || typeof session?.snapshotEvents !== 'function' ||
+      session.inheritedEventCount > 0 || !Number.isInteger(session.seq) || session.seq > 64) return null
+  // The native log survives reopening and compaction. The incoming user message
+  // may still be in the claimed batch when the first pre-step runs.
+  const events = session.snapshotEvents(0, session.seq)
+  if (events.some(event => ['step/start', 'assistant/message', 'turn/end'].includes(event.type))) return null
+  return events.filter(event => event.type === 'user/message' && isUserQuestionMessage({
+    role: 'user', source: event.data?.source ?? event.data?.message?.source,
+  })).length <= 1 ? subject : null
 }
 
 export function isSafeRecallRecord(record, projectKey, timeIntent, now) {
@@ -999,6 +1014,8 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
     activeRecallGeneration = turnGeneration
     const controls = analyzeUserMessageControls(query)
     const followUp = previousQuery !== undefined && isFollowUpQuery(controls.retrievalQuery)
+    const openingSubject = config.inject.openingProjectKey === identity.key && userTexts.length === 1
+      ? openingContinuationSubject(controls.retrievalQuery, session, payload.step) : null
     let originalsPrepared = false
     const prepareOriginals = async ({ requireReady = false } = {}) => {
       if (!originalsPrepared) {
@@ -2058,6 +2075,45 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
         setRecallReport(lastRecallBySession, sessionId, report)
       }
     }
+    const appendOpening = (block, itemLimit) => {
+      if (!openingSubject || hasSubquestions || payload.signal?.aborted || activeTurn?.invalidated ||
+          !config.inject.enabled || config.inject.openingProjectKey !== identity.key) return block
+      const remainingItems = itemLimit - (block?.itemCount ?? 0) - (block?.profileIds.length ?? 0)
+      const remainingTokens = contextBudget - (block?.estimatedTokens ?? 0) - 4
+      if (remainingItems <= 0 || remainingTokens <= 0) return block
+      const ending = '\n</memory-context>'
+      if (block && !block.text.endsWith(ending)) return block
+      const base = block === null ? '<memory-context source="dsh-memory" note="历史资料，仅供项目接续参考。">' :
+        block.text.slice(0, -ending.length)
+      const wrapperTokens = block === null ? estimateTokens(base + ending) : 0
+      runtime.synchronize(identity.key)
+      const opening = selectOpeningBrief(store, index, {
+        projectKey: identity.key, subject: openingSubject, now, maxTokens: Math.min(92, remainingTokens) - wrapperTokens,
+        maxItems: Math.min(3, remainingItems), existing: block,
+        eligible: record => isSafeRecallRecord(record, identity.key, { kind: 'current', at: now }, Date.now()) &&
+          (!record.sourceRefs?.length || recallReportStore.filterSourceRefs(record.sourceRefs).length === record.sourceRefs.length),
+      })
+      if (opening === null) return block
+      const text = base + '\n' + opening.text + ending
+      const estimatedTokens = estimateTokens(text)
+      if (estimatedTokens + 4 > contextBudget || estimatedTokens - (block?.estimatedTokens ?? 0) + 4 > 96) return block
+      for (const hit of opening.hits) {
+        if (!hitsById.has(hit.record.id)) hitsById.set(hit.record.id, { ...hit, candidateSlots: [slotPlans[0].query] })
+      }
+      noteInFlightEvidence()
+      return {
+        ...block, text, estimatedTokens,
+        ids: [...(block?.ids ?? []), ...opening.hits.map(hit => hit.record.id)],
+        profileIds: block?.profileIds ?? [],
+        itemCount: (block?.itemCount ?? 0) + opening.hits.length,
+      }
+    }
+    const deliverOpeningOnly = () => {
+      const block = appendOpening(null, config.inject.maxItems)
+      if (block === null) return withoutPrevious
+      updateLastRecall(block.ids)
+      return deliver(block, { beforeQuestion: false, gate: { auto: 0, gray: 0 } })
+    }
     if (relatedQuantities.size) {
       const authorized = new Set(passageIndex.validateMany([...relatedQuantities.values()], identity.key, { now }))
       for (const [query, hit] of relatedQuantities) if (!authorized.has(hit)) relatedQuantities.delete(query)
@@ -2085,8 +2141,11 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
       if (grayById.size > 0) {
         writeGateLog(root, { at: now, query: attempts.join(' | '), ids: [...grayById.keys()], thresholds: gateThresholds })
       }
-      if (recallObserver !== null) traceRecall(recallObserver, { phase: 'inject', status: 'no-accepted-evidence', ids: [], text: null })
-      return withoutPrevious
+      const result = deliverOpeningOnly()
+      if (result === withoutPrevious && recallObserver !== null) {
+        traceRecall(recallObserver, { phase: 'inject', status: 'no-accepted-evidence', ids: [], text: null })
+      }
+      return result
     }
     const validSourceHits = new Set(passageIndex.validateMany(
       [...hitsById.values()].filter(hit => hit.record.kind === 'source'), identity.key, { now },
@@ -2214,7 +2273,7 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
     }
     valueConflicts = verifiedKnowledgeConflicts(knownValueConflicts, hitsById)
     updateLastRecall()
-    if (hitsById.size === 0 && relatedQuantities.size === 0) return withoutPrevious
+    if (hitsById.size === 0 && relatedQuantities.size === 0) return deliverOpeningOnly()
     const hits = [...hitsById.values()]
     const budget = hasSubquestions ? availableMemoryTokens : adaptiveInjectionBudget(availableMemoryTokens, hits.length, followUp)
     contextBudget = budget
@@ -2265,7 +2324,7 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
       const quote = hit.record.recallQuote
       return typeof quote === 'string' && supportsAdjacentProperty(reasonPlan, { record: { ...hit.record, content: quote } }, reasonAnchors)
     })
-    const block = compileMemoryContext(ranked, {
+    let block = compileMemoryContext(ranked, {
       maxTokens: budget,
       maxItems,
       evidenceSlots,
@@ -2289,6 +2348,7 @@ export function createRecallFlow({ ctx, getConfig, root, store, index, runtime, 
       profileLines,
       skipCapture: analyzeUserMessageControls(query).noSaveDirective,
     })
+    block = appendOpening(block, maxItems)
     updateLastRecall([...(block?.ids ?? []), ...(block?.profileIds ?? [])], block?.quantityCheck, block?.calendarCheck,
       block?.calendarEvidence, block?.renderedWindowLines)
     if (block === null) {
