@@ -4,12 +4,15 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, u
 import { join } from 'node:path'
 import { atomicWritePrivate, syncDirectory, withFileLock } from './persistence.js'
 import { isValidProjectKey } from './paths.js'
+import { readAuthorityIntent } from './authority-intent.js'
+import { isKnowledgeFile, readKnowledgeSnapshot } from './knowledge.js'
 
 const VERSION = 1
 const MAX_REPORT_BYTES = 8 * 1024 * 1024
 const INVALIDATED_FILE = 'invalidated-references.json'
 const SESSION_INDEX_FILE = 'sessions-index.json'
 const SESSION_INDEX_DIRTY_FILE = '.sessions-index-dirty'
+const ANY_PROFILE = Symbol('authority revocation recovery')
 const sessionKey = id => createHash('sha256').update(id).digest('hex')
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const uniqueStrings = values => [...new Set(values && typeof values[Symbol.iterator] === 'function' && typeof values !== 'string'
@@ -27,23 +30,54 @@ function uniqueRecordRevisions(values) {
   return [...revisions].flatMap(([id, versions]) => [...versions].map(revision => ({ id, revision })))
 }
 
+const scopeLimitKey = (id, projectKey) => JSON.stringify([projectKey === undefined ? '*' : projectKey, id])
+const validRevision = item => isObject(item) && typeof item.id === 'string' && Number.isSafeInteger(item.revision) && item.revision > 0
+const validRevisionScope = item => item.projectKey == null || isValidProjectKey(item.projectKey)
+
+function revisionLimits(values) {
+  if (values instanceof Map) return values
+  const limits = new Map()
+  for (const item of values ?? []) {
+    if (!validRevision(item) || !validRevisionScope(item)) continue
+    const key = scopeLimitKey(item.id, item.projectKey)
+    limits.set(key, Math.max(limits.get(key) ?? 0, item.revision))
+  }
+  return limits
+}
+
 export function recallReportSessionKey(sessionId) {
   return typeof sessionId === 'string' && sessionId !== '' ? sessionKey(sessionId) : null
 }
 
-export function recallReportReferences(report, { recordIds = [], recordRevisions = [], sourceIds = [] } = {}) {
-  const records = new Set(uniqueStrings(recordIds))
-  const sources = new Set(uniqueStrings(sourceIds))
-  const revisions = new Map()
-  for (const value of uniqueRecordRevisions(recordRevisions)) {
-    if (!revisions.has(value.id)) revisions.set(value.id, new Set())
-    revisions.get(value.id).add(value.revision)
+export function recallReportReferences(report, { recordIds = [], recordRevisions = [], recordThrough = [], sourceIds = [] } = {},
+  legacyNoteReferences) {
+  const records = recordIds instanceof Set ? recordIds : new Set(uniqueStrings(recordIds))
+  const sources = sourceIds instanceof Set ? sourceIds : new Set(uniqueStrings(sourceIds))
+  const revisions = recordRevisions instanceof Map ? recordRevisions : new Map()
+  if (!(recordRevisions instanceof Map)) {
+    for (const { id, revision } of uniqueRecordRevisions(recordRevisions)) {
+      if (!revisions.has(id)) revisions.set(id, new Set())
+      revisions.get(id).add(revision)
+    }
   }
-  if (records.size === 0 && revisions.size === 0 && sources.size === 0) return false
+  const through = revisionLimits(recordThrough)
+  if (records.size === 0 && revisions.size === 0 && sources.size === 0 && through.size === 0) return false
   const visit = value => {
     if (Array.isArray(value)) return value.some(visit)
     if (!isObject(value)) return false
-    if (typeof value.id === 'string' && (records.has(value.id) || revisions.get(value.id)?.has(value.revision))) return true
+    if (typeof value.id === 'string') {
+      if (records.has(value.id) || revisions.get(value.id)?.has(value.revision)) return true
+      if (through.size) {
+        const projectKey = value.scope === 'global' ? null : value.projectKey ?? report?.projectKey
+        const legacyGlobal = value.scope === undefined && value.projectKey === undefined
+          ? through.get(scopeLimitKey(value.id, null)) ?? 0 : 0
+        const limit = Math.max(through.get(scopeLimitKey(value.id, projectKey)) ?? 0,
+          through.get(scopeLimitKey(value.id)) ?? 0, legacyGlobal)
+        if (limit && (!Number.isSafeInteger(value.revision) || value.revision <= limit)) return true
+      }
+    }
+    if (value.kind === 'knowledge' && value.noteAuthority === undefined && legacyNoteReferences &&
+        (records.size || revisions.size || through.size) && legacyNoteReferences(value.noteFile).some(visit)) return true
     for (const [key, nested] of Object.entries(value)) {
       if (key === 'id' && typeof nested === 'string' && records.has(nested)) return true
       if (key === 'sourceId' && typeof nested === 'string' && sources.has(nested)) return true
@@ -52,6 +86,27 @@ export function recallReportReferences(report, { recordIds = [], recordRevisions
     return false
   }
   return visit(report)
+}
+
+function legacyNoteReader(root) {
+  const resolved = new Map()
+  return file => {
+    if (!isKnowledgeFile(file)) return []
+    if (!resolved.has(file)) {
+      const refs = []
+      try {
+        const note = readKnowledgeSnapshot(root, file, { headerOnly: true })
+        if (note.memoryId && (note.scope === 'global' || note.scope === 'project')) {
+          // Legacy reports recorded the file only. A project note could be
+          // attached to that project or to a shared memory.
+          refs.push({ id: note.memoryId, scope: 'global', projectKey: null })
+          if (note.scope === 'project') refs.push({ id: note.memoryId, scope: 'project', projectKey: note.projectKey })
+        }
+      } catch { /* Older reports may refer to files no longer present. */ }
+      resolved.set(file, refs)
+    }
+    return resolved.get(file)
+  }
 }
 
 function finalizedReport(report) {
@@ -83,17 +138,21 @@ function validReport(report) { return finalizedReport(report) || pendingReport(r
 
 function validEnvelope(value, expectedKey, profileIdentity) {
   return isObject(value) && value.version === VERSION && value.sessionKey === expectedKey &&
-    value.profileIdentity === profileIdentity && isValidProjectKey(value.projectKey) &&
+    (value.profileIdentity === profileIdentity || profileIdentity === ANY_PROFILE && typeof value.profileIdentity === 'string') &&
+    isValidProjectKey(value.projectKey) &&
     validReport(value.report) && value.report.projectKey === value.projectKey
 }
+
+const validRevisionList = values => values === undefined || Array.isArray(values) && values.every(validRevision)
+const emptyInvalidations = () => ({ recordIds: new Set(), recordRevisions: new Map(), recordThrough: new Map(), sourceIds: new Set() })
 
 function readTombstones(file) {
   try {
     const value = JSON.parse(readFileSync(file, 'utf8'))
     if (!isObject(value) || value.version !== VERSION || !Array.isArray(value.recordIds) || !Array.isArray(value.sourceIds) ||
         !value.recordIds.every(id => typeof id === 'string') || !value.sourceIds.every(id => typeof id === 'string') ||
-        value.recordRevisions !== undefined && (!Array.isArray(value.recordRevisions) ||
-          !value.recordRevisions.every(item => isObject(item) && typeof item.id === 'string' && Number.isSafeInteger(item.revision) && item.revision > 0))) {
+        !validRevisionList(value.recordRevisions) || !validRevisionList(value.recordThrough) ||
+        !(value.recordThrough ?? []).every(validRevisionScope)) {
       throw new Error('recall report invalidation data is malformed')
     }
     const recordRevisions = new Map()
@@ -101,9 +160,10 @@ function readTombstones(file) {
       if (!recordRevisions.has(id)) recordRevisions.set(id, new Set())
       recordRevisions.get(id).add(revision)
     }
-    return { recordIds: new Set(value.recordIds), recordRevisions, sourceIds: new Set(value.sourceIds) }
+    return { recordIds: new Set(value.recordIds), recordRevisions, recordThrough: revisionLimits(value.recordThrough),
+      sourceIds: new Set(value.sourceIds) }
   } catch (error) {
-    if (error?.code === 'ENOENT') return { recordIds: new Set(), recordRevisions: new Map(), sourceIds: new Set() }
+    if (error?.code === 'ENOENT') return emptyInvalidations()
     throw error
   }
 }
@@ -133,8 +193,16 @@ export function createRecallReportStore(root, profileIdentity) {
   const sessionIndexDirtyFile = join(directory, SESSION_INDEX_DIRTY_FILE)
   const cache = new Map()
   const sessionStamps = new Map()
-  let invalidated = { recordIds: new Set(), recordRevisions: new Map(), sourceIds: new Set() }
+  let invalidated = emptyInvalidations()
   let invalidationStamp = null
+
+  const references = (report, targets, legacy = legacyNoteReader(root)) => recallReportReferences(report, targets, legacy)
+  // An interrupted write can still roll back. Mask its reports without caching their absence.
+  const pendingTargets = () => readAuthorityIntent(root)?.targets
+  const isPending = report => {
+    const targets = pendingTargets()
+    return targets !== undefined && references(report, targets)
+  }
 
   function ensureDirectory() {
     mkdirSync(directory, { recursive: true, mode: 0o700 })
@@ -153,8 +221,9 @@ export function createRecallReportStore(root, profileIdentity) {
     if (stamp === invalidationStamp) return
     invalidated = readTombstones(tombstoneFile)
     invalidationStamp = stamp
+    const legacy = legacyNoteReader(root)
     for (const [key, value] of cache) {
-      if (value && recallReportReferences(value.report, invalidated)) cache.set(key, null)
+      if (value && references(value.report, invalidated, legacy)) cache.set(key, null)
     }
   }
 
@@ -178,6 +247,7 @@ export function createRecallReportStore(root, profileIdentity) {
   function rebuildSessionIndexLocked() {
     refreshInvalidations()
     const sessions = []
+    const legacy = legacyNoteReader(root)
     for (const name of readdirSync(directory)) {
       if (!/^[a-f0-9]{64}\.json$/u.test(name)) continue
       const file = join(directory, name), key = name.slice(0, -5)
@@ -191,7 +261,7 @@ export function createRecallReportStore(root, profileIdentity) {
       let value
       try { value = JSON.parse(serialized) }
       catch { continue }
-      if (validEnvelope(value, key, profileIdentity) && !recallReportReferences(value.report, invalidated)) {
+      if (validEnvelope(value, key, profileIdentity) && !references(value.report, invalidated, legacy)) {
         sessions.push({ sessionKey: key, projectKey: value.projectKey,
           at: Number.isFinite(value.report.at) ? value.report.at : stat.mtimeMs })
       }
@@ -241,18 +311,21 @@ export function createRecallReportStore(root, profileIdentity) {
       if (error?.code !== 'ENOENT') throw error
       stamp = 'absent'
     }
-    if (cache.has(key) && sessionStamps.get(key) === stamp) return cache.get(key)
+    if (cache.has(key) && sessionStamps.get(key) === stamp) {
+      const value = cache.get(key)
+      return value && !isPending(value.report) ? value : null
+    }
     let value = null
     try {
       const stat = lstatSync(file)
       if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= MAX_REPORT_BYTES) {
         const parsed = JSON.parse(readFileSync(file, 'utf8'))
-        if (validEnvelope(parsed, key, profileIdentity) && !recallReportReferences(parsed.report, invalidated)) value = parsed
+        if (validEnvelope(parsed, key, profileIdentity) && !references(parsed.report, invalidated)) value = parsed
       }
     } catch { /* Missing and corrupt reports both memoize as absent. */ }
     cache.set(key, value)
     sessionStamps.set(key, stamp)
-    return value
+    return value && !isPending(value.report) ? value : null
   }
 
   function persistReport(sessionId, projectKey, report, pending = false) {
@@ -270,8 +343,9 @@ export function createRecallReportStore(root, profileIdentity) {
     ensureDirectory()
     return withFileLock(lockFile, () => {
       refreshInvalidations()
+      if (isPending(value)) return false
       if (sessionIndexDirty() || readSessionIndexIfPresent() === null) rebuildSessionIndexLocked()
-      if (recallReportReferences(value, invalidated)) {
+      if (references(value, invalidated)) {
         cache.set(key, null)
         return false
       }
@@ -296,14 +370,17 @@ export function createRecallReportStore(root, profileIdentity) {
     isInvalidated(report) {
       try {
         refreshInvalidations()
-        return recallReportReferences(report, invalidated)
+        return references(report, invalidated) || isPending(report)
       } catch { return true }
     },
 
     filterSourceRefs(sourceRefs) {
-      try { refreshInvalidations() } catch { return [] }
-      if (!Array.isArray(sourceRefs)) return []
-      return sourceRefs.filter(ref => !isObject(ref) || typeof ref.sourceId !== 'string' || !invalidated.sourceIds.has(ref.sourceId))
+      try {
+        refreshInvalidations()
+        const sources = pendingTargets()?.sourceIds ?? []
+        return Array.isArray(sourceRefs) ? sourceRefs.filter(ref => !isObject(ref) || typeof ref.sourceId !== 'string' ||
+          !invalidated.sourceIds.has(ref.sourceId) && !sources.includes(ref.sourceId)) : []
+      } catch { return [] }
     },
 
     get(sessionId, projectKey) {
@@ -325,6 +402,7 @@ export function createRecallReportStore(root, profileIdentity) {
           !Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) return []
       let entries
       try { refreshInvalidations(); entries = ensureSessionIndex() } catch { return [] }
+      const legacy = legacyNoteReader(root)
       return entries.filter(item => item.projectKey === projectKey).sort((a, b) => b.at - a.at).slice(offset, offset + limit)
         .flatMap(item => {
           try {
@@ -333,7 +411,7 @@ export function createRecallReportStore(root, profileIdentity) {
             if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REPORT_BYTES) return []
             const value = JSON.parse(readFileSync(file, 'utf8'))
             if (!validEnvelope(value, item.sessionKey, profileIdentity) || value.projectKey !== projectKey ||
-                recallReportReferences(value.report, invalidated)) return []
+                references(value.report, invalidated, legacy) || isPending(value.report)) return []
             return [{ sessionKey: item.sessionKey, projectKey, at: item.at, report: value.report }]
           } catch { return [] }
         })
@@ -353,9 +431,10 @@ export function createRecallReportStore(root, profileIdentity) {
       return persistReport(sessionId, projectKey, report, true)
     },
 
-    invalidateReferences({ recordIds = [], recordRevisions = [], sourceIds = [] } = {}) {
-      const targets = { recordIds: uniqueStrings(recordIds), recordRevisions: uniqueRecordRevisions(recordRevisions), sourceIds: uniqueStrings(sourceIds) }
-      if (targets.recordIds.length === 0 && targets.recordRevisions.length === 0 && targets.sourceIds.length === 0) return new Set()
+    invalidateReferences({ recordIds = [], recordRevisions = [], recordThrough = [], sourceIds = [] } = {}) {
+      const targets = { recordIds: uniqueStrings(recordIds), recordRevisions: uniqueRecordRevisions(recordRevisions),
+        recordThrough: revisionLimits(recordThrough), sourceIds: uniqueStrings(sourceIds) }
+      if (!targets.recordIds.length && !targets.recordRevisions.length && !targets.recordThrough.size && !targets.sourceIds.length) return new Set()
       ensureDirectory()
       ensureSessionIndex()
       return withFileLock(lockFile, () => {
@@ -365,17 +444,25 @@ export function createRecallReportStore(root, profileIdentity) {
           if (!invalidated.recordRevisions.has(id)) invalidated.recordRevisions.set(id, new Set())
           invalidated.recordRevisions.get(id).add(revision)
         }
+        for (const [key, revision] of targets.recordThrough) {
+          invalidated.recordThrough.set(key, Math.max(invalidated.recordThrough.get(key) ?? 0, revision))
+        }
         for (const id of targets.sourceIds) invalidated.sourceIds.add(id)
         atomicWritePrivate(tombstoneFile, `${JSON.stringify({
           version: VERSION,
           recordIds: [...invalidated.recordIds],
           recordRevisions: [...invalidated.recordRevisions].flatMap(([id, versions]) => [...versions].map(revision => ({ id, revision }))),
+          recordThrough: [...invalidated.recordThrough].map(([key, revision]) => {
+            const [projectKey, id] = JSON.parse(key)
+            return { id, revision, ...(projectKey === '*' ? {} : { projectKey }) }
+          }),
           sourceIds: [...invalidated.sourceIds],
         })}\n`)
         invalidationStamp = null
         refreshInvalidations()
 
         const removed = new Set()
+        const legacy = legacyNoteReader(root)
         for (const name of readdirSync(directory)) {
           if (!name.endsWith('.json') || name === INVALIDATED_FILE || name === SESSION_INDEX_FILE) continue
           const key = name.slice(0, -5)
@@ -387,7 +474,7 @@ export function createRecallReportStore(root, profileIdentity) {
             if (stat.size <= MAX_REPORT_BYTES) envelope = JSON.parse(readFileSync(file, 'utf8'))
           } catch { /* Unknown reports are deleted conservatively during a forget operation. */ }
           if (!/^[a-f0-9]{64}$/u.test(key) || !envelopeMatches(envelope, key, profileIdentity) ||
-              recallReportReferences(envelope.report, targets)) {
+              references(envelope.report, targets, legacy)) {
             unlinkSync(file)
             removed.add(key)
             cache.set(key, null)
@@ -403,4 +490,21 @@ export function createRecallReportStore(root, profileIdentity) {
       })
     },
   }
+}
+
+/** Store recovery can retire reports before any session or host hooks are loaded. */
+export function invalidateStoredRecallReports(root, targets) {
+  return createRecallReportStore(root, ANY_PROFILE).invalidateReferences(targets)
+}
+
+/** Older builds recorded the scope of permanent deletion in report invalidations. */
+export function legacyPurgedScopes(root, ids, permanentRevision) {
+  const { recordThrough } = readTombstones(join(root, 'recall-reports', INVALIDATED_FILE))
+  const rows = []
+  for (const [key, revision] of recordThrough) {
+    if (revision !== permanentRevision) continue
+    const [projectKey, id] = JSON.parse(key)
+    if (projectKey !== '*' && ids.has(id)) rows.push({ id, projectKey, revision, at:0 })
+  }
+  return rows
 }

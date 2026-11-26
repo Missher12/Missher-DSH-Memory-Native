@@ -129,7 +129,6 @@ export function createPanelBackend(options) {
     getLastRecall: typeof options.getLastRecall === 'function' ? options.getLastRecall : null,
     getLastRecallAsync: typeof options.getLastRecallAsync === 'function' ? options.getLastRecallAsync : null,
     getSessionProjectKey: typeof options.getSessionProjectKey === 'function' ? options.getSessionProjectKey : null,
-    invalidateRecallReferences: typeof options.invalidateRecallReferences === 'function' ? options.invalidateRecallReferences : null,
     getSemanticStatus: typeof options.getSemanticStatus === 'function' ? options.getSemanticStatus : null,
     prepareSemantic: typeof options.prepareSemantic === 'function' ? options.prepareSemantic : null,
     getSettingsIssue: typeof options.getSettingsIssue === 'function' ? options.getSettingsIssue : null,
@@ -173,7 +172,7 @@ export function createPanelBackend(options) {
   backend.updateSettings = (input) => updateSettings(backend, input)
   backend.exportData = () => exportData(backend)
   backend.importData = (input) => importData(backend, input)
-  backend.backup = () => createBackup(backend)
+  backend.backup = input => createBackup(backend, input)
   backend.restoreMemory = (input) => {
     const result = restoreMemory(backend, input)
     options.invalidateRecall?.()

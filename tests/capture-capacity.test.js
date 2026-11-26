@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import fs from 'node:fs'
 import test from 'node:test'
 import { syncBuiltinESMExports } from 'node:module'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { CapturePipeline } from '../host/capture.js'
 import {
@@ -12,6 +13,9 @@ import {
   captureTaskIdOf,
   compactCaptureLedgers,
   compressCaptureSources,
+  blockSourceRecall,
+  canReadSource,
+  discardTurnSources,
   readSource,
   readTurnIntakes,
   readCaptureTasks,
@@ -36,6 +40,64 @@ function pipelineFor(root, store, index) {
     ctx: { get: () => undefined },
   })
 }
+
+test('capture status returns while source sizes are pending and rechecks the changed directory', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-memory-capacity-status-'))
+  const directory = join(root, 'capture', 'sources')
+  const store = new MemoryStore({ root }).open()
+  const capture = pipelineFor(root, store, new MemoryIndex())
+  t.after(() => { capture.dispose(); rmSync(root, { recursive: true, force: true }) })
+  const put = messageId => saveSource(root, {
+    sessionId: 's', messageId, projectKey: KEY, role: 'user', sourceKind: 'user', at: NOW, text: '原话 ' + messageId,
+  })
+  const first = put('head')
+  const originalStat = fs.promises.stat
+  const { promise: resume, resolve } = Promise.withResolvers()
+  const { promise: started, resolve: noteStat } = Promise.withResolvers()
+  let reads = 0
+  fs.promises.stat = async (file, ...args) => {
+    if (String(file).startsWith(directory + '/') && /\.json(?:\.gz)?$/u.test(String(file))) {
+      reads++
+      noteStat()
+      await resume
+    }
+    return originalStat(file, ...args)
+  }
+  syncBuiltinESMExports()
+  t.after(() => { resolve(); fs.promises.stat = originalStat; syncBuiltinESMExports() })
+  const warmStatus = async () => {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      const result = capture.status()
+      if (result.storageState === 'ready') return result.storage
+      await delay(10)
+    }
+    assert.fail('source sizes never finished verification')
+  }
+  const pending = capture.status()
+  assert.equal(pending.storageState, 'checking')
+  assert.equal(pending.storage, null)
+  assert.equal(pending.counts.total, 0)
+  await started
+  for (let i = 0; i < 5; i++) assert.equal(capture.status().storage, null)
+  const second = put('arrived-during-scan')
+  resolve()
+  const verified = await warmStatus()
+  assert.deepEqual(verified, captureStorageStatus(root))
+  assert.equal(verified.sources.count, 2)
+  const warmReads = reads
+  assert.ok(warmReads >= 4)
+  assert.deepEqual(capture.status().storage, verified)
+  assert.equal(reads, warmReads)
+
+  blockSourceRecall(root, { sourceRefs: [{ sourceId: first.id }] })
+  assert.equal(canReadSource(root, first.id), false)
+  assert.equal((await warmStatus()).sources.count, 2, 'retained disk evidence still occupies space')
+  discardTurnSources(root, [first.id])
+  assert.equal(readSource(root, first.id), null)
+  assert.equal(readSource(root, second.id).text, '原话 arrived-during-scan')
+  assert.equal((await warmStatus()).sources.count, 1)
+  assert.deepEqual(capture.status().storage, captureStorageStatus(root))
+})
 
 test('maintenance compresses sources and never deletes user originals', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-capacity-'))
@@ -100,6 +162,28 @@ test('maintenance keeps old sources readable regardless of age', (t) => {
   pipeline.maintain({ now: NOW })
   assert.equal(existsSync(join(root, 'capture', 'sources', `${source.id}.json`)), true)
   assert.equal(readSource(root, source.id).text, '新原文')
+})
+
+test('scheduled compression honors disabled maintenance and resumes readable legacy sources', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-memory-capacity-legacy-disabled-'))
+  const capture = pipelineFor(root, new MemoryStore({ root }).open(), new MemoryIndex())
+  t.after(() => { capture.dispose(); rmSync(root, { recursive: true, force: true }) })
+  const dir = join(root, 'capture', 'sources')
+  mkdirSync(dir, { recursive: true })
+  const id = 'src_1234567890abcdef12345678'
+  const file = join(dir, `${id}.json`)
+  const text = '旧原话的完整内容。'.repeat(1200)
+  writeFileSync(file, JSON.stringify({ id, sessionId: 's', role: 'user', sourceKind: 'user', text }))
+
+  capture.setConfig(resolveConfig({ maintenance: { enabled: false } }))
+  await capture.maintainInBackground()
+  assert.equal(existsSync(file + '.gz'), false)
+  assert.equal(readSource(root, id).text, text)
+
+  capture.setConfig(resolveConfig({ maintenance: { enabled: true } }))
+  await capture.maintainInBackground()
+  assert.ok(existsSync(file + '.gz'))
+  assert.equal(readSource(root, id).text, text)
 })
 
 test('turn ledger compaction keeps every identity and source text readable', (t) => {

@@ -7,7 +7,8 @@
  * @module dsh-memory/host/knowledge
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hotRecord } from './cache-records.js'
 import { parseFrontmatter } from './frontmatter.js'
@@ -24,6 +25,15 @@ export function knowledgeScope(data) {
     return { scope: 'project', projectKey: data.projectKey }
   }
   return { scope: 'unbound', projectKey: null }
+}
+
+export function knowledgeBinding(data) {
+  return {
+    memoryId: data?.memoryId ?? null,
+    memoryScope: data?.memoryScope ?? null,
+    memoryProjectKey: data?.memoryProjectKey ?? null,
+    ...knowledgeScope(data),
+  }
 }
 
 /** A note may narrow its linked memory's scope, but can never broaden it. */
@@ -139,7 +149,10 @@ export function buildKnowledgeGraph(records, options = {}) {
 export function promoteMemoryToKnowledge(root, record) {
   const dir = join(root, KNOWLEDGE_DIR)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const file = join(dir, `${record.id}.md`)
+  if (!lstatSync(dir).isDirectory()) throw new Error('知识目录必须是普通目录。')
+  const name = `${record.id}.md`
+  if (!isKnowledgeFile(name)) throw new Error('记忆 ID 无法用作笔记文件名。')
+  const file = join(dir, name)
   const topic = typeof record.topic === 'string' && record.topic !== '' ? record.topic : '未分类'
   const text = [
     '---',
@@ -147,6 +160,8 @@ export function promoteMemoryToKnowledge(root, record) {
     `memoryId: ${record.id}`,
     `scope: ${JSON.stringify(record.scope === 'global' ? 'global' : 'project')}`,
     `projectKey: ${record.scope === 'global' ? 'null' : JSON.stringify(record.projectKey ?? null)}`,
+    `memoryScope: ${JSON.stringify(record.scope)}`,
+    `memoryProjectKey: ${JSON.stringify(record.projectKey ?? null)}`,
     `topic: ${JSON.stringify(topic)}`,
     `tags: ${JSON.stringify(Array.isArray(record.tags) ? record.tags : [])}`,
     `createdAt: ${new Date().toISOString()}`,
@@ -159,9 +174,17 @@ export function promoteMemoryToKnowledge(root, record) {
     `- [[${topic}]]`,
     '',
   ].join('\n')
-  const temp = `${file}.tmp`
-  writeFileSync(temp, text, { mode: 0o600 })
-  renameSync(temp, file)
+  const temp = `${file}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temp, text, { mode: 0o600, flag: 'wx' })
+    linkSync(temp, file)
+  }
+  catch (error) {
+    if (error?.code !== 'EEXIST') throw error
+    throw new Error('这个文件名已经有知识笔记，原文件已保留。')
+  } finally {
+    try { unlinkSync(temp) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+  }
   return file
 }
 
@@ -229,22 +252,77 @@ export function splitNoteBody(body) {
  * @param {string} root memory data root
  * @param {string} file note file name
  */
-export function readKnowledgeNote(root, file) {
+export function readKnowledgeNote(root, file, permits) {
+  const note = readKnowledgeSnapshot(root, file)
+  if (permits && !permits(note)) throw new Error('关联记忆已撤权或无法核实，笔记暂不可读。')
+  const { signature: _signature, aliases: _aliases, memoryScope: _scope, memoryProjectKey: _key,
+    ...editable } = note
+  return editable
+}
+
+/** Read file metadata and, optionally, the actual text used during recall. */
+export function readKnowledgeSnapshot(root, file, { headerOnly = false } = {}) {
   if (!isKnowledgeFile(file)) throw new Error('invalid knowledge note name')
-  const path = join(root, KNOWLEDGE_DIR, file)
-  const text = readFileSync(path, 'utf8')
-  const { data, body } = parseNote(text)
+  const { parsed, stat } = readKnowledgeFile(join(root, KNOWLEDGE_DIR, file), headerOnly ? 'header' : 'full')
+  return knowledgeNote(file, parsed, stat, headerOnly)
+}
+
+/** Backup admission only needs the binding, including in legacy and plain Markdown files. */
+export function readKnowledgeBinding(path) {
+  const { parsed } = readKnowledgeFile(path, 'binding')
+  const data = parsed.data
+  return knowledgeBinding(data.dsh_knowledge === true || data.memoryScope != null ? data : {})
+}
+
+function readKnowledgeFile(path, part) {
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
+  try {
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile()) throw new Error('knowledge note must be a regular file')
+    let parsed
+    if (part !== 'full') {
+      const buffer = Buffer.allocUnsafe(4096)
+      const count = readSync(descriptor, buffer, 0, buffer.length, 0)
+      const prefix = buffer.toString('utf8', 0, count)
+      if (count >= stat.size) parsed = parseNote(prefix)
+      else {
+        // A partial line can end inside a UTF-8 character or on a YAML closing
+        // fence. Use only complete lines and fall back for unusually long headers.
+        const complete = prefix.slice(0, prefix.lastIndexOf('\n') + 1)
+        const candidate = parseFrontmatter(complete)
+        if (candidate && (part === 'binding' || /\S/u.test(candidate.body))) parsed = candidate
+        if (!candidate && !/^\uFEFF?---\r?\n/u.test(prefix)) parsed = { data: {}, body: '' }
+      }
+    }
+    parsed ??= parseNote(readFileSync(descriptor, 'utf8'))
+    if (knowledgeFileSignature(fstatSync(descriptor)) !== knowledgeFileSignature(stat)) {
+      throw new Error('knowledge note changed while reading')
+    }
+    return { parsed, stat }
+  } finally { closeSync(descriptor) }
+}
+
+export function knowledgeFileSignature(stat) {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
+}
+
+function knowledgeNote(file, { data, body }, stat, headerOnly) {
   if (data.dsh_knowledge !== true) throw new Error('not a dsh knowledge note')
-  const stat = statSync(path)
   const { title, rest } = splitNoteBody(body)
+  const aliases = Array.isArray(data.aliases) ? data.aliases : [data.aliases ?? data.alias]
   return {
     file,
-    memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
-    ...knowledgeScope(data),
+    ...knowledgeBinding(data),
     topic: typeof data.topic === 'string' ? data.topic : '',
     tags: Array.isArray(data.tags) ? data.tags.map((tag) => String(tag)) : [],
+    aliases: [...new Set(aliases.filter(alias => typeof alias === 'string' && alias.trim()).map(alias => alias.trim()))],
+    quoted: data.quoted === true,
+    status: data.status ?? 'active',
+    validFrom: data.validFrom ?? null,
+    validTo: data.validTo ?? null,
     title,
-    body: rest,
+    ...(headerOnly ? {} : { body: rest }),
+    signature: knowledgeFileSignature(stat),
     mtimeMs: stat.mtimeMs,
     updatedAt: stat.mtimeMs,
   }
@@ -280,7 +358,7 @@ function normalizeTags(tags) {
  * @param {{ file: string, title: string, body?: string, topic?: string,
  *   tags?: string[], expectedMtimeMs?: number }} input
  */
-export function saveKnowledgeNote(root, input) {
+export function saveKnowledgeNote(root, input, authority) {
   const file = input?.file
   if (!isKnowledgeFile(file)) throw new Error('invalid knowledge note name')
   const title = typeof input.title === 'string' ? input.title.trim() : ''
@@ -292,9 +370,12 @@ export function saveKnowledgeNote(root, input) {
   const tags = normalizeTags(input.tags)
 
   const path = join(root, KNOWLEDGE_DIR, file)
+  if (!lstatSync(path).isFile()) throw new Error('知识笔记必须是普通文件。')
   const text = readFileSync(path, 'utf8')
   const parsed = parseNote(text)
   if (parsed.data.dsh_knowledge !== true) throw new Error('not a dsh knowledge note')
+  const grant = authority?.(knowledgeBinding(parsed.data))
+  if (grant && !grant.allowed) throw new Error('关联记忆已撤权或无法核实，笔记暂不可写。')
   const stat = statSync(path)
   if (Number.isFinite(input.expectedMtimeMs) && stat.mtimeMs !== input.expectedMtimeMs) {
     return { saved: false, reason: 'conflict', current: readKnowledgeNote(root, file) }
@@ -310,6 +391,14 @@ export function saveKnowledgeNote(root, input) {
   }
   const next = { ...parsed.data }
   const scope = requestedNoteScope(input, knowledgeScope(parsed.data))
+  if (grant?.parent) {
+    const parent = grant.parent
+    if (!knowledgeScopeWithinMemory(scope.scope, scope.projectKey, parent.scope, parent.projectKey)) {
+      throw new Error('与记忆关联的笔记不能扩大或移动其召回范围。')
+    }
+    next.memoryScope = parent.scope
+    next.memoryProjectKey = parent.projectKey
+  }
   next.dsh_knowledge = true
   next.scope = scope.scope
   next.projectKey = scope.projectKey
@@ -333,13 +422,17 @@ export function listKnowledgeNotes(root, options = {}) {
   const notes = []
   for (const file of readdirSync(dir).filter((name) => name.endsWith('.md'))) {
     try {
+      if (!lstatSync(join(dir, file)).isFile()) continue
       const { data, body } = parseNote(readFileSync(join(dir, file), 'utf8'))
       if (data.dsh_knowledge !== true) continue
+      const binding = knowledgeBinding(data)
+      if (options.permits && !options.permits(binding)) continue
       const { title } = splitNoteBody(body)
       const note = {
         file,
-        memoryId: typeof data.memoryId === 'string' ? data.memoryId : null,
-        ...knowledgeScope(data),
+        memoryId: binding.memoryId,
+        scope: binding.scope,
+        projectKey: binding.projectKey,
         topic: typeof data.topic === 'string' ? data.topic : null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         title: title === '' ? file : title.slice(0, 60),

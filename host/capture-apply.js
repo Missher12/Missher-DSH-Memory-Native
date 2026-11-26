@@ -3,6 +3,7 @@ import { buildRecord, contentHashOf, mergeSourceRefs } from './records.js'
 import { similarity, coverage, hasEvidenceMatch, hasDirectUserSupport, locateSourceSentence,
   NEGATION_PATTERN, conflictingValues, differentNamedServices, disjointEntities, isDirectUserSource,
   isModelEvidenceSource } from './capture-evidence.js'
+import { sourceTimeReference } from './source-time.js'
 
 const SIMILARITY_THRESHOLD = 0.9
 const PREFERENCE_SIMILARITY_THRESHOLD = 0.85
@@ -82,7 +83,7 @@ export class CaptureApplyCoordinator {
       sessionId: entry.source.sessionId, messageId: entry.source.messageId ?? undefined,
       sourceId: entry.source.id, role: entry.source.role,
       sourceKind: entry.source.sourceKind ?? 'unknown', sourceForm: entry.source.sourceForm,
-      at: entry.source.at, ...span,
+      ...sourceTimeReference(entry.source), ...span,
     })
     const quotes = item.quotes ?? []
     const precise = []

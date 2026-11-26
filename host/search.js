@@ -18,6 +18,8 @@ import { hotRecord } from './cache-records.js'
 
 const K1 = 1.2
 const B = 0.75
+const isUint8Or16 = values => values instanceof Uint8Array || values instanceof Uint16Array
+const isPackedUnsigned = values => isUint8Or16(values) || values instanceof Uint32Array
 
 export class MemoryIndex {
   #slots = []
@@ -34,6 +36,7 @@ export class MemoryIndex {
   #postings = new Map()
   #packedDocs = null
   #packedPostings = null
+  #encodeTerm = null
   #totalLength = 0
   #stalePostings = 0
 
@@ -105,8 +108,8 @@ export class MemoryIndex {
       !(data.slotById instanceof Map) || !(data.termIds instanceof Map) ||
       !Array.isArray(data.termNames) || !Array.isArray(data.df) ||
       !(data.docs?.offsets instanceof Uint32Array) || !(data.docs?.terms instanceof Int32Array) ||
-      !(data.docs?.freqs instanceof Uint16Array) || !(data.postings?.offsets instanceof Uint32Array) ||
-      !(data.postings?.slots instanceof Uint32Array) || !(data.postings?.freqs instanceof Uint32Array) ||
+      !isUint8Or16(data.docs?.freqs) || !(data.postings?.offsets instanceof Uint32Array) ||
+      !isPackedUnsigned(data.postings?.slots) || !isPackedUnsigned(data.postings?.freqs) ||
       data.docs.offsets.length !== data.slots.length + 1 || data.postings.offsets.length !== data.termNames.length + 1 ||
       data.docs.terms.length !== data.docs.freqs.length || data.postings.slots.length !== data.postings.freqs.length ||
       data.docs.offsets.at(-1) !== data.docs.terms.length || data.postings.offsets.at(-1) !== data.postings.slots.length) {
@@ -116,6 +119,7 @@ export class MemoryIndex {
     this.#hotSlots = data.slots.slice()
     this.#recordAt = data.recordAt ?? null
     this.#hotAt = data.hotAt ?? null
+    this.#encodeTerm = data.encodeTerm ?? null
     this.#lengths = data.lengths
     this.#slotById = data.slotById
     this.#termIds = data.termIds
@@ -163,7 +167,10 @@ export class MemoryIndex {
     const text = `${record.content ?? ''} ${Array.isArray(record.tags) ? record.tags.join(' ') : ''} ${record.topic ?? ''}`
     const tokens = tokenize(text)
     const frequencies = new Map()
-    for (const token of tokens) frequencies.set(token, (frequencies.get(token) ?? 0) + 1)
+    for (const token of tokens) {
+      const term = this.#encodeTerm ? this.#encodeTerm(token) : token
+      frequencies.set(term, (frequencies.get(term) ?? 0) + 1)
+    }
     const slot = this.#slots.length
     this.#slots.push(record)
     this.#hotSlots.push(hotRecord(record))
@@ -201,14 +208,16 @@ export class MemoryIndex {
 
   /** Reclaim historical slots/dictionary entries once churn outgrows live data. */
   #maybeCompact() {
-    if (this.#slots.length <= this.size * 2 + 64) return
+    // Restored original-passage rows contain references. Compaction must not
+    // retokenize those rows as though they contained the source text.
+    if (this.#encodeTerm || this.#slots.length <= this.size * 2 + 64) return
     const live = this.#slots.filter((entry) => entry !== null).map(entry => this.#record(entry))
     this.rebuild(live)
   }
 
   /** idf of a term in the current index, or null when it is absent. */
   idfOf(term) {
-    const termId = this.#termIds.get(term)
+    const termId = this.#termIds.get(this.#encodeTerm ? this.#encodeTerm(term) : term)
     if (termId === undefined) return null
     const docFrequency = this.#df[termId] ?? 0
     if (docFrequency === 0) return null
@@ -271,7 +280,7 @@ export class MemoryIndex {
   #termData(terms) {
     const data = []
     for (const term of terms) {
-      const termId = this.#termIds.get(term)
+      const termId = this.#termIds.get(this.#encodeTerm ? this.#encodeTerm(term) : term)
       if (termId === undefined) continue
       const docFrequency = this.#df[termId] ?? 0
       if (docFrequency === 0) continue
@@ -333,12 +342,14 @@ export class MemoryIndex {
 
   /**
    * Score records for one query.
+   * An optional acceptRanked callback can check live authority just before a
+   * candidate would enter the result set.
    * @param {string} query
-   * @param {{ statuses?: string[], scopes?: string[], projectKey?: string | null, kinds?: string[], topic?: string, now?: number, limit?: number, offset?: number }} [options]
+   * @param {{ statuses?: string[], scopes?: string[], projectKey?: string | null, kinds?: string[], topic?: string, now?: number, limit?: number, offset?: number, eligible?: (record: object) => boolean, acceptRanked?: (record: object) => boolean }} [options]
    * @returns {Array<{ record: object, score: number, matched: string[], termScores: Array<{term:string,idf:number,value:number}> }>}
    */
   search(query, options = {}) {
-    return this.searchPage(query, options).hits
+    return this.#searchPage(query, options, options.acceptRanked ?? null).hits
   }
 
   /**
@@ -351,6 +362,10 @@ export class MemoryIndex {
    * @returns {{ total: number, hits: object[], kindCounts: Record<string, number>, topicCounts: Record<string, number> }}
    */
   searchPage(query, options = {}) {
+    return this.#searchPage(query, options, null)
+  }
+
+  #searchPage(query, options, acceptRanked) {
     if (typeof query === 'string' && query.trim() === '') {
       return { total: 0, hits: [], kindCounts: {}, topicCounts: {} }
     }
@@ -366,6 +381,7 @@ export class MemoryIndex {
     const kinds = options.kinds === undefined || options.kinds === null ? null : new Set(options.kinds)
     const topic = typeof options.topic === 'string' && options.topic !== '' ? options.topic : null
     const now = typeof options.now === 'number' ? options.now : Date.now()
+    const eligible = typeof options.eligible === 'function' ? options.eligible : null
     const termData = this.#termData(terms)
     if (termData.length === 0) return { total: 0, hits: [], kindCounts: {}, topicCounts: {} }
 
@@ -428,6 +444,7 @@ export class MemoryIndex {
       if (record.scope === 'project' && options.projectKey != null && record.projectKey !== options.projectKey) continue
       if (record.validFrom != null && record.validFrom > now) continue
       if (options.includeExpired !== true && record.validTo != null && record.validTo <= now) continue
+      if (eligible && !eligible(record)) continue
       if (Object.hasOwn(MEMORY_KINDS, record.kind)) kindCounts[record.kind] = (kindCounts[record.kind] ?? 0) + 1
       if (kinds !== null && !kinds.has(record.kind)) continue
       const recordTopic = typeof record.topic === 'string' && record.topic.trim() !== '' ? record.topic : '__none__'
@@ -444,6 +461,7 @@ export class MemoryIndex {
           if (updated < worst.updatedAt || (updated === worst.updatedAt && record.id >= worst.id)) continue
         }
       }
+      if (acceptRanked !== null && !acceptRanked(this.#record(this.#slots[slot]))) continue
       const entry = { slot, score, updatedAt: record.updatedAt ?? 0, id: record.id }
       if (heap.length < heapSize) {
         heap.push(entry)

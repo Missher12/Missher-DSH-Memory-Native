@@ -10,6 +10,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
+import { sourceEventTime } from './source-time.js'
 
 export const MEMORY_KINDS = Object.freeze(['preference', 'fact', 'decision', 'episode'])
 export const MEMORY_SCOPES = Object.freeze(['global', 'project'])
@@ -21,12 +22,17 @@ export const TOPIC_LIMIT = 48
 export const SOURCE_REF_LIMIT = 12
 export const EVIDENCE_ROLES = Object.freeze(['user', 'assistant', 'unknown'])
 
+const ENGLISH_CREDENTIAL = String.raw`(?:password|passwd|passphrase|pin|(?:api|private|secret)[\s_-]?key|(?:access|refresh)[\s_-]?token)`
+const CHINESE_CREDENTIAL = '(?:密码|口令|私钥|密钥|访问令牌|刷新令牌)'
 const SENSITIVE_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{16,}\b/u,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
   /(?:\b(?:password|passwd|secret|api[\s_-]?key|(?:access|refresh)[\s_-]?token)|密码|密钥|私钥|访问令牌)["']?\s*[:=：]\s*["']?[^\s"']+/iu,
   /\bBearer\s+[A-Za-z0-9._-]{16,}/iu,
   /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}\b/u,
+  new RegExp(String.raw`\b(?:my|our)\s+(?:(?:old|previous|former|new|current)\s+)?${ENGLISH_CREDENTIAL}\s+(?:(?:is|was|used to be)\s+\S|from\s+\S.{0,160}?\s+to\s+\S)`, 'iu'),
+  new RegExp(String.raw`我(?:们)?的\s*(?:新|旧|(?:原来|之前|以前|现在|当前)的)?\s*${CHINESE_CREDENTIAL}\s*(?:原来|之前|以前|现在|目前)?\s*(?:是|为)\s*\S`, 'u'),
+  new RegExp(String.raw`我(?:们)?(?:已|刚|刚刚|已经)?把\s*(?:我的|我们的)?\s*${CHINESE_CREDENTIAL}\s*从\s*\S[^。！？\n]{0,160}?(?:改成|改为|换成)\s*\S`, 'u'),
 ]
 
 /** Normalize a memory statement: single line, collapsed whitespace. */
@@ -100,6 +106,9 @@ export function normalizeSourceRefs(refs) {
     const precise = sourceId && Number.isSafeInteger(ref.from) && ref.from >= 0 &&
       Number.isSafeInteger(ref.to) && ref.to > ref.from && ref.to - ref.from <= 240 &&
       typeof ref.excerpt === 'string' && ref.excerpt.length === ref.to - ref.from
+    const eventTime = precise && role === 'user' && sourceKind === 'user' ? sourceEventTime(ref.eventTime) : undefined
+    const timeZone = eventTime !== undefined &&
+      typeof ref.timeZone === 'string' && ref.timeZone.length <= 128 ? ref.timeZone : undefined
     out.push({
       ...(sessionId === undefined ? {} : { sessionId }),
       ...(messageId === undefined ? {} : { messageId }),
@@ -109,6 +118,8 @@ export function normalizeSourceRefs(refs) {
       sourceKind,
       ...(sourceForm === undefined ? {} : { sourceForm }),
       ...(at === undefined ? {} : { at }),
+      ...(eventTime === undefined ? {} : { eventTime }),
+      ...(timeZone === undefined ? {} : { timeZone }),
       ...(precise ? { from: ref.from, to: ref.to, excerpt: ref.excerpt } : excerpt === undefined ? {} : { excerpt }),
     })
   }

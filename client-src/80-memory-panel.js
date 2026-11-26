@@ -123,6 +123,10 @@
           if (request !== sessionRequestGeneration.current) return
           setSessionPanel({ sessionId: requestedSessionId, usage: stats?.contextUsage,
             report: stats?.lastRecall ?? null, injectEnabled: stats?.injectEnabled })
+          setData(current => current?.stats && current.scope === scope && current.sessionId === requestedSessionId
+            ? { ...current, stats: { ...current.stats,
+              captureStorage: stats?.captureStorage, captureStorageState: stats?.captureStorageState } }
+            : current)
         } catch (failure) {
           if (request === sessionRequestGeneration.current) setError(messageOf(failure))
         }

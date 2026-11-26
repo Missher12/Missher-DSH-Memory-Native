@@ -9,6 +9,12 @@ import { analyzeUserMessageControls } from '../host/user-controls.js'
 const NOW = 1_700_000_000_000
 const KEY = 'DSH-Memory-abc'
 
+test('question auxiliaries do not become proper names for source matching', () => {
+  assert.deepEqual(recallAnchorTerms('Do you remember what show I mentioned?'), [])
+  assert.deepEqual(recallAnchorTerms('Did I read The Wren?'), ['the', 'wren'])
+  assert.deepEqual(recallAnchorTerms('Who is Will Bright?'), ['will', 'bright'])
+})
+
 test('project-qualified bare objects match their name without accepting competing objects or projects', () => {
   const entity = recallQueryPlan('青岩快照保留多久')[1].entityTerms
   for (const content of ['青岩项目现在确认变更：快照保留 29 天。', '青岩项目的快照保留 29 天。']) {
@@ -310,6 +316,23 @@ test('recallQueries keeps a compound root question and adds bounded subquestions
   assert.equal(recallQueries('pnpm 依赖、Node 版本、数据库版本、缓存版本', undefined, false).length, 5)
 })
 
+test('answer length instructions do not become recall questions', () => {
+  const question = 'how do we get sign-off when replacing a vendor?'
+  assert.deepEqual(recallQueryPlan('In one sentence from our notes, ' + question), recallQueryPlan(question))
+  const two = 'what is the Node version and what is the pnpm version?'
+  assert.deepEqual(recallQueryPlan('Please answer in two short sentences, ' + two), recallQueryPlan(two))
+  const schedule = 'Atlas 快照每天几点执行，保留多久？'
+  assert.deepEqual(recallQueryPlan('用两句话回答，' + schedule), recallQueryPlan(schedule))
+})
+
+test('a temporal condition stays with its question and independent details still get their own slots', () => {
+  const conditional = '员工账号被锁定后，怎么恢复访问？'
+  assert.deepEqual(recallQueryPlan(conditional).map(part => [part.role, part.query]), [['root', '员工账号被锁定后，怎么恢复访问']])
+  const compound = '快照每天几点执行，保留多久，为什么改？'
+  assert.deepEqual(recallQueryPlan(compound).filter(part => part.role === 'subquestion').map(part => part.detail),
+    ['clock', 'retention', 'reason'])
+})
+
 test('recallQueryPlan carries an entity anchor into an attribute-only child', () => {
   const plan = recallQueryPlan('甲设备温度和湿度', undefined, false)
   assert.deepEqual(plan.map(({ query, role }) => [query, role]), [
@@ -323,6 +346,10 @@ test('recallQueryPlan carries an entity anchor into an attribute-only child', ()
 test('recallTimeIntent handles plural English weeks and leaves fractional calendar dates unanchored', () => {
   const now = Date.UTC(2026, 10, 7, 4)
   assert.deepEqual(recallTimeIntent('3 weeks ago', now), { kind: 'as-of', at: now - 21 * 86_400_000 })
+  assert.deepEqual(recallTimeIntent('two weeks ago', now), { kind: 'as-of', at: now - 14 * 86_400_000 })
+  assert.deepEqual(recallTimeIntent('twenty-one days ago', now), { kind: 'as-of', at: now - 21 * 86_400_000 })
+  assert.deepEqual(recallTimeIntent('How many jobs finished since I restarted two weeks ago?', now), { kind: 'current', at: now })
+  assert.deepEqual(recallTimeIntent('How many jobs finished since restarting 2 weeks ago?', now), { kind: 'current', at: now })
   assert.equal(recallTimeIntent('半个月前', now).kind, 'history')
   assert.equal(recallTimeIntent('半个月前', now).at, null)
 })

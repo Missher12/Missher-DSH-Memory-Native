@@ -25,17 +25,21 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { blockSourceRecall, canReadSource } from './capture-journal.js'
+import { authorityAppend, authorityIdentity, clearAuthorityIntent, prepareAuthorityIntent, readAuthorityIntent,
+  recoverAuthorityWrite, visibleAuthorityBytes } from './authority-intent.js'
 
 import { isValidProjectKey, scopePaths } from './paths.js'
-import { buildRecord, nextRevision } from './records.js'
+import { buildRecord, isValidMemoryId, nextRevision } from './records.js'
 import { CACHE_FILE, hotRecord, rememberAuthority } from './cache-records.js'
-import { atomicWritePrivate, truncateFile, withFileLock, writeAll } from './persistence.js'
+import { atomicWritePrivate, syncDirectory, truncateFile, withFileLock, writeAll } from './persistence.js'
 import { createCompleteBackup } from './backup.js'
 import { validateImport } from './import-validation.js'
+import { invalidateStoredRecallReports } from './recall-reports.js'
+import { memoryNoteDigests, readPurgedNoteDigests, writePurgedNoteDigests } from './obsidian-note.js'
+import { PERMANENT_REVISION, readRevocationLedger, retainRevocations } from './revocation-ledger.js'
 
 export const SCHEMA_VERSION = 2
 export const PURGED_IDS_FILE = 'obsidian-purged-ids.json'
@@ -148,13 +152,15 @@ function readPurgedIds(root) {
 
 /** Detect appends, same-size rewrites, replacements and deletions. */
 export function fileStamp(file) {
-  try {
-    const stat = statSync(file, { bigint: true })
-    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':')
-  } catch (error) {
+  try { return authorityFileStamp(statSync(file, { bigint: true })) }
+  catch (error) {
     if (error?.code === 'ENOENT') return null
     throw error
   }
+}
+
+export function authorityFileStamp(stat) {
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':')
 }
 
 /** Whether a parsed JSONL line is a usable record revision. */
@@ -166,10 +172,27 @@ function isRecordRevision(value) {
     typeof value.revision === 'number' && Number.isInteger(value.revision) && value.revision >= 1
 }
 
+function authoritySnapshot(file, root) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const intent = root === undefined ? null : readAuthorityIntent(root)
+    const stamp = fileStamp(file)
+    let bytes
+    try { bytes = stamp === null ? Buffer.alloc(0) : readFileSync(file) }
+    catch (error) { if (error?.code === 'ENOENT') continue; throw error }
+    if (stamp !== fileStamp(file) || root !== undefined && intent !== readAuthorityIntent(root)) continue
+    return { bytes: visibleAuthorityBytes(root, file, bytes, intent), stamp, intent }
+  }
+  throw new Error('记忆文件正被其他进程更新，请稍后重试。')
+}
+
 /** Read and parse one JSONL authority file; corrupt lines are skipped, counted and returned. */
-export function readJsonl(file) {
-  if (!existsSync(file)) return { records: [], lines: 0, bytes: 0, corrupt: 0, corruptLines: [] }
-  const text = readFileSync(file, 'utf8')
+export function readJsonl(file, root) {
+  const { bytes, stamp, intent } = authoritySnapshot(file, root)
+  return { ...parseMemoryLines(bytes), bytes: bytes.length, stamp, intent }
+}
+
+export function parseMemoryLines(bytes) {
+  const text = bytes.toString('utf8')
   const records = []
   const corruptLines = []
   let lines = 0
@@ -186,7 +209,7 @@ export function readJsonl(file) {
     }
     if (corrupt > corruptLines.length) corruptLines.push(line.slice(0, 2000))
   }
-  return { records, lines, bytes: Buffer.byteLength(text), corrupt, corruptLines }
+  return { records, lines, corrupt, corruptLines }
 }
 
 /** Collapse revisions to the latest one per id, preserving insertion order by createdAt. */
@@ -213,12 +236,13 @@ export class MemoryStore {
   #purgedIdsStamp
 
   /**
-   * @param {{ root: string, clock?: () => number }} options
+   * @param {{ root: string, clock?: () => number, onRecallRevoke?: Function }} options
    */
   constructor(options = {}) {
     if (typeof options.root !== 'string' || options.root === '') throw new Error('MemoryStore requires an absolute root')
     this.#root = options.root
     this.#clock = typeof options.clock === 'function' ? options.clock : () => Date.now()
+    this.#onRecallRevoke = options.onRecallRevoke ?? null
     this.#meta = { schemaVersion: SCHEMA_VERSION, updatedAt: null }
   }
 
@@ -292,15 +316,23 @@ export class MemoryStore {
       this.#meta.schemaVersion = SCHEMA_VERSION
       this.#touch()
     }
+    if (readAuthorityIntent(this.#root)) {
+      try { this.#withLock(() => {}) }
+      catch (error) {
+        // Reads still enforce the intent when the disk cannot finish cleanup.
+        if (error?.code !== 'recall-recovery-pending') throw error
+      }
+    }
     return this
   }
 
   #state(scope, projectKey) {
+    if (scope === 'global') projectKey = null
     const key = scope === 'global' ? 'global' : `project:${projectKey}`
     let state = this.#scopes.get(key)
     if (state !== undefined) return state
     const paths = scopePaths(this.#root, scope, projectKey)
-    const parsed = readJsonl(paths.file)
+    const parsed = readJsonl(paths.file, this.#root)
     const latest = latestRevisions(parsed.records)
     state = {
       key,
@@ -312,7 +344,8 @@ export class MemoryStore {
       lines: parsed.lines,
       bytes: parsed.bytes,
       corrupt: parsed.corrupt,
-      stamp: fileStamp(paths.file),
+      stamp: parsed.stamp,
+      intent: parsed.intent,
       aggregate: null,
     }
     if (parsed.corrupt > 0) this.#quarantine(paths.file, parsed.corruptLines)
@@ -343,8 +376,10 @@ export class MemoryStore {
 
   /** Every current record across the global scope and every project. */
   listAll(options = {}) {
-    const records = [...this.list('global', null, options)]
-    for (const projectKey of this.listProjects()) records.push(...this.list('project', projectKey, options))
+    const records = this.list('global', null, options)
+    for (const projectKey of this.listProjects()) {
+      for (const record of this.list('project', projectKey, options)) records.push(record)
+    }
     return records
   }
 
@@ -369,59 +404,127 @@ export class MemoryStore {
 
   #appendCommitted(state, changes) {
     const changed = changes.filter(change => change.changed !== false)
-    if (changed.length === 0) return false
-    const lines = changed.map(change => `${JSON.stringify(change.record)}\n`)
-    const text = lines.join('')
-    mkdirSync(state.dir, { recursive: true, mode: 0o700 })
-    const fd = openSync(state.file, 'a+', 0o600)
-    const originalSize = fstatSync(fd).size
-    let separatorBytes = 0
-    try {
-      if (originalSize > 0) {
-        const tail = Buffer.alloc(1)
-        if (readSync(fd, tail, 0, 1, originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
-        if (tail[0] !== 10) { writeAll(fd, '\n'); separatorBytes = 1 }
-      }
-      writeAll(fd, text)
-      fsyncSync(fd)
-    } catch (error) {
-      try { truncateFile(state.file, originalSize) }
-      catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
-      throw error
-    } finally { closeSync(fd) }
-    for (const change of changed) {
-      const line = `${JSON.stringify(change.record)}\n`
-      state.records.set(change.record.id, change.record)
-      this.#adjustAggregate(state, change.previous, change.record)
-      rememberAuthority(change.record, line.slice(0, -1))
-      state.lines += 1
-    }
-    state.bytes += Buffer.byteLength(text) + separatorBytes
-    state.stamp = fileStamp(state.file)
-    this.#touch()
-    const redundant = state.lines - state.records.size
-    return (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
-      redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+    const committed = this.#commitAppends(changed.length ? [{ state, changes: changed }] : [])
+    return { compact: committed.completed[0]?.compact ?? false, revocationError: committed.revocationError }
   }
 
-  #revokeChanges(changes) {
-    const sourceIds = new Set(), recordRevisions = []
-    let deleted = false
-    for (const { record, previous, changed } of changes) {
-      if (changed === false) continue
-      const forget = record.status === 'deleted'
-      const revokePrevious = previous && (previous.content !== record.content ||
-        (previous.status === 'active' && record.status !== 'active') || forget)
-      if (revokePrevious) recordRevisions.push({ id: previous.id, revision: previous.revision })
-      if (forget) deleted = true
-      for (const entry of [revokePrevious ? previous : null, forget ? record : null]) {
-        if (!entry) continue
-        blockSourceRecall(this.#root, entry)
-        for (const ref of entry.sourceRefs ?? []) if (ref?.sourceId) sourceIds.add(ref.sourceId)
+  /** Validate all the participating files before appending, then finish or roll back together. */
+  #commitAppends(entries, sourceIds = []) {
+    const changes = entries.flatMap(entry => entry.changes)
+    const targets = this.#revocationTargets(changes, sourceIds)
+    if (targets.deletions?.length) readRevocationLedger(this.#root)
+    const journal = changes.length > 1 || targets.sourceIds.length || targets.recordThrough.length
+    const plans = []
+    let intent
+    try {
+      for (const entry of entries) {
+        const { state } = entry
+        const lines = entry.changes.map(change => JSON.stringify(change.record))
+        mkdirSync(state.dir, { recursive: true, mode: 0o700 })
+        const fd = openSync(state.file, 'a+', 0o600)
+        const plan = { ...entry, lines, fd }
+        plans.push(plan)
+        const stat = fstatSync(fd, { bigint: true })
+        plan.originalSize = Number(stat.size)
+        let separator = ''
+        if (plan.originalSize > 0) {
+          const tail = Buffer.alloc(1)
+          if (readSync(fd, tail, 0, 1, plan.originalSize - 1) !== 1) throw new Error('cannot verify authority tail')
+          if (tail[0] !== 10) separator = '\n'
+        }
+        plan.bytes = Buffer.from(`${separator}${lines.join('\n')}\n`)
+        if (journal) plan.proof = authorityAppend(state, stat, plan.bytes)
+      }
+      if (journal) intent = prepareAuthorityIntent(this.#root, { appends: plans.map(plan => plan.proof), targets })
+      for (const plan of plans) {
+        plan.writing = true
+        writeAll(plan.fd, plan.bytes)
+        fsyncSync(plan.fd)
+        if (intent && plan.originalSize === 0) {
+          syncDirectory(plan.state.dir)
+          if (plan.state.scope === 'project') syncDirectory(join(this.#root, 'projects'))
+          syncDirectory(this.#root)
+        }
+      }
+    } catch (error) {
+      try {
+        for (const plan of plans) if (plan.writing) truncateFile(plan.state.file, plan.originalSize)
+        if (readAuthorityIntent(this.#root)) clearAuthorityIntent(this.#root)
+      } catch (rollback) { error.rollbackFailed = rollback?.code ?? 'unknown' }
+      throw error
+    } finally { for (const plan of plans) closeSync(plan.fd) }
+    const completed = plans.map(plan => this.#acceptAppend(plan))
+    if (plans.length) this.#touch()
+    if (intent) {
+      try { this.#completeAuthorityIntent(intent) }
+      catch (error) {
+        for (const entry of completed) entry.compact = false
+        return { completed, revocationError: error }
       }
     }
-    if (deleted || recordRevisions.length) {
-      this.#onRecallRevoke?.({ recordRevisions, sourceIds: [...sourceIds], ...(deleted ? { reason: 'delete' } : {}) })
+    return { completed }
+  }
+
+  #acceptAppend({ state, changes, lines, bytes }) {
+    for (let i = 0; i < changes.length; i++) {
+      const change = changes[i]
+      state.records.set(change.record.id, change.record)
+      this.#adjustAggregate(state, change.previous, change.record)
+      rememberAuthority(change.record, lines[i])
+      state.lines += 1
+    }
+    state.bytes += bytes.length
+    state.stamp = fileStamp(state.file)
+    state.intent = null
+    const redundant = state.lines - state.records.size
+    const compact = (state.lines > MAX_RECORDS_PER_FILE || state.bytes > MAX_BYTES_PER_FILE) &&
+      redundant >= Math.max(100, Math.ceil(state.records.size / 4))
+    return { state, changes, compact }
+  }
+
+  #revocationTargets(changes, explicitSourceIds = []) {
+    const sourceIds = new Set(explicitSourceIds), recordThrough = [], deletions = []
+    let deleted = sourceIds.size > 0
+    for (const { record, previous } of changes) {
+      const forget = record.status === 'deleted'
+      const revokePrevious = previous && (previous.content !== record.content ||
+        (previous.status === 'active' && record.status !== 'active') || record.status === 'superseded' || forget)
+      if (revokePrevious || forget) recordThrough.push({
+        id: record.id, projectKey: record.scope === 'global' ? null : record.projectKey,
+        revision: forget ? record.revision : previous.revision,
+      })
+      if (forget) {
+        deleted = true
+        const projectKey = record.scope === 'global' ? null : record.projectKey
+        const at = Number.isSafeInteger(record.updatedAt) && record.updatedAt >= 0 ? record.updatedAt : 0
+        deletions.push({ id:record.id, projectKey, revision:record.revision, at })
+      }
+      for (const entry of [revokePrevious ? previous : null, forget ? record : null]) {
+        for (const ref of entry?.sourceRefs ?? []) {
+          if (/^src_[a-f0-9]{24}$/u.test(ref?.sourceId ?? '')) sourceIds.add(ref.sourceId)
+        }
+      }
+    }
+    return { recordThrough, sourceIds: [...sourceIds], ...(deletions.length ? { deletions } : {}),
+      ...(deleted ? { reason: 'delete' } : {}) }
+  }
+
+  #completeAuthorityIntent({ targets, purge }) {
+    try {
+      if (purge) this.#persistPurge(purge)
+      const deletions = purge ? [{ id:purge.id, projectKey:purge.projectKey, revision:PERMANENT_REVISION, at:0 }] : targets.deletions ?? []
+      retainRevocations(this.#root, deletions)
+      if (targets.sourceIds.length) {
+        blockSourceRecall(this.#root, { sourceRefs: targets.sourceIds.map(sourceId => ({ sourceId })) })
+      }
+      if (targets.recordThrough.length || targets.sourceIds.length) {
+        if (this.#onRecallRevoke === null) invalidateStoredRecallReports(this.#root, targets)
+        else this.#onRecallRevoke(targets)
+      }
+      clearAuthorityIntent(this.#root)
+    } catch (cause) {
+      throw Object.assign(new Error('记忆已写入，原文和报告清理待恢复。请检查存储后重试。', { cause }),
+        { code: 'recall-recovery-pending', committed: true })
     }
   }
 
@@ -438,10 +541,27 @@ export class MemoryStore {
     }
   }
 
-  /** Order source forgetting against pending writes derived from that source. */
-  revokeSource(sourceId) {
+  /** Forget the source and its committed derivatives before another writer can add more. */
+  revokeSource(sourceId, projectKey) {
+    if (!/^src_[a-f0-9]{24}$/u.test(sourceId ?? '') || !isValidProjectKey(projectKey)) throw new Error('invalid source recall scope')
     this.#beforeWrite?.()
-    this.#withLock(() => blockSourceRecall(this.#root, { sourceRefs: [{ sourceId }] }))
+    const outcome = this.#withLock(() => {
+      const entries = []
+      for (const state of [this.#state('project', projectKey), this.#state('global', null)]) {
+        this.#refreshState(state)
+        const changes = []
+        for (const previous of state.records.values()) {
+          if (hotRecord(previous).status !== 'deleted' && previous.sourceRefs?.some(ref => ref?.sourceId === sourceId)) {
+            changes.push({ previous, record: nextRevision(previous, { status: 'deleted' }, this.#clock()) })
+          }
+        }
+        if (changes.length) entries.push({ state, changes })
+      }
+      return this.#commitAppends(entries, [sourceId])
+    })
+    for (const entry of outcome.completed) this.#publishChanges(entry.state, entry.changes, entry.compact)
+    if (outcome.revocationError) throw outcome.revocationError
+    return outcome.completed.flatMap(entry => entry.changes.map(change => change.record))
   }
 
   /** Append a record revision under a cross-process lock; fsync before returning. */
@@ -470,14 +590,14 @@ export class MemoryStore {
         }
       }
       const change = { record: next, previous: current, changed: true }
-      this.#revokeChanges([change])
       // A large live set stays above the old size threshold even immediately
       // after compaction. Rewrite only when enough obsolete revisions exist.
-      const compact = this.#appendCommitted(state, [change])
-      return { record: next, previous: current, changed: true, compact }
+      const result = this.#appendCommitted(state, [change])
+      return { record: next, previous: current, changed: true, ...result }
     })
     if (outcome.changed) this.#notifyChange({ type: 'upsert', records: [outcome.record], previous: [outcome.previous], state })
     if (outcome.compact) this.compact(record.scope, record.projectKey)
+    if (outcome.revocationError) throw outcome.revocationError
     return options.importOnly ? outcome : outcome.record
   }
 
@@ -513,11 +633,10 @@ export class MemoryStore {
           : input
         changes.push({ record: next, previous: current, changed: true })
       }
-      this.#revokeChanges(changes)
-      const compact = this.#appendCommitted(state, changes)
-      return { changes, compact }
+      return { changes, ...this.#appendCommitted(state, changes) }
     })
     this.#publishChanges(state, outcome.changes, outcome.compact)
+    if (outcome.revocationError) throw outcome.revocationError
     return outcome.changes.map(item => item.record)
   }
 
@@ -549,12 +668,12 @@ export class MemoryStore {
         if (current.status === 'deleted' && fields.status === 'deleted') return { record: current }
         const record = nextRevision(current, fields, this.#clock())
         const change = { record, previous: current }
-        this.#revokeChanges([change])
-        return { record, state, change, compact: this.#appendCommitted(state, [change]) }
+        return { record, state, change, ...this.#appendCommitted(state, [change]) }
       }
       return null
     })
     if (result?.change) this.#publishChanges(result.state, [result.change], result.compact)
+    if (result?.revocationError) throw result.revocationError
     return result?.record
   }
 
@@ -576,10 +695,7 @@ export class MemoryStore {
           throw Object.assign(error, { memoryId: id })
         }
       })
-      const compact = this.#appendCommitted(state, changes)
-      try { this.#revokeChanges(changes) }
-      catch (error) { return { changes, compact, revocationError: error } }
-      return { changes, compact }
+      return { changes, ...this.#appendCommitted(state, changes) }
     })
     this.#publishChanges(state, outcome.changes, outcome.compact)
     return { records: outcome.changes.map(change => change.record), revocationError: outcome.revocationError }
@@ -598,55 +714,14 @@ export class MemoryStore {
         throw new Error('replacement target is no longer active in this scope')
       }
       if (state.records.has(replacement.id)) throw new Error('replacement id already exists')
-      this.#onRecallRevoke?.({ recordRevisions: [{ id: old.id, revision: old.revision }], sourceIds: (old.sourceRefs ?? [])
-        .map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '') })
-      blockSourceRecall(this.#root, old)
       const previous = nextRevision(old, { status: 'superseded', validTo: this.#clock() }, this.#clock())
       const record = { ...replacement, supersedesId: oldId }
-      const original = readFileSync(state.file, 'utf8')
-      const separator = original.endsWith('\n') ? '' : '\n'
-      const previousJson = JSON.stringify(previous), recordJson = JSON.stringify(record)
-      const text = `${original}${separator}${previousJson}\n${recordJson}\n`
-      const bytes = Buffer.from(text)
-      const temp = `${state.file}.replace.tmp`
-      try {
-        const fd = openSync(temp, 'w', 0o600)
-        try {
-          let offset = 0
-          while (offset < bytes.length) {
-            const written = writeSync(fd, bytes, offset, bytes.length - offset)
-            if (written <= 0) throw new Error('replacement write made no progress')
-            offset += written
-          }
-          fsyncSync(fd)
-        } finally {
-          closeSync(fd)
-        }
-        renameSync(temp, state.file)
-      } finally {
-        try { unlinkSync(temp) } catch {}
-      }
-      // No consumer sees either half until the authority file was committed.
-      state.records.set(previous.id, previous)
-      state.records.set(record.id, record)
-      this.#adjustAggregate(state, old, previous)
-      this.#adjustAggregate(state, undefined, record)
-      rememberAuthority(previous, previousJson)
-      rememberAuthority(record, recordJson)
-      state.lines += 2
-      state.bytes = bytes.length
-      state.stamp = fileStamp(state.file)
-      try {
-        const fd = openSync(state.dir, 'r')
-        try { fsyncSync(fd) } finally { closeSync(fd) }
-      } catch {
-        // As with compact(), some platforms do not support directory fsync.
-      }
-      this.#touch()
-      return { previous, record }
+      const changes = [{ previous: old, record: previous }, { record }]
+      return { previous, record, changes, ...this.#appendCommitted(state, changes) }
     })
-    this.#notifyChange({ type: 'upsert', records: [result.previous, result.record], previous: [result.previous], state })
-    return result
+    this.#publishChanges(state, result.changes, result.compact)
+    if (result.revocationError) throw result.revocationError
+    return { previous: result.previous, record: result.record }
   }
 
   /** Soft-delete one record (writes a tombstone revision). */
@@ -701,9 +776,16 @@ export class MemoryStore {
       const state = this.#state(scope, projectKey)
       if (!state.records.has(id)) continue
       const revisions = new Map()
-      for (const record of readJsonl(state.file).records) {
-        if (record.id !== id) continue
-        if (!revisions.has(record.revision)) revisions.set(record.revision, record)
+      const { bytes } = authoritySnapshot(state.file, this.#root)
+      const encodedId = isValidMemoryId(id) ? JSON.stringify(id) : null
+      for (const line of bytes.toString('utf8').split('\n')) {
+        // Legacy journals may escape the ID itself or the property name.
+        if (encodedId && !line.includes(encodedId) && !line.includes('\\u')) continue
+        let record
+        try { record = JSON.parse(line) } catch { continue }
+        if (!isRecordRevision(record) || record.id !== id || revisions.has(record.revision)) continue
+        rememberAuthority(record, line)
+        revisions.set(record.revision, record)
       }
       return [...revisions.values()].sort((left, right) => right.revision - left.revision)
     }
@@ -715,50 +797,61 @@ export class MemoryStore {
     this.#beforeWrite?.()
     for (const { scope, projectKey } of scopes) {
       const state = this.#state(scope, projectKey)
-      if (!state.records.has(id)) continue
-      let previous
-      const purged = this.#withLock(() => {
+      const result = this.#withLock(() => {
         this.#refreshState(state)
-        if (!state.records.has(id)) return false
-        previous = state.records.get(id)
-        this.#onRecallRevoke?.({ recordIds: [id], recordRevisions: [{ id, revision: previous.revision }],
-          sourceIds: (previous.sourceRefs ?? []).map(ref => ref?.sourceId).filter(sourceId => typeof sourceId === 'string' && sourceId !== '') })
-        const purgedIds = new Set(this.#currentPurgedIds())
-        purgedIds.add(id)
-        atomicWritePrivate(join(this.#root, PURGED_IDS_FILE), `${JSON.stringify([...purgedIds].sort())}\n`)
-        blockSourceRecall(this.#root, previous)
-        // A physical purge must also discard the derived copy of this record.
-        try { unlinkSync(join(this.#root, CACHE_FILE)) } catch (error) {
-          if (error?.code !== 'ENOENT') throw error
-        }
-        const kept = readJsonl(state.file).records.filter((record) => record.id !== id)
-        mkdirSync(state.dir, { recursive: true, mode: 0o700 })
-        const text = kept.map((record) => `${JSON.stringify(record)}\n`).join('')
+        const previous = state.records.get(id)
+        if (!previous) return null
+        const history = readJsonl(state.file, this.#root).records
+        const kept = history.filter(record => record.id !== id)
+        const removed = history.filter(record => record.id === id)
+        const bytes = Buffer.from(kept.map(record => `${JSON.stringify(record)}\n`).join(''))
+        const sourceIds = [...new Set(removed.flatMap(record =>
+          (record.sourceRefs ?? []).map(ref => ref?.sourceId).filter(value => /^src_[a-f0-9]{24}$/u.test(value ?? ''))))]
+        const noteDigests = [...memoryNoteDigests(removed)]
+        if (noteDigests.length) readPurgedNoteDigests(this.#root)
+        readRevocationLedger(this.#root)
+        const targets = { sourceIds, reason: 'delete',
+          recordThrough: [{ id, projectKey: state.projectKey, revision: PERMANENT_REVISION }] }
         const temp = `${state.file}.tmp`
-        const fd = openSync(temp, 'w', 0o600)
+        let intent
         try {
-          writeAll(fd, text)
-          fsyncSync(fd)
+          const fd = openSync(temp, 'w', 0o600)
+          let after
+          try {
+            writeAll(fd, bytes)
+            fsyncSync(fd)
+            after = authorityIdentity(fstatSync(fd, { bigint: true }))
+          } finally { closeSync(fd) }
+          const before = authorityIdentity(statSync(state.file, { bigint: true }))
+          intent = prepareAuthorityIntent(this.#root, {
+            purge: { id, scope, projectKey: state.projectKey, before, after, bytes: bytes.length, noteDigests }, targets,
+          })
+          renameSync(temp, state.file)
+        } catch (error) {
+          try {
+            const pending = readAuthorityIntent(this.#root)
+            if (pending && !recoverAuthorityWrite(this.#root, pending)) clearAuthorityIntent(this.#root)
+          } catch (recovery) { error.rollbackFailed = recovery?.code ?? 'unknown' }
+          throw error
         } finally {
-          closeSync(fd)
-        }
-        renameSync(temp, state.file)
-        try {
-          const dirFd = openSync(state.dir, 'r')
-          try { fsyncSync(dirFd) } finally { closeSync(dirFd) }
-        } catch {
-          // Directory fsync is best effort.
+          try { unlinkSync(temp) } catch (error) { if (error?.code !== 'ENOENT') throw error }
         }
         state.records.delete(id)
         this.#adjustAggregate(state, previous, undefined)
         state.lines = kept.length
-        state.bytes = Buffer.byteLength(text)
+        state.bytes = bytes.length
         state.stamp = fileStamp(state.file)
         this.#touch()
-        return true
+        try {
+          syncDirectory(state.dir)
+          this.#completeAuthorityIntent(intent)
+          return { previous }
+        } catch (revocationError) { return { previous, revocationError } }
       })
-      if (purged) this.#notifyChange({ type: 'remove', records: [previous], id, state })
-      return purged
+      if (!result) continue
+      this.#notifyChange({ type: 'remove', records: [result.previous], id, state })
+      if (result.revocationError) throw result.revocationError
+      return true
     }
     return false
   }
@@ -789,11 +882,34 @@ export class MemoryStore {
     return this.#purgedIds
   }
 
+  #persistPurge({ id, noteDigests }) {
+    const purgedIds = this.purgedIds()
+    purgedIds.add(id)
+    atomicWritePrivate(join(this.#root, PURGED_IDS_FILE), `${JSON.stringify([...purgedIds].sort())}\n`)
+    if (noteDigests?.length) {
+      const entries = readPurgedNoteDigests(this.#root)
+      entries.set(id, new Set([...(entries.get(id) ?? []), ...noteDigests]))
+      writePurgedNoteDigests(this.#root, entries)
+    }
+    // A crash can leave a staged snapshot. Remove it under the same writer lock.
+    for (const name of readdirSync(this.#root)) {
+      if (name !== CACHE_FILE && !(name.startsWith(CACHE_FILE + '.') &&
+          /^\d+\.[\da-f-]{36}\.tmp$/u.test(name.slice(CACHE_FILE.length + 1)))) continue
+      try { unlinkSync(join(this.#root, name)) }
+      catch (error) { if (error?.code !== 'ENOENT') throw error }
+    }
+  }
+
   /** Snapshot all recoverable local data; unlike exportData, retain evidence/history. */
-  backup() {
+  backup(format = 'compatible') {
     // Snapshot validation detects concurrent mutations without freezing writers.
-    this.#backupInFlight ??= createCompleteBackup(this.#root, this.#clock()).finally(() => { this.#backupInFlight = null })
-    return this.#backupInFlight
+    if (this.#backupInFlight !== null) {
+      if (this.#backupInFlight.format === format) return this.#backupInFlight.promise
+      return Promise.reject(Object.assign(new Error('已有备份正在进行。'), { code: 'backup-in-progress' }))
+    }
+    const promise = createCompleteBackup(this.#root, this.#clock(), format).finally(() => { this.#backupInFlight = null })
+    this.#backupInFlight = { format, promise }
+    return promise
   }
 
   /**
@@ -831,15 +947,16 @@ export class MemoryStore {
   /** Re-read one authority file when another process changed it. */
   #refreshState(state) {
     const stamp = fileStamp(state.file)
-    if (stamp === state.stamp) return false
+    if (stamp === state.stamp && !state.intent) return false
     const previousRecords = [...state.records.values()]
-    const parsed = readJsonl(state.file)
+    const parsed = readJsonl(state.file, this.#root)
     state.records = new Map(latestRevisions(parsed.records).map((record) => [record.id, record]))
     if (state.aggregate != null) state.aggregate = buildAggregate(state.records.values())
     state.lines = parsed.lines
     state.bytes = parsed.bytes
     state.corrupt = parsed.corrupt
-    state.stamp = stamp
+    state.stamp = parsed.stamp
+    state.intent = parsed.intent
     if (parsed.corrupt > 0) this.#quarantine(state.file, parsed.corruptLines)
     this.#notifyChange({ type: 'refresh', state, previousRecords, records: [...state.records.values()] })
     return true
@@ -907,7 +1024,14 @@ export class MemoryStore {
   /** Cross-process writer lock with stale-lock recovery. */
   #withLock(fn) {
     mkdirSync(this.#root, { recursive: true, mode: 0o700 })
-    return withFileLock(join(this.#root, '.write.lock'), fn)
+    return withFileLock(join(this.#root, '.write.lock'), () => {
+      const intent = readAuthorityIntent(this.#root)
+      if (intent) {
+        if (recoverAuthorityWrite(this.#root, intent)) this.#completeAuthorityIntent(intent)
+        else clearAuthorityIntent(this.#root)
+      }
+      return fn()
+    })
   }
 
   /** Per-scope counters for the panel/debug output. */

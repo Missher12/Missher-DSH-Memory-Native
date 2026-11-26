@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -99,6 +99,75 @@ test('a queued, explicit remember command grants the original immediately and ca
   assert.deepEqual(new SourcePassageIndex(root).search('银帆快照', { projectKey: key }), [])
 })
 
+test('ordinary-language credential assignments are stopped before capture and cannot be explicitly remembered', async t => {
+  const { root, capture, session, llm } = setup(t, { reply: REPLY })
+  t.after(() => capture.dispose())
+  for (const content of [
+    'Please remember: my previous password was QA-placeholder-42.',
+    '记住：我的访问令牌原来是QA-placeholder-43。',
+    'I changed my passphrase from QA-placeholder-first to QA-placeholder-next.',
+  ]) {
+    feed(capture, session, content)
+    await capture.flush()
+  }
+  const sources = join(root, 'capture', 'sources')
+  assert.equal(llm.calls(), 0)
+  assert.deepEqual(existsSync(sources) ? readdirSync(sources).filter(name => /\.json(?:\.gz)?$/u.test(name)) : [], [])
+  feed(capture, session, '记住：这套流程使用两步验证，修改前先复查负责人。')
+  await capture.flush()
+  assert.equal(llm.calls(), 1)
+})
+
+test('remembering a previous message keeps its native time and client zone', async t => {
+  const { root, capture, session, user, submit, end } = previousMessageFixture(t, { capture: { enabled: false } })
+  const chat = session('previous-time')
+  const key = projectIdentity(chat.header.cwd).key
+  const message = user('previous-dated-message', '昨天完成了水杉检修。')
+  message.source.clientTimeZone = 'Asia/Shanghai'
+  submit(chat, user('older', '普通的另一条消息。'))
+  submit(chat, message)
+  end(chat)
+  capture.setConfig(resolveConfig({ capture: { enabled: true, maxCallsPerDay: 0 } }))
+  const command = user('bare-command', '记住')
+  submit(chat, command)
+  await capture.waitForRemembering(chat, [command])
+
+  const [hit] = new SourcePassageIndex(root).search('水杉检修', { projectKey: key })
+  const [ref] = hit.record.sourceRefs
+  const source = readSource(root, ref.sourceId)
+  assert.equal(source.text, message.content)
+  assert.equal(source.eventTime, NOW + 1)
+  assert.equal(source.timeZone, 'Asia/Shanghai')
+  assert.equal(ref.eventTime, NOW + 1)
+  assert.equal(ref.timeZone, 'Asia/Shanghai')
+})
+
+test('an ordinary queued message keeps its submission clock through extraction', async t => {
+  const content = '昨天我完成了水杉检修。'
+  const { root, store, capture, session } = setup(t, { reply: JSON.stringify({ memories: [
+    { op: 'ADD', kind: 'episode', scope: 'project', content, confidence: 0.96, importance: 0.8 },
+  ] }) })
+  t.after(() => capture.dispose())
+  const message = { id: 'ordinary-dated', role: 'user', content, source: { kind: 'user', clientTimeZone: 'Asia/Shanghai' } }
+  const queuedAt = NOW - 86_400_000
+  capture.observe(session, { type: 'agent/inbox/spliced', seq: 0, time: queuedAt,
+    data: { target: 'next-turn', start: 0, inserted: [message] } })
+  capture.observe(session, { type: 'user/message', seq: 1, time: NOW, data: message })
+  capture.observe(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await capture.flush()
+
+  const [record] = new MemoryStore({ root }).open().listAll()
+  assert.ok(store.find(record.id, [{ scope: 'project', projectKey: projectIdentity(session.header.cwd).key }]))
+  const [ref] = record.sourceRefs
+  const source = readSource(root, ref.sourceId)
+  assert.equal(source.eventTime, queuedAt)
+  assert.equal(source.eventSeq, 1)
+  assert.equal(ref.eventTime, queuedAt)
+  assert.equal(ref.at, NOW)
+  assert.equal(ref.timeZone, 'Asia/Shanghai')
+  assert.equal(source.text.slice(ref.from, ref.to), ref.excerpt)
+})
+
 function previousMessageFixture(t, config) {
   const logs = new Map()
   const sessionQuery = { async observeSession(id) {
@@ -108,8 +177,10 @@ function previousMessageFixture(t, config) {
   const env = setup(t, { reply: REPLY, config, sessionQuery })
   t.after(() => env.capture.dispose())
   const session = (id, cwd = env.session.header.cwd, inherited = []) => {
-    logs.set(id, { events: [...inherited], inherited: inherited.length })
-    return { ...env.session, id, header: { cwd } }
+    const log = { events: [...inherited], inherited: inherited.length }
+    logs.set(id, log)
+    return { ...env.session, id, header: { cwd }, inheritedEventCount: inherited.length,
+      eventAt: seq => log.events[seq] }
   }
   const user = (id, content, sourceKind = 'user') => ({ id, role: 'user', content, source: { kind: sourceKind } })
   const append = (session, type, data) => {
@@ -122,6 +193,35 @@ function previousMessageFixture(t, config) {
   const end = session => append(session, 'turn/end', { reason: { kind: 'completed' } })
   return { ...env, session, user, submit, append, end }
 }
+
+test('capture records only an immediately preceding authorized user source', async t => {
+  const { root, capture, llm, session, user, submit, append, end } =
+    previousMessageFixture(t, { capture: { maxCallsPerDay: 0, minTurnChars: 1000 } })
+  const chat = session('capture-continuity')
+  const key = projectIdentity(chat.header.cwd).key
+  const passages = new SourcePassageIndex(root)
+  function turn(id, text) {
+    const message = user(id, text)
+    submit(chat, message)
+    append(chat, 'user/message', message)
+    append(chat, 'assistant/message', { message: { role: 'assistant', content: 'Acknowledged.' } })
+    end(chat)
+    return passages.search(text, { projectKey: key }).find(hit => hit.record.sourceRefs[0].messageId === id)?.record
+  }
+  const previous = turn('plan', "I'm trying to unlock Denim in my Larch program.")
+  append(chat, 'user/message', user('runtime', 'Current working directory is the project.', 'runtime-context'))
+  append(chat, 'user/message', user('plugin-context', 'A supplied memory reference.', 'memory'))
+  const next = turn('count', 'Actually, I need 41 units to unlock Denim, not 90.')
+  assert.ok(previous && next)
+  assert.equal(readSource(root, next.sourceRefs[0].sourceId).previousUserSourceId, previous.sourceRefs[0].sourceId)
+  assert.equal(next.previousUserSourceId, previous.sourceRefs[0].sourceId)
+  assert.equal(turn('opted-out', 'Do not save this turn. I switched to a different program.'), undefined)
+  const after = turn('other-count', 'Actually, I need 32 units to unlock Denim, not 50.')
+  assert.ok(after)
+  assert.equal(readSource(root, after.sourceRefs[0].sourceId).previousUserSourceId, undefined)
+  await capture.flush()
+  assert.equal(llm.calls(), 0)
+})
 
 test('bare remember promotes the previous user original without waiting for another reply or extracting the command', async t => {
   const { root, llm, capture, session, user, submit, append, end } = previousMessageFixture(t, { capture: { minTurnChars: 1000 } })

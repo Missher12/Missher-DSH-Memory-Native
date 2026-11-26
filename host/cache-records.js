@@ -63,11 +63,25 @@ function materialize(target) {
   if (state.loaded) return
   const object = JSON.parse(bytesOf(state).toString('utf8'))
   const keys = Object.keys(object)
-  if (keys.length !== RECORD_KEYS.length || keys.some((key, i) => key !== RECORD_KEYS[i])) {
+  if (keys.length === RECORD_KEYS.length && keys.every((key, i) => key === RECORD_KEYS[i])) {
+    // The canonical shape already has writable data properties in authority order.
+    Object.assign(target, object)
+  } else {
     for (const key of Reflect.ownKeys(target)) Reflect.deleteProperty(target, key)
+    Object.defineProperties(target, Object.getOwnPropertyDescriptors(object))
   }
-  Object.defineProperties(target, Object.getOwnPropertyDescriptors(object))
   state.loaded = true
+}
+
+/** Read bodies for a complete view without repeatedly inflating the same cache blocks. */
+export function materializeRecordBodies(records) {
+  const pending = []
+  for (const record of records) {
+    const state = lazy.get(record)
+    if (state && !state.loaded) pending.push(state)
+  }
+  pending.sort((left, right) => left.block - right.block)
+  for (const state of pending) materialize(state.target)
 }
 
 function hasUnloadedField(target, key) {
@@ -191,7 +205,8 @@ export function unpackRecords(data) {
       !Buffer.isBuffer(raw) || starts.length !== blockIds.length || lengths.length !== blockIds.length ||
       blockOffsets.length < 1 || blockOffsets[0] !== 0 || blockOffsets.at(-1) !== raw.length ||
       !Array.isArray(data.scopes) || !(data.index?.slots instanceof Int32Array) || !(data.graph?.records instanceof Int32Array) ||
-      columns.some((column) => !Array.isArray(column.values) || !(column.refs instanceof Uint32Array) || column.refs.length !== blockIds.length)) {
+      columns.some((column) => (!Array.isArray(column.values) && !(column.values instanceof Float64Array)) ||
+        !(column.refs instanceof Uint32Array) || column.refs.length !== blockIds.length)) {
     throw new Error('invalid packed memory records')
   }
   const storage = { raw, blockOffsets, cache: new Map() }, records = new Array(blockIds.length), targets = new Array(blockIds.length)
@@ -200,8 +215,10 @@ export function unpackRecords(data) {
     if (blockIds[i] + 1 >= blockOffsets.length || blockOffsets[blockIds[i]] > blockOffsets[blockIds[i] + 1] ||
         typeof columns[0].values[columns[0].refs[i] - 1] !== 'string') throw new Error('invalid cached record')
   }
-  for (const column of columns) {
-    for (const ref of column.refs) if (ref > column.values.length) throw new Error('invalid cached metadata')
+  for (const { values, refs } of columns) {
+    for (let i = 0; i < refs.length; i++) {
+      if (refs[i] > values.length) throw new Error('invalid cached metadata')
+    }
   }
   function hotAt(i) {
     if (targets[i]) return targets[i]

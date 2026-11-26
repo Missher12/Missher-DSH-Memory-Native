@@ -1,6 +1,6 @@
 /** Small local persistence primitives shared by settings, authority and backups. */
 import { randomUUID } from 'node:crypto'
-import { closeSync, ftruncateSync, fsyncSync, fstatSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, ftruncateSync, fsync, fsyncSync, fstatSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export function writeAll(fd, value) {
@@ -19,25 +19,44 @@ export function truncateFile(file, size) {
   finally { closeSync(fd) }
 }
 
-export function syncDirectory(dir) {
-  let fd
-  try { fd = openSync(dir, 'r') }
+const unsupportedDirectorySync = error => ['EINVAL', 'ENOTSUP', 'EBADF'].includes(error?.code) ||
+  (process.platform === 'win32' && error?.code === 'EPERM')
+
+function openDirectoryForSync(dir) {
+  try { return openSync(dir, 'r') }
   catch (error) {
-    const knownUnsupported = ['EINVAL', 'ENOTSUP', 'EBADF'].includes(error?.code)
-    const windowsDirectoryOpen = process.platform === 'win32' && ['EPERM', 'EISDIR'].includes(error?.code)
-    if (knownUnsupported || windowsDirectoryOpen) return
+    if (unsupportedDirectorySync(error) || (process.platform === 'win32' && error?.code === 'EISDIR')) return undefined
     throw error
   }
+}
+
+export function syncDirectory(dir) {
+  const fd = openDirectoryForSync(dir)
+  if (fd === undefined) return
   try { fsyncSync(fd) }
-  catch (error) {
-    const knownUnsupported = ['EINVAL', 'ENOTSUP', 'EBADF'].includes(error?.code)
-    if (!knownUnsupported && !(process.platform === 'win32' && error?.code === 'EPERM')) throw error
-  }
+  catch (error) { if (!unsupportedDirectorySync(error)) throw error }
   finally { closeSync(fd) }
 }
 
+export const flushFile = fd => new Promise((resolve, reject) => fsync(fd, error => error ? reject(error) : resolve()))
+
+export async function syncDirectoryAsync(dir) {
+  const fd = openDirectoryForSync(dir)
+  if (fd === undefined) return
+  try { await flushFile(fd) }
+  catch (error) { if (!unsupportedDirectorySync(error)) throw error }
+  finally { closeSync(fd) }
+}
+
+const temporaryName = file => `${file}.${process.pid}.${randomUUID()}.tmp`
+
+function clearTemporaryFile(file, fd) {
+  if (fd !== undefined) closeSync(fd)
+  try { unlinkSync(file) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+}
+
 export function atomicWritePrivate(file, value) {
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  const temporary = temporaryName(file)
   let fd
   try {
     fd = openSync(temporary, 'wx', 0o600)
@@ -47,16 +66,31 @@ export function atomicWritePrivate(file, value) {
     renameSync(temporary, file)
     syncDirectory(dirname(file))
   } finally {
-    if (fd !== undefined) closeSync(fd)
-    try { unlinkSync(temporary) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+    clearTemporaryFile(temporary, fd)
+  }
+}
+
+/** Private replace with the same durability order as atomicWritePrivate. */
+export async function atomicWritePrivateAsync(file, value) {
+  const temporary = temporaryName(file)
+  let fd
+  try {
+    fd = openSync(temporary, 'wx', 0o600)
+    writeAll(fd, value)
+    await flushFile(fd)
+    closeSync(fd); fd = undefined
+    renameSync(temporary, file)
+    await syncDirectoryAsync(dirname(file))
+  } finally {
+    clearTemporaryFile(temporary, fd)
   }
 }
 
 const sameFile = (left, right) => left.dev === right.dev && left.ino === right.ino
 
 /** Legacy numeric PID locks are accepted; age alone never evicts a live owner. */
-export function withFileLock(file, callback) {
-  const deadline = performance.now() + 3000
+export function acquireFileLock(file, waitMs = 3000) {
+  const deadline = performance.now() + waitMs
   let fd, owned
   for (;;) {
     try {
@@ -79,14 +113,18 @@ export function withFileLock(file, callback) {
         } else abandoned = Date.now() - before.mtimeMs > 30_000
         if (abandoned && sameFile(before, statSync(file))) { unlinkSync(file); continue }
       } catch (inspection) { if (inspection?.code !== 'ENOENT') throw inspection }
-      if (performance.now() >= deadline) throw new Error('memory store is locked by another process')
+      if (performance.now() >= deadline) throw Object.assign(new Error('memory store is locked by another process'), { code: 'memory-lock-in-use' })
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
     }
   }
-  try { return callback() }
-  finally {
+  return () => {
     closeSync(fd)
     try { if (sameFile(owned, statSync(file))) unlinkSync(file) }
     catch (error) { if (error?.code !== 'ENOENT') throw error }
   }
+}
+
+export function withFileLock(file, callback) {
+  const release = acquireFileLock(file)
+  try { return callback() } finally { release() }
 }

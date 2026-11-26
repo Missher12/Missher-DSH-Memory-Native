@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildRecord } from '../host/records.js'
+import { buildRecord, nextRevision } from '../host/records.js'
 import { projectIdentity } from '../host/paths.js'
 import { saveSource, readSource, captureTaskIdOf, writeCaptureTask } from '../host/capture-journal.js'
 import { promoteMemoryToKnowledge, listKnowledgeNotes } from '../host/knowledge.js'
@@ -19,8 +19,14 @@ import { LocalEmbedding } from '../host/embedding.js'
 import { ObsidianSync } from '../host/obsidian-sync.js'
 import { QUERIES } from './bench-corpus.mjs'
 
-const COUNT = 50_000, NOTE_EVERY = 10, SOURCE_COUNT = 10, SOURCE_PARTS = 25, SOURCE_PART_LENGTH = 200
-const NOTE_COUNT = COUNT / NOTE_EVERY
+const COUNT = Number(process.env.DSH_BENCH_RECORDS ?? 50_000)
+const INCLUDE_RETIRED = process.env.DSH_BENCH_WITH_RETIRED === '1'
+const NOTE_EVERY = 10, SOURCE_COUNT = 10, SOURCE_PARTS = 25, SOURCE_PART_LENGTH = 200
+const PROJECT_COUNT = Math.floor(COUNT * .6), VISIBLE_COUNT = Math.floor(COUNT * .9)
+assert.ok(Number.isSafeInteger(COUNT) && PROJECT_COUNT > SOURCE_COUNT * SOURCE_PARTS + 10)
+const UPDATE_ID = 'mem_p' + String(PROJECT_COUNT - 9).padStart(5, '0')
+const FORGET_ID = 'mem_p' + String(PROJECT_COUNT - 8).padStart(5, '0')
+const NOTE_COUNT = Math.ceil(COUNT / NOTE_EVERY)
 let NOW = Number(process.env.DSH_BENCH_NOW) || Date.now()
 const PROJECT = projectIdentity('/tmp/dsh-memory-mixed-capacity/current-project').key
 const FOREIGN = projectIdentity('/tmp/dsh-memory-mixed-capacity/foreign-project').key
@@ -34,8 +40,8 @@ const common = ['中文 检索', '项目 偏好', '记忆 注入', 'SQLite', 'pn
 const contentWords = '存储 决策 经验 上下文 注入 数据库 接口 面板 测试 版本 仓库 方案 设计'.split(' ')
 
 function makeContent(index, id, topic, excerpt = '') {
-  if (id === 'mem_p29991') return '旧更新原句：BENCH_UPDATE_OLD；该约定仍完整保留，直到增量轮更新。'
-  if (id === 'mem_p29992') return '待遗忘原句：BENCH_FORGET_OLD；该约定只用于验证删除后的索引和阅读页失效。'
+  if (id === UPDATE_ID) return '旧更新原句：BENCH_UPDATE_OLD；该约定仍完整保留，直到增量轮更新。'
+  if (id === FORGET_ID) return '待遗忘原句：BENCH_FORGET_OLD；该约定只用于验证删除后的索引和阅读页失效。'
   if (id === 'mem_f00000') return 'FOREIGNZEBRA：这条事实只属于外部项目，必须被当前项目检索隔离。'
   if (excerpt) return `用户确认：${excerpt}`
   const terms = common[index % common.length]
@@ -70,13 +76,14 @@ function writeCorpus(root) {
   const taskId = captureTaskIdOf({ sessionId, turnKey: 'bench-long-mixed-source', segmentIndex: 0, sourceIds, total: 1 })
   const grants = [], sourceEntries = sourceMeta.map(source => ({ sourceId: source.id, from: 0, to: source.text.length }))
   const byScope = { project: [], global: [], foreign: [] }
+  const statuses = { active: 0, archived: 0, deleted: 0 }
   const topicCounts = { project: 240, global: 100, foreign: 40 }
 
   for (let index = 0; index < COUNT; index++) {
-    const scopeName = index < 30_000 ? 'project' : index < 45_000 ? 'global' : 'foreign'
+    const scopeName = index < PROJECT_COUNT ? 'project' : index < VISIBLE_COUNT ? 'global' : 'foreign'
     const scope = scopeName === 'global' ? 'global' : 'project'
     const projectKey = scopeName === 'project' ? PROJECT : scopeName === 'foreign' ? FOREIGN : null
-    const localIndex = scopeName === 'project' ? index : scopeName === 'global' ? index - 30_000 : index - 45_000
+    const localIndex = scopeName === 'project' ? index : scopeName === 'global' ? index - PROJECT_COUNT : index - VISIBLE_COUNT
     const prefix = scopeName === 'project' ? 'p' : scopeName === 'global' ? 'g' : 'f'
     const id = `mem_${prefix}${String(localIndex).padStart(5, '0')}`
     const topic = `${scopeName === 'project' ? '项目' : scopeName === 'global' ? '全局' : '隔离'}主题${String(localIndex % topicCounts[scopeName]).padStart(3, '0')}`
@@ -92,7 +99,11 @@ function writeCorpus(root) {
       captureKey: sourceRef ? `${taskId}:0:exact` : null, sourceRefs: sourceRef ? [sourceRef] : [] },
     { id, now: NOW - COUNT + index })
     assert.ok(result.ok, result.ok ? '' : result.reason)
-    const record = result.record
+    const canRetire = INCLUDE_RETIRED && id !== UPDATE_ID && id !== FORGET_ID && id !== 'mem_p00001'
+      && id !== 'mem_f00000' && !sourceRef
+    const retiredStatus = index % 50 === 11 ? 'deleted' : index % 50 === 13 ? 'archived' : null
+    const record = canRetire && retiredStatus ? nextRevision(result.record, { status: retiredStatus }, result.record.updatedAt) : result.record
+    statuses[record.status]++
     byScope[scopeName].push(JSON.stringify(record))
     if (sourceRef) grants.push({ id, revision: record.revision, hash: record.contentHash, sourceId: sourceRef.sourceId, from: sourceRef.from, to: sourceRef.to })
     if (index % NOTE_EVERY === 0) promoteMemoryToKnowledge(root, record)
@@ -104,7 +115,7 @@ function writeCorpus(root) {
     segmentIndex: 0, total: 1, sourceIds, status: 'done', callState: 'completed', attempts: 1,
     segment: { entries: sourceEntries }, sourceGrants: grants, createdAt: NOW, updatedAt: NOW })
   return { projectRecords: byScope.project.length, globalRecords: byScope.global.length, foreignRecords: byScope.foreign.length,
-    records: COUNT, notes: NOTE_COUNT, sourceCount: SOURCE_COUNT, sourcePartsPerRecord: 1,
+    records: COUNT, statuses, notes: NOTE_COUNT, sourceCount: SOURCE_COUNT, sourcePartsPerRecord: 1,
     sourceChars: sourceMeta.reduce((sum, source) => sum + source.chars, 0), sourceGrantCount: sourceMeta.length,
     sourceBackedRecords: grants.length, taskId }
 }
@@ -127,7 +138,9 @@ function verifyAuthority(runtime, root) {
     }
   }
   assert.equal(records, COUNT)
-  return { records, authorityBytes }
+  const deleted = [...actual.values()].filter(record => record.status === 'deleted').length
+  assert.equal(runtime.index.size, COUNT - deleted)
+  return { records, authorityBytes, deleted, searchable: runtime.index.size }
 }
 
 function verifyNotes(runtime, root) {
@@ -245,7 +258,7 @@ async function sourceMaintenancePhase(root, phase) {
       queryValidationCallsBaseline: passageHits.length, queryUniqueSources: new Set(passageHits.map(hit => hit.record.sourceRefs[0].sourceId)).size,
       firstQueryMs: round(passageQueryTimes[0]), queryStableP95Ms: round(percentile95(passageQueryTimes.slice(1))),
       repeatedQueries: passageQueryTimes.length, stableQueries: passageQueryTimes.length - 1 },
-    sourcePassageCorpus: { segments: allPassages.length, activeMemoryRecords: 45_000, fullKnowledgeNotes: NOTE_COUNT },
+    sourcePassageCorpus: { segments: allPassages.length, recordsInSelectedScope: VISIBLE_COUNT, fullKnowledgeNotes: NOTE_COUNT },
     memory: memorySnapshot() }
   passageIndex; runtime.dispose()
   return result
@@ -327,15 +340,15 @@ async function syncIncrementalPhase(root, vault) {
   }
   const scopes = [{ scope: 'project', projectKey: PROJECT }]
   const mutationStart = performance.now()
-  runtime.store.update('mem_p29991', { content: '更新后的完整原句：BENCH_UPDATE_NEW；确认此次变更应进入增量阅读索引。' }, scopes)
-  runtime.store.remove('mem_p29992', scopes)
+  runtime.store.update(UPDATE_ID, { content: '更新后的完整原句：BENCH_UPDATE_NEW；确认此次变更应进入增量阅读索引。' }, scopes)
+  runtime.store.remove(FORGET_ID, scopes)
   const mutationMs = elapsed(mutationStart)
   const incrementalStart = performance.now()
-  const result = await sync.run({ fullScan: false, recordIds: ['mem_p29991', 'mem_p29992'] })
+  const result = await sync.run({ fullScan: false, recordIds: [UPDATE_ID, FORGET_ID] })
   const incrementalMs = elapsed(incrementalStart)
   assert.equal(result.mode, 'incremental')
   assert.equal(result.errors.length, 0)
-  assert.deepEqual([...openedNotes].sort(), ['mem_p29991.md', 'mem_p29992.md'])
+  assert.deepEqual([...openedNotes].sort(), [UPDATE_ID + '.md', FORGET_ID + '.md'].sort())
   assert.equal(openedKnowledge.size, 0)
   assert.ok(openedReading.size > 0 && openedReading.size < allMarkdown(join(dir, '阅读')).length)
   const after = statSync(unchanged)
@@ -345,9 +358,9 @@ async function syncIncrementalPhase(root, vault) {
   assert.ok(readingText.includes('BENCH_UPDATE_NEW'))
   assert.equal(readingText.includes('BENCH_UPDATE_OLD'), false)
   assert.equal(readingText.includes('BENCH_FORGET_OLD'), false)
-  assert.equal(statMaybe(join(vault, 'DSH Memory', 'mem_p29992.md')), false)
-  assert.ok(runtime.index.searchPage('BENCH_UPDATE_NEW', { projectKey: PROJECT, now: NOW }).hits.some(hit => hit.record.id === 'mem_p29991'))
-  assert.equal(runtime.index.searchPage('BENCH_FORGET_OLD', { projectKey: PROJECT, now: NOW }).hits.some(hit => hit.record.id === 'mem_p29992'), false)
+  assert.equal(statMaybe(join(vault, 'DSH Memory', FORGET_ID + '.md')), false)
+  assert.ok(runtime.index.searchPage('BENCH_UPDATE_NEW', { projectKey: PROJECT, now: NOW }).hits.some(hit => hit.record.id === UPDATE_ID))
+  assert.equal(runtime.index.searchPage('BENCH_FORGET_OLD', { projectKey: PROJECT, now: NOW }).hits.some(hit => hit.record.id === FORGET_ID), false)
   const output = { reopenMs, reopenedErrors: reopened.errors.length, mutationMs, incrementalMs,
     mode: result.mode, sourceNotesRead: openedNotes.size, knowledgeNotesRead: openedKnowledge.size,
     readingPagesRead: openedReading.size, exported: result.exported, imported: result.imported,
@@ -395,7 +408,7 @@ if (process.argv[2] === '--worker') {
     return result
   }
   try {
-    process.stdout.write('Generating isolated corpus (50,000 memories, 5,000 full notes, 10 long sources)...\n')
+    process.stdout.write(`Generating isolated corpus (${COUNT} memories, ${NOTE_COUNT} full notes, ${SOURCE_COUNT} long sources)...\n`)
     report.corpus = writeCorpus(root); NOW = Date.now()
     report.environment.benchmarkNow = NOW; report.environment.benchmarkTime = new Date(NOW).toISOString(); save()
     const projectBytes = statSync(join(root, 'projects', PROJECT, 'memories.jsonl')).size
@@ -412,7 +425,7 @@ if (process.argv[2] === '--worker') {
     if (!report.phases['semantic-sample-first']?.error) selectedRun('semantic-sample-reopen')
     selectedRun('sync-first')
     selectedRun('sync-reopen-incremental')
-    report.method = { notes: '5,000 complete promoted notes; full bodies read back against linked authority',
+    report.method = { notes: `${NOTE_COUNT} complete promoted notes; runtime phases compare full bodies with linked authority`,
       longUserSources: '10 saved, compressed, read-back verified 5,000-character user messages; 250 exact 200-character granted excerpts',
       semanticModel: 'real LocalEmbedding with allowDownload=false; four-passage sample and 75-record semantic index sample; full corpus embedding is excluded',
       queryPercentile: 'nearest-rank p95 over the listed repeated queries', updateForget: 'one project memory updated and one forgotten after Obsidian state reopen' }

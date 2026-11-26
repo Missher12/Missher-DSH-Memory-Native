@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep, win32 } from 'node:path'
 import { MemoryStore } from '../host/store.js'
@@ -9,6 +9,8 @@ import { ObsidianSync } from '../host/obsidian-sync.js'
 import { resolveObsidianTarget } from '../host/obsidian.js'
 import { promoteMemoryToKnowledge } from '../host/knowledge.js'
 import { buildReadingPages, refreshReadingPages } from '../host/obsidian-reading.js'
+import { managedHistoryName } from '../host/obsidian-artifacts.js'
+import { noteDigest } from '../host/obsidian-note.js'
 
 function setup(t) {
   const root = mkdtempSync(join(tmpdir(), 'memory-reading-')), vault = join(root, 'vault')
@@ -54,6 +56,47 @@ test('reading groups complete source text and decisions by topic, keeps project 
   for (const file of ['阅读/首页.md', ...pages.map(p => pageKeyFromFile(c.dir, p.file))]) {
     for (const [, target] of readFileSync(join(c.dir, file), 'utf8').matchAll(/\[\[([^|\]]+)\|/gu)) assert.ok(statSync(join(c.config.vaultPath, target + '.md')).isFile(), target)
   }
+})
+
+test('incremental rendering keeps unchanged topics and collections without formatting their bodies', t => {
+  const c = setup(t)
+  const changed = c.write({ topic: '快照', content: '更新前的完整约定', kind: 'decision' })
+  const next = { ...changed, revision: changed.revision + 1, content: '更新后的完整约定' }
+  const moved = c.write({ topic: '旧主题', content: '归类到新主题的资料' })
+  const note = { scope: 'project', projectKey: 'project-alpha', memoryId: moved.id, topic: '旧主题', title: '相关笔记', file: 'linked.md' }
+  const other = c.write({ projectKey: 'project-beta', content: '另一项目完整记录' })
+  const now = Date.now(), folder = c.config.folder
+  const first = buildReadingPages({ records: [changed, moved, other], notes: [note], files: new Map(), folder, now })
+  const input = {
+    records: [next, { ...moved, status: 'deleted' }, other], notes: [note],
+    files: new Map([[next.id, '另一个文件名.md']]), folder, now,
+  }
+  const full = buildReadingPages(input)
+  const incremental = buildReadingPages({ ...input, previousInputs: first.inputs })
+  const unchanged = [...first.pages].filter(([, text]) => text.includes('另一项目完整记录')).map(([file]) => file)
+  assert.ok(unchanged.length >= 2)
+  for (const file of unchanged) {
+    assert.equal(incremental.pages.has(file), false)
+    assert.equal(incremental.inputs[file], first.inputs[file])
+  }
+  const merged = new Map([...first.pages].filter(([file]) => Object.hasOwn(incremental.inputs, file)))
+  for (const [file, body] of incremental.pages) merged.set(file, body)
+  assert.deepEqual(merged, full.pages)
+  assert.ok([...incremental.pages.values()].some(text => text.includes('另一个文件名')))
+  assert.ok(![...merged.values()].some(text => text.includes('linked.md')))
+})
+
+test('an unchanged incremental reopen does not enumerate the memory library', async t => {
+  const c = setup(t)
+  c.write({ content: '打开后没有新改动的原话' })
+  assert.deepEqual((await c.sync.run()).errors, [])
+  c.sync.dispose()
+  const resumed = c.make(), listAll = c.store.listAll.bind(c.store)
+  let listCalls = 0
+  c.store.listAll = (...args) => { listCalls++; return listAll(...args) }
+  const result = await resumed.run({ fullScan: false })
+  assert.equal(result.mode, 'incremental')
+  assert.equal(listCalls, 0)
 })
 
 test('reading merges only formatting variants and explicit same-topic aliases, with redirects that preserve personal additions', async t => {
@@ -113,11 +156,10 @@ test('a redirect rechecks an alias proof stored under another topic before writi
   const redirect = topicPages(c.dir).find(page => pageKeyFromFile(c.dir, page.file).startsWith('阅读/主题/CloudSync-'))
   assert.ok(redirect)
 
-  c.sync.readingSignature = null
   const replace = c.sync.replace.bind(c.sync)
   let removedProof = false, wroteRedirect = false
-  c.sync.replace = async (file, before, after, vaultDir) => {
-    const result = await replace(file, before, after, vaultDir)
+  c.sync.replace = async (file, ...args) => {
+    const result = await replace(file, ...args)
     if (!removedProof && pageKeyFromFile(c.dir, file).startsWith('阅读/主题/云同步-')) {
       c.store.remove(proof.id, [{ scope: 'project', projectKey: 'project-alpha' }])
       removedProof = true
@@ -182,6 +224,43 @@ test('forget removes derived content and linked notes from reading pages without
   assert.equal(c.store.find(record.id, [{scope:'project',projectKey:'project-alpha'}]).status, 'deleted')
 })
 
+test('regenerating untouched reading pages does not retain their previous bodies', async t => {
+  const c = setup(t)
+  c.config.autoSync = false
+  const old = '只在此记忆使用的旧阅读页标识 READING-5681。'
+  const record = c.write({ content: old })
+  await c.sync.run()
+  assert.ok(topicPages(c.dir).some(page => page.text.includes(old)))
+  const scope = [{ scope: 'project', projectKey: 'project-alpha' }]
+  c.store.remove(record.id, scope)
+  assert.equal(c.store.purge(record.id, scope), true)
+  assert.deepEqual((await c.make().run()).errors, [])
+  const history = join(c.dir, '_history')
+  const archives = existsSync(history) ? readdirSync(history).map(file => readFileSync(join(history, file), 'utf8')) : []
+  assert.ok(archives.every(text => !text.includes(old)))
+  assert.ok(topicPages(c.dir).every(page => !page.text.includes(old)))
+})
+
+test('reopening repairs an interrupted reading page publication and retains edited temporary bytes', async t => {
+  const c = setup(t)
+  c.config.autoSync = false
+  c.write({ content:'重开的阅读页仍有有效原文。' })
+  await c.sync.run()
+  const page = topicPages(c.dir)[0]
+  const history = join(c.dir,'_history')
+  mkdirSync(history,{ recursive:true })
+  const pending = join(history,managedHistoryName('reading',noteDigest(page.text)))
+  const edited = join(history,managedHistoryName('reading',noteDigest(page.text)))
+  const author = page.text + '\n独立保留的手写内容。\n'
+  renameSync(page.file,pending)
+  writeFileSync(edited,author)
+  c.sync.dispose()
+  assert.deepEqual((await c.make().run()).errors,[])
+  assert.equal(readFileSync(page.file,'utf8'),page.text)
+  assert.equal(existsSync(pending),false)
+  assert.equal(readFileSync(edited,'utf8'),author)
+})
+
 test('pre-existing personal home page is not overwritten or treated as a memory', async t => {
   const c = setup(t); c.write({content:'独立的界面测试'})
   mkdirSync(join(c.dir, '阅读'), {recursive:true})
@@ -204,10 +283,16 @@ test('future and expired facts and quoted material cannot appear as current agre
   const future = c.write({content:'未来才生效的约定', validFrom:now + 60000})
   const expired = c.write({content:'已经过期的旧约定', validTo:now - 1000})
   const quoted = c.write({content:'仅为引用的资料内容', quoted:true})
-  const render = time => [...buildReadingPages({records:[future,expired,quoted],notes:[],files:new Map(),folder:'DSH Memory',now:time}).pages.values()][0]
-  assert.doesNotMatch(render(now), /## 当前事实与偏好/u)
-  assert.match(render(now), /## 尚未生效/u); assert.match(render(now), /## 历史记录/u); assert.match(render(now), /## 引用资料/u)
-  assert.match(render(now + 60001), /## 当前事实与偏好/u)
+  const inputs = { records: [future, expired, quoted], notes: [], files: new Map(), folder: 'DSH Memory' }
+  const first = buildReadingPages({ ...inputs, now })
+  const topic = [...first.pages.keys()].find(file => file.startsWith('阅读/主题/'))
+  assert.ok(topic)
+  assert.doesNotMatch(first.pages.get(topic), /## 当前事实与偏好/u)
+  assert.match(first.pages.get(topic), /## 尚未生效/u)
+  assert.match(first.pages.get(topic), /## 历史记录/u)
+  assert.match(first.pages.get(topic), /## 引用资料/u)
+  const after = buildReadingPages({ ...inputs, now: now + 60001, previousInputs: first.inputs })
+  assert.match(after.pages.get(topic), /## 当前事实与偏好/u)
 })
 
 test('a restart between writing generated pages and saving their baseline is recoverable', async t => {

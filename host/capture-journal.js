@@ -16,6 +16,7 @@ import {
   existsSync,
   fsyncSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -25,11 +26,17 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { dirname, join } from 'node:path'
+import { setImmediate as yieldToHost } from 'node:timers/promises'
 
 import { nextRevision } from './records.js'
-import { truncateFile } from './persistence.js'
+import { atomicWritePrivate, syncDirectory, truncateFile } from './persistence.js'
+import { readAuthorityIntent } from './authority-intent.js'
+import { normalizeClientTimeZone, sourceEventSequence, sourceEventTime } from './source-time.js'
+import { normalizeUsage } from './capture-budget.js'
+import { SOURCE_PASSAGE_CACHE_DIR, SOURCE_PASSAGE_CACHE_KEY } from './paths.js'
 
 export const CAPTURE_DIR = 'capture'
 export const SOURCE_DIR = 'sources'
@@ -164,13 +171,20 @@ export function saveSource(root, input) {
   const messageId = typeof input?.messageId === 'string' && input.messageId !== '' ? input.messageId : null
   const sourceKind = typeof input?.sourceKind === 'string' && input.sourceKind !== '' ? input.sourceKind : 'unknown'
   const sourceForm = typeof input?.sourceForm === 'string' && input.sourceForm !== '' ? input.sourceForm : undefined
+  const eventTime = sourceEventTime(input.eventTime)
+  const timeZone = eventTime !== undefined && role === 'user' && sourceKind === 'user'
+    ? normalizeClientTimeZone(input.timeZone) : undefined
   const identity = sourceIdentityOf({ ...input, messageId, role, text })
   const id = sourceIdOf({ ...input, messageId, role, text })
+  const previous = input.previousUserSourceId
   const file = join(sourceDir(root), `${id}.json`)
   const gzipFile = `${file}.gz`
   const payload = {
     id, sessionId, messageId, role, sourceKind,
     ...(sourceForm === undefined ? {} : { sourceForm }),
+    eventTime, timeZone, eventSeq: sourceEventSequence(input.eventSeq),
+    ...(role === 'user' && sourceKind === 'user' && typeof previous === 'string' &&
+      previous !== id && SOURCE_ID_PATTERN.test(previous) ? { previousUserSourceId: previous } : {}),
     at, chars: text.length, identityKind: identity.kind,
     projectKey: typeof input.projectKey === 'string' ? input.projectKey : null,
     compressed: true, textHash: createHash('sha256').update(text).digest('hex'), textBytes: Buffer.byteLength(text),
@@ -193,20 +207,19 @@ export function saveSource(root, input) {
 }
 
 /** Read one source, or null when missing/corrupt. */
-export function readSource(root, id) {
+export function readSource(root, id, { includeVerifiedHash = false } = {}) {
   if (typeof id !== 'string' || !SOURCE_ID_PATTERN.test(id)) return null
   try {
     const dir = sourceDir(root)
     const value = JSON.parse(readFileSync(join(dir, `${id}.json`), 'utf8'))
     if (value?.id !== id || typeof value.sessionId !== 'string') return null
-    if (typeof value.text === 'string') return value
+    if (typeof value.text === 'string') return includeVerifiedHash ? { ...value, textHash: hash(value.text) } : value
     if (value.compressed !== true) return null
     const text = gunzipSync(readFileSync(join(dir, `${id}.json.gz`))).toString('utf8')
-    if (typeof value.textHash === 'string') {
-      const actual = createHash('sha256').update(text).digest('hex')
-      if (actual !== value.textHash) return null
-    }
-    return { ...value, text }
+    const expectedHash = typeof value.textHash === 'string' ? value.textHash : undefined
+    const verifiedHash = expectedHash !== undefined || includeVerifiedHash ? hash(text) : undefined
+    if (expectedHash !== undefined && expectedHash !== verifiedHash) return null
+    return { ...value, text, ...(includeVerifiedHash ? { textHash: verifiedHash } : {}) }
   } catch {
     return null
   }
@@ -217,16 +230,34 @@ export function readSource(root, id) {
 function blockedFile(root, sourceId) { return join(sourceDir(root), sourceId + '.recall-blocked') }
 
 export function canReadSource(root, id) {
-  return typeof id === 'string' && SOURCE_ID_PATTERN.test(id) && !existsSync(blockedFile(root, id))
+  if (typeof id !== 'string' || !SOURCE_ID_PATTERN.test(id)) return false
+  try {
+    if (readAuthorityIntent(root)?.targets.sourceIds.includes(id)) return false
+    return statSync(blockedFile(root, id), { throwIfNoEntry: false }) === undefined
+  } catch (error) { return error?.code === 'ENOENT' }
 }
 
 export function blockSourceRecall(root, record) {
-  for (const ref of record?.sourceRefs ?? []) {
-    if (!SOURCE_ID_PATTERN.test(ref.sourceId)) continue
-    const file = blockedFile(root, ref.sourceId)
-    if (existsSync(file)) continue
-    writeAtomic(file, '')
+  const ids = new Set((record?.sourceRefs ?? []).map(ref => ref?.sourceId)
+    .filter(id => typeof id === 'string' && SOURCE_ID_PATTERN.test(id)))
+  if (!ids.size) return
+  const directory = sourceDir(root)
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  for (const id of ids) {
+    const file = blockedFile(root, id)
+    if (!existsSync(file)) atomicWritePrivate(file, '')
   }
+  const cache = join(root, SOURCE_PASSAGE_CACHE_DIR)
+  try {
+    if (lstatSync(cache, { throwIfNoEntry: false })?.isDirectory()) {
+      unlinkSync(join(cache, SOURCE_PASSAGE_CACHE_KEY))
+      syncDirectory(cache)
+    }
+  } catch { /* the original's durable block is authoritative even if its cache cannot be removed */ }
+  // A retry may find a marker renamed before its directory was synced.
+  syncDirectory(directory)
+  syncDirectory(captureDir(root))
+  syncDirectory(root)
 }
 
 /** A denied turn retains replay barriers and ids, without retaining originals. */
@@ -300,13 +331,14 @@ function compactTasks(file) {
 }
 
 /** Read a JSONL journal, tracking corrupt lines instead of pretending it is complete. */
-function readJournal(file, pattern) {
+function readJournal(file, pattern, strict = false) {
   const map = new Map()
   let corrupt = 0
   let text
   try {
     text = readFileSync(file, 'utf8')
-  } catch {
+  } catch (error) {
+    if (strict && error?.code !== 'ENOENT') throw error
     return { map, corrupt }
   }
   for (const line of text.split('\n')) {
@@ -337,6 +369,54 @@ export function readCaptureTasks(root) {
   const file = tasksPath(root)
   return [...readJournal(file, TASK_ID_PATTERN).map.values()]
     .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0))
+}
+
+/** Distinguish missing evidence from unreadable evidence when freezing a backup. */
+export function readCaptureTaskJournal(root) {
+  const { map, corrupt } = readJournal(tasksPath(root), TASK_ID_PATTERN, true)
+  return { rows: [...map.values()], corrupt }
+}
+
+/** Remove denied text from every saved revision while keeping its call receipt. */
+export function retireRestoredCaptureTasks(root, denied) {
+  const ids = new Set()
+  if (!denied.size) return ids
+  const file = tasksPath(root)
+  let text
+  try { text = readFileSync(file, 'utf8') }
+  catch (error) { if (error?.code === 'ENOENT') return ids; throw error }
+  const lines = text.split('\n')
+  const tasks = lines.map(line => {
+    if (!line.trim()) return null
+    let task
+    try { task = JSON.parse(line) } catch { /* Report the unsafe snapshot below. */ }
+    if (!TASK_ID_PATTERN.test(task?.id ?? '')) throw new Error('旧提炼记录无法核对，暂不能应用禁存凭据。')
+    const sourceIds = Array.isArray(task.sourceIds) ? task.sourceIds : []
+    const entries = Array.isArray(task.segment?.entries) ? task.segment.entries : []
+    if (sourceIds.some(id => denied.has(id)) || entries.some(ref => denied.has(ref?.sourceId))) ids.add(task.id)
+    return task
+  })
+  if (!ids.size) return ids
+  const scalarFields = ['id','sessionId','projectKey','turnKey','revision','createdAt','updatedAt','attempts',
+    'explicit','manual','lastCallAt','completedAt','automaticCallDay','automaticCallAt','automaticCalls','requestMaxTokens','resultFinishKind']
+  const reservationFields = ['day','at','calendar','calls','state','promptTokens','outputTokens','totalTokens','actualTokens']
+  const metadata = (object, keys) => Object.fromEntries(keys.filter(key =>
+    ['string','number','boolean'].includes(typeof object?.[key])).map(key => [key,object[key]]))
+  const sanitized = tasks.map((task,index) => {
+    if (task === null || !ids.has(task.id)) return lines[index]
+    const callState = CALL_STATES.includes(task.callState) && task.callState !== 'requested' ? task.callState : 'unknown'
+    const reservation = task.budgetReservation
+    return JSON.stringify({ ...metadata(task, scalarFields),
+      sourceIds: (Array.isArray(task.sourceIds) ? task.sourceIds : []).filter(id=>SOURCE_ID_PATTERN.test(id)),
+      status:'skipped', callState, revokedOnRestore:true, reason:'离线恢复已应用禁存记录',
+      resultUsage:normalizeUsage(task.resultUsage),
+      ...(task.route ? { route:metadata(task.route,['provider','model','reasoningEffort']) } : {}),
+      ...(reservation ? { budgetReservation:{ ...metadata(reservation,reservationFields), usage:normalizeUsage(reservation.usage) } } : {}),
+    })
+  })
+  const output = sanitized.join('\n')
+  if (output !== text) atomicWritePrivate(file,output)
+  return ids
 }
 
 /** Deterministic task id from its identity fields. */
@@ -387,9 +467,9 @@ export function writeTurnIntake(root, intake) {
 }
 
 /** Latest turn intakes, oldest first, plus corrupt-line count. */
-export function readTurnIntakes(root) {
+export function readTurnIntakes(root, { strict = false } = {}) {
   const file = join(captureDir(root), TURNS_FILE)
-  const { map, corrupt } = readJournal(file, TURN_ID_PATTERN)
+  const { map, corrupt } = readJournal(file, TURN_ID_PATTERN, strict)
   return {
     intakes: [...map.values()].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)),
     corrupt,
@@ -486,6 +566,20 @@ export function recoverCaptureTasks(root) {
   const tasks = readCaptureTasks(root)
   let recovered = 0
   for (const task of tasks) {
+    if (task.status === 'failed' && task.callState === 'completed' && !task.resultFailureCode &&
+        ['error', 'aborted'].includes(task.resultFinishKind)) {
+      // Older builds had no proof that a host-side error ended the paid call.
+      updateCaptureTask(root, task.id, {
+        status: 'unknown',
+        callState: 'unknown',
+        reason: '旧版仅记录了宿主错误，模型结果未知；请确认后手动重试',
+        ...(task.budgetReservation?.state === 'settled' ? {
+          budgetReservation: { ...task.budgetReservation, state: 'reserved' },
+        } : {}),
+      })
+      recovered += 1
+      continue
+    }
     if (task.status !== 'running') continue
     if (typeof task.resultText === 'string') {
       updateCaptureTask(root, task.id, {
@@ -524,17 +618,15 @@ export function countCaptureTasks(tasks) {
   return counts
 }
 
-/** Transparently gzip legacy inline sources; ids and journals stay unchanged. */
-export function compressCaptureSources(root) {
-  const dir = sourceDir(root)
-  if (!existsSync(dir)) return { scanned: 0, compressed: 0, failed: 0, bytesBefore: 0, bytesAfter: 0 }
+function* compressCaptureFiles(root, dir, names) {
   let scanned = 0
   let compressed = 0
   let failed = 0
   let bytesBefore = 0
   let bytesAfter = 0
-  for (const name of readdirSync(dir)) {
+  for (const name of names) {
     if (!name.endsWith('.json')) continue
+    yield
     const file = join(dir, name)
     let value
     try {
@@ -593,11 +685,37 @@ export function compressCaptureSources(root) {
   return { scanned, compressed, failed, bytesBefore, bytesAfter }
 }
 
-/** Observable capture-storage footprint; no source text is returned. */
-export function captureStorageStatus(root) {
-  const status = { sources: { count: 0, bytes: 0 }, tasks: 0, turns: 0, replacements: 0, bytes: 0 }
+/** Transparently gzip legacy inline sources; ids and journals stay unchanged. */
+export function compressCaptureSources(root) {
   const dir = sourceDir(root)
-  if (existsSync(dir)) {
+  const work = compressCaptureFiles(root, dir, existsSync(dir) ? readdirSync(dir) : [])
+  for (let step = work.next(); ; step = work.next()) if (step.done) return step.value
+}
+
+/** Keep each source write synchronous and complete, and yield between sources. */
+export async function compressCaptureSourcesInBatches(root, shouldContinue) {
+  if (!shouldContinue()) return
+  const dir = sourceDir(root)
+  let names
+  try { names = await readdir(dir) }
+  catch (error) { if (error?.code === 'ENOENT') return; throw error }
+  const work = compressCaptureFiles(root, dir, names)
+  let checked = 0, deadline = performance.now() + 12
+  for (const _ of work) {
+    if (++checked >= 32 || performance.now() >= deadline) {
+      await yieldToHost()
+      checked = 0
+      deadline = performance.now() + 12
+    }
+    if (!shouldContinue()) return
+  }
+}
+
+/** Observable capture-storage footprint; no source text is returned. */
+export function captureStorageStatus(root, verifiedSources) {
+  const status = { sources: { count: 0, bytes: 0, ...verifiedSources }, tasks: 0, turns: 0, replacements: 0, bytes: 0 }
+  const dir = sourceDir(root)
+  if (verifiedSources === undefined && existsSync(dir)) {
     for (const name of readdirSync(dir)) {
       if (!name.endsWith('.json')) continue
       try {

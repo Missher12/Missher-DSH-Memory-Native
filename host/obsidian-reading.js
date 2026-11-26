@@ -2,11 +2,16 @@
 import { createHash } from 'node:crypto'
 import { mkdir, lstat } from 'node:fs/promises'
 import { join, posix } from 'node:path'
-import { parseKnowledgeNote, splitNoteBody } from './knowledge.js'
+import { knowledgeBinding, parseKnowledgeNote, splitNoteBody } from './knowledge.js'
+import { knowledgeAuthority, withKnowledgeWriter } from './knowledge-authority.js'
+import { materializeRecordBodies } from './cache-records.js'
 
 const digest = value => createHash('sha256').update(value).digest('hex')
 const START = '<!-- dsh-memory:reading:start -->'
 const END = '<!-- dsh-memory:reading:end -->'
+const DEFAULT_SUPPLEMENT = '\n\n## 我的补充\n\n此处可自由记录。上方内容随同步整理；在上方直接修改的内容会另存为手动版本。\n'
+export const READING_DIRECTORIES = ['阅读', '阅读/项目', '阅读/主题', '阅读/手动修改', '阅读/决策', '阅读/知识库', '阅读/偏好', '阅读/经历']
+export const isGeneratedReadingPage = path => /^阅读\/(?:首页\.md|(?:主题|项目|决策|知识库|偏好|经历)\/[^/\\]+\.md)$/u.test(path)
 const label = value => String(value ?? '').replace(/[\[\]|#\r\n]/gu, ' ').trim()
 const title = value => label(value).slice(0, 72) || '未命名'
 const filename = (name, key) => title(name).replace(/[<>:"/\\?*\u0000-\u001f]/gu, '-') + '-' + digest(key).slice(0, 8) + '.md'
@@ -125,11 +130,28 @@ function topicComponents(entries, byId, now) {
   })
 }
 
-export function buildReadingPages({ records, notes, files, folder, now = Date.now() }) {
+const READING_INPUT_VERSION = 1
+
+export function buildReadingPages({ records, notes, files, folder, now = Date.now(), previousInputs = {} }) {
   const pages = new Map(), sources = new Map(), aliasProofs = new Map(), groups = new Map(), projects = new Map(), collections = new Map()
+  const inputs = {}, recordInputs = new WeakMap()
   const categories = { decision: '决策', fact: '知识库', preference: '偏好', episode: '经历' }
   const pathTo = path => posix.join(folder.replaceAll('\\', '/'), path)
   const home = wiki(pathTo('阅读/首页.md'), '记忆首页')
+  const remember = (file, dependencies) => {
+    const key = digest(JSON.stringify([READING_INPUT_VERSION, folder, dependencies]))
+    inputs[file] = key
+    return key !== previousInputs[file]
+  }
+  function recordInput(record) {
+    let input = recordInputs.get(record)
+    if (input === undefined) {
+      input = [record.id, files.get(record.id), record.kind, record.status, record.quoted, record.content,
+        record.updatedAt ?? 0, record.updatedAt ?? record.createdAt, record.validFrom > now, Number.isFinite(record.validTo) && record.validTo <= now]
+      recordInputs.set(record, input)
+    }
+    return input
+  }
   const topicEntries = new Map()
   const collect = (source, kind) => {
     const scope = scopeOf(source), topic = topicOf(source.topic), key = JSON.stringify([scope, topic])
@@ -138,7 +160,9 @@ export function buildReadingPages({ records, notes, files, folder, now = Date.no
     entry[kind].push(source); entry.sources.push(source)
   }
   const byId = new Map(records.map(record => [record.id, record]))
-  for (const record of records) if (record.status !== 'deleted') collect(record, 'records')
+  const readable = records.filter(record => record.status !== 'deleted')
+  materializeRecordBodies(readable)
+  for (const record of readable) collect(record, 'records')
   for (const note of notes) {
     // A linked note must not re-publish a forgotten memory into a generated page.
     if (note.memoryId && (!byId.has(note.memoryId) || byId.get(note.memoryId).status === 'deleted')) continue
@@ -160,7 +184,8 @@ export function buildReadingPages({ records, notes, files, folder, now = Date.no
       const group = groupFor(scope, component.canonical)
       for (const name of component.names) {
         const entry = entries.get(name)
-        group.records.push(...entry.records); group.notes.push(...entry.notes)
+        for (const record of entry.records) group.records.push(record)
+        for (const note of entry.notes) group.notes.push(note)
       }
       group.merges = component.merges
       for (const merge of component.merges) {
@@ -174,81 +199,78 @@ export function buildReadingPages({ records, notes, files, folder, now = Date.no
   for (const group of [...groups.values()].sort((a, b) => a.key.localeCompare(b.key, 'zh'))) {
     const name = projectName(group.scope), projectFile = '阅读/项目/' + filename(name, group.scope)
     const file = '阅读/主题/' + filename(group.topic, group.key)
-    const lines = [`# ${title(group.topic)}`, '', `${home} · ${wiki(pathTo(projectFile), name)}`, '',
-      '同一主题的现行约定、决定与历史放在一起阅读。各段保留原话，未补写来源中没有的原因。', '']
-    if (group.merges?.length) {
-      lines.push('## 主题归并', '')
-      for (const merge of group.merges) {
-        const source = merge.source
-        const sourcePath = source?.id ? files.get(source.id) ?? `${source.id}.md` : source?.file ? `knowledge/${source.file}` : null
-        lines.push(`- 原主题“${merge.topic}” → “${group.topic}”：${merge.reason}${sourcePath ? ` · ${wiki(pathTo(sourcePath), '归并依据')}` : ''}`)
-      }
-      lines.push('')
-    }
-    const current = record => record.status === 'active' && !record.quoted && !(record.validFrom > now) && !(Number.isFinite(record.validTo) && record.validTo <= now)
-    const sections = [
-      ['当前事实与偏好', record => current(record) && ['fact', 'preference'].includes(record.kind)],
-      ['决定与原因', record => current(record) && record.kind === 'decision'],
-      ['相关经历', record => current(record) && record.kind === 'episode'],
-      ['尚未生效', record => record.status === 'active' && !record.quoted && record.validFrom > now],
-      ['引用资料', record => record.status === 'active' && record.quoted],
-      ['待确认', record => record.status === 'candidate'],
-      ['历史记录', record => ['archived', 'superseded'].includes(record.status) || record.status === 'active' && !record.quoted && !(record.validFrom > now) && Number.isFinite(record.validTo) && record.validTo <= now],
-    ]
-    for (const [heading, accept] of sections) {
-      const items = group.records.filter(accept).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id))
-      if (!items.length) continue
-      lines.push('## ' + heading, '')
-      for (const record of items) {
-        const source = files.get(record.id) ?? `${record.id}.md`
-        lines.push(String(record.content).replaceAll(START, '&lt;!-- dsh-memory:reading:start -->').replaceAll(END, '&lt;!-- dsh-memory:reading:end -->'), '',
-          `${wiki(pathTo(source), '原记录')} · ${record.status === 'archived' ? '已归档 · ' : record.status === 'superseded' ? '已被取代 · ' : ''}${new Date(record.updatedAt ?? record.createdAt).toISOString().slice(0, 10)}`, '')
-      }
-    }
-    if (group.notes.length) {
-      lines.push('## 完整笔记', '')
-      for (const note of group.notes.sort((a, b) => a.file.localeCompare(b.file))) {
-        lines.push(`- ${wiki(pathTo('knowledge/' + note.file), note.title)}`)
-      }
-      lines.push('')
-    }
-    pages.set(file, lines.join('\n'))
-    sources.set(file, [...group.records, ...group.notes.map(note => byId.get(note.memoryId)).filter(Boolean)])
     const proofs = (group.merges ?? []).filter(merge => merge.source).map(merge => ({ source: merge.source, record: evidenceRecord(merge.source, byId) }))
-    if (proofs.length) aliasProofs.set(file, proofs)
+    const dependencies = [group.key, (group.merges ?? []).map(merge => [merge.topic, merge.reason]), group.records.map(recordInput),
+      group.notes.map(note => [note.file, note.title, note.memoryId])]
+    if (remember(file, dependencies) || proofs.length) {
+      const lines = [`# ${title(group.topic)}`, '', `${home} · ${wiki(pathTo(projectFile), name)}`, '',
+        '同一主题的现行约定、决定与历史放在一起阅读。各段保留原话，未补写来源中没有的原因。', '']
+      if (group.merges?.length) {
+        lines.push('## 主题归并', '')
+        for (const merge of group.merges) {
+          const source = merge.source
+          const sourcePath = source?.id ? files.get(source.id) ?? `${source.id}.md` : source?.file ? `knowledge/${source.file}` : null
+          lines.push(`- 原主题“${merge.topic}” → “${group.topic}”：${merge.reason}${sourcePath ? ` · ${wiki(pathTo(sourcePath), '归并依据')}` : ''}`)
+        }
+        lines.push('')
+      }
+      const current = record => record.status === 'active' && !record.quoted && !(record.validFrom > now) && !(Number.isFinite(record.validTo) && record.validTo <= now)
+      const sections = [
+        ['当前事实与偏好', record => current(record) && ['fact', 'preference'].includes(record.kind)],
+        ['决定与原因', record => current(record) && record.kind === 'decision'],
+        ['相关经历', record => current(record) && record.kind === 'episode'],
+        ['尚未生效', record => record.status === 'active' && !record.quoted && record.validFrom > now],
+        ['引用资料', record => record.status === 'active' && record.quoted],
+        ['待确认', record => record.status === 'candidate'],
+        ['历史记录', record => ['archived', 'superseded'].includes(record.status) || record.status === 'active' && !record.quoted && !(record.validFrom > now) && Number.isFinite(record.validTo) && record.validTo <= now],
+      ]
+      for (const [heading, accept] of sections) {
+        const items = group.records.filter(accept).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id))
+        if (!items.length) continue
+        lines.push('## ' + heading, '')
+        for (const record of items) {
+          const source = files.get(record.id) ?? `${record.id}.md`
+          lines.push(String(record.content).replaceAll(START, '&lt;!-- dsh-memory:reading:start -->').replaceAll(END, '&lt;!-- dsh-memory:reading:end -->'), '',
+            `${wiki(pathTo(source), '原记录')} · ${record.status === 'archived' ? '已归档 · ' : record.status === 'superseded' ? '已被取代 · ' : ''}${new Date(record.updatedAt ?? record.createdAt).toISOString().slice(0, 10)}`, '')
+        }
+      }
+      if (group.notes.length) {
+        lines.push('## 完整笔记', '')
+        for (const note of group.notes.sort((a, b) => a.file.localeCompare(b.file))) {
+          lines.push(`- ${wiki(pathTo('knowledge/' + note.file), note.title)}`)
+        }
+        lines.push('')
+      }
+      pages.set(file, lines.join('\n'))
+      sources.set(file, [...group.records, ...group.notes.map(note => byId.get(note.memoryId)).filter(Boolean)])
+      if (proofs.length) aliasProofs.set(file, proofs)
+    }
     for (const [kind, category] of Object.entries(categories)) {
       const matching = group.records.filter(record => record.kind === kind)
       if (!matching.length) continue
       const collectionFile = `阅读/${category}/` + filename(name, group.scope)
       if (!collections.has(collectionFile)) collections.set(collectionFile, {
-        category, project: name, projectFile, scope: group.scope, records: [],
-        lines: [`# ${title(name)} · ${category}`, '', `${home} · ${wiki(pathTo(projectFile), name)}`, '',
-          '按主题汇集原话。时间、状态和来源与原记录一起保留，可从侧边大纲定位主题。', ''],
+        category, project: name, projectFile, scope: group.scope, sections: [], count: 0,
       })
       const collection = collections.get(collectionFile)
-      collection.lines.push(`## ${title(group.topic)}`, '', `${wiki(pathTo(file), '相关事实、决定与完整笔记')}`, '')
-      for (const record of matching.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id))) {
-        const status = record.status === 'candidate' ? '待确认' : record.status === 'archived' ? '已归档' : record.status === 'superseded' ? '已被取代'
-          : record.quoted ? '引用资料' : record.validFrom > now ? '尚未生效' : Number.isFinite(record.validTo) && record.validTo <= now ? '已过期' : '当前生效'
-        collection.lines.push(`**${status}**`, '', String(record.content).replaceAll(START, '&lt;!-- dsh-memory:reading:start -->').replaceAll(END, '&lt;!-- dsh-memory:reading:end -->'), '',
-          `${wiki(pathTo(files.get(record.id) ?? `${record.id}.md`), '原记录')} · ${new Date(record.updatedAt ?? record.createdAt).toISOString().slice(0, 10)}`, '')
-        collection.records.push(record)
-      }
+      collection.sections.push({ title: title(group.topic), file, records: matching })
+      collection.count += matching.length
     }
     if (!projects.has(group.scope)) projects.set(group.scope, { name, file: projectFile, groups: [], scope: group.scope })
     projects.get(group.scope).groups.push({ file, topic: group.topic, count: group.records.length + group.notes.length })
   }
   for (const old of oldTopics) {
-    const group = groups.get(JSON.stringify([old.scope, old.canonical]))
     const projectFile = '阅读/项目/' + filename(projectName(old.scope), old.scope)
     const lines = [`# ${title(old.topic)}`, '', `${home} · ${wiki(pathTo(projectFile), projectName(old.scope))}`, '',
       `此旧主题已归并至 ${wiki(pathTo(old.primary), old.canonical)}。原主题：“${old.topic}”。`,
       `归并依据：${old.reason}。`, '']
-    pages.set(old.legacy, lines.join('\n'))
     const proof = old.source ? { source: old.source, record: evidenceRecord(old.source, byId) } : null
-    const dependencies = [...old.sources.map(source => evidenceRecord(source, byId)), proof?.record].filter(Boolean)
-    sources.set(old.legacy, [...new Set(dependencies)])
-    if (proof) aliasProofs.set(old.legacy, [proof])
+    if (remember(old.legacy, lines) || proof) {
+      pages.set(old.legacy, lines.join('\n'))
+      const dependencies = [...old.sources.map(source => evidenceRecord(source, byId)), proof?.record].filter(Boolean)
+      sources.set(old.legacy, [...new Set(dependencies)])
+      if (proof) aliasProofs.set(old.legacy, [proof])
+    }
   }
   const homeLines = ['# DSH Memory', '', '先按用途阅读，再按项目和主题查找。每份汇集笔记保留完整原话与来源，原始文件仍可独立编辑和同步。', '', '## 按用途阅读', '']
   for (const category of Object.values(categories)) {
@@ -256,8 +278,24 @@ export function buildReadingPages({ records, notes, files, folder, now = Date.no
     if (!entries.length) continue
     homeLines.push('### ' + category, '')
     for (const [file, collection] of entries) {
-      pages.set(file, collection.lines.join('\n')); sources.set(file, collection.records)
-      homeLines.push(`- ${wiki(pathTo(file), collection.project)} · ${collection.records.length} 项来源`)
+      const dependencies = collection.sections.map(section => [section.title, section.file, section.records.map(recordInput)])
+      if (remember(file, dependencies)) {
+        const lines = [`# ${title(collection.project)} · ${category}`, '', `${home} · ${wiki(pathTo(collection.projectFile), collection.project)}`, '',
+          '按主题汇集原话。时间、状态和来源与原记录一起保留，可从侧边大纲定位主题。', '']
+        const collectionRecords = []
+        for (const section of collection.sections) {
+          lines.push(`## ${section.title}`, '', `${wiki(pathTo(section.file), '相关事实、决定与完整笔记')}`, '')
+          for (const record of section.records.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.id.localeCompare(b.id))) {
+            const status = record.status === 'candidate' ? '待确认' : record.status === 'archived' ? '已归档' : record.status === 'superseded' ? '已被取代'
+              : record.quoted ? '引用资料' : record.validFrom > now ? '尚未生效' : Number.isFinite(record.validTo) && record.validTo <= now ? '已过期' : '当前生效'
+            lines.push(`**${status}**`, '', String(record.content).replaceAll(START, '&lt;!-- dsh-memory:reading:start -->').replaceAll(END, '&lt;!-- dsh-memory:reading:end -->'), '',
+              `${wiki(pathTo(files.get(record.id) ?? `${record.id}.md`), '原记录')} · ${new Date(record.updatedAt ?? record.createdAt).toISOString().slice(0, 10)}`, '')
+            collectionRecords.push(record)
+          }
+        }
+        pages.set(file, lines.join('\n')); sources.set(file, collectionRecords)
+      }
+      homeLines.push(`- ${wiki(pathTo(file), collection.project)} · ${collection.count} 项来源`)
     }
     homeLines.push('')
   }
@@ -266,20 +304,19 @@ export function buildReadingPages({ records, notes, files, folder, now = Date.no
     const links = project.groups.map(group => `- ${wiki(pathTo(group.file), group.topic)} · ${group.count} 项来源`)
     const reading = [...collections.entries()].filter(([, collection]) => collection.scope === project.scope)
       .map(([file, collection]) => `- ${wiki(pathTo(file), collection.category)}`)
-    pages.set(project.file, [`# ${title(project.name)}`, '', home, '', '## 阅读笔记', '', ...reading, '', '## 主题索引', '', ...links, ''].join('\n'))
+    const lines = [`# ${title(project.name)}`, '', home, '', '## 阅读笔记', '', ...reading, '', '## 主题索引', '', ...links, '']
+    if (remember(project.file, lines)) pages.set(project.file, lines.join('\n'))
     homeLines.push(`- ${wiki(pathTo(project.file), project.name)} · ${links.length} 个主题`)
   }
   if (!projects.size) homeLines.push('暂时没有可整理的内容。', '')
-  pages.set('阅读/首页.md', homeLines.join('\n'))
-  return { pages, sources, aliasProofs }
+  if (remember('阅读/首页.md', homeLines)) pages.set('阅读/首页.md', homeLines.join('\n'))
+  return { pages, sources, aliasProofs, inputs }
 }
 
-export async function refreshReadingPages(sync, dir, config, result, { force = false } = {}) {
+export async function refreshReadingPages(sync, dir, config, result, { force = false, auditPaths = new Set() } = {}) {
   const records = sync.store.listAll({ includeDeleted: true })
   const now = Date.now()
-  const signature = digest(JSON.stringify([sync.state.entries, records.map(r => [r.id, r.revision, r.status, r.validFrom > now, Number.isFinite(r.validTo) && r.validTo <= now])]))
-  if (!force && signature === sync.readingSignature) return
-  for (const path of ['阅读', '阅读/项目', '阅读/主题', '阅读/手动修改', '阅读/决策', '阅读/知识库', '阅读/偏好', '阅读/经历']) {
+  for (const path of READING_DIRECTORIES) {
     const target = join(dir, path)
     await mkdir(target, { recursive: true, mode: 0o700 })
     if ((await lstat(target)).isSymbolicLink()) throw new Error('阅读文件夹不能是符号链接')
@@ -287,12 +324,14 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
   const notes = [], files = new Map()
   const previousNotes = sync.state.readingNotes ?? {}
   const readingNotes = {}
+  const check = knowledgeAuthority(sync.store)
   for (const [key, entry] of Object.entries(sync.state.entries)) {
     if (key.startsWith('memory:')) files.set(key.slice(7), entry.file)
     else if (key.startsWith('knowledge:')) {
+      if (entry.left === null || entry.knowledgeLinks?.some(binding => !check(binding).allowed)) continue
       const cached = previousNotes[key]
       // Only metadata is cached. Alias proofs still reopen their original note.
-      if (!force && cached?.hash === entry.left && cached.path === entry.file && cached.hasAlias === false) {
+      if (!force && cached?.hash === entry.left && cached.path === entry.file && cached.hasAlias === false && check(cached.note).allowed) {
         readingNotes[key] = cached
         notes.push(cached.note)
         continue
@@ -300,38 +339,51 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
       const text = await sync.existingText(join(sync.root, entry.file))
       if (text === null) continue
       const parsed = parseKnowledgeNote(text), body = splitNoteBody(parsed.body)
-      const { scope, projectKey, topic, memoryId, quoted, status, validFrom, validTo } = parsed.data
-      const note = { scope, projectKey, topic, memoryId, quoted, status, validFrom, validTo,
+      const binding = knowledgeBinding(parsed.data)
+      if (parsed.data.dsh_knowledge !== true || !check(binding).allowed) continue
+      const { topic, quoted, status, validFrom, validTo } = parsed.data
+      const note = { ...binding, topic, quoted, status, validFrom, validTo,
         title: body.title || posix.basename(entry.file), file: posix.basename(entry.file) }
       const hasAlias = ALIAS_CUE_PATTERN.test(parsed.body)
       readingNotes[key] = { hash: digest(text), path: entry.file, hasAlias, note }
       notes.push(hasAlias ? { ...note, content: parsed.body } : note)
     }
   }
-  const { pages, sources, aliasProofs } = buildReadingPages({ records, notes, files, folder: config.folder || 'DSH Memory', now })
   const previous = sync.state.readingPages ?? {}
+  const stamps = sync.state.readingStamps ?? {}
+  const audit = file => auditPaths.has('阅读/') || auditPaths.has(file) || auditPaths.has(`${posix.dirname(file)}/`)
+  const previousInputs = force ? {} : Object.fromEntries(
+    Object.entries(sync.state.readingInputs ?? {}).filter(([file]) => Object.hasOwn(previous, file) && !audit(file)),
+  )
+  const { pages, sources, aliasProofs, inputs } = buildReadingPages({
+    records, notes, files, folder: config.folder || 'DSH Memory', now, previousInputs,
+  })
   // Clear generated content for obsolete topics too; never leave forgotten facts
   // in a still-readable derived page. Personal text outside the block is retained.
   for (const file of Object.keys(previous)) {
-    if (!/^阅读\/(?:首页\.md|(?:主题|项目|决策|知识库|偏好|经历)\/[^/\\]+\.md)$/u.test(file)) throw new Error('阅读页路径无效')
-    if (!pages.has(file)) pages.set(file, '# 已无可用来源\n\n该主题的来源已移除或重新归类。\n')
+    if (!isGeneratedReadingPage(file)) throw new Error('阅读页路径无效')
+    if (!Object.hasOwn(inputs, file)) pages.set(file, '# 已无可用来源\n\n该主题的来源已移除或重新归类。\n')
   }
   let clean = true
   for (const [file, body] of pages) {
     try {
       const generated = START + '\n' + body + '\n' + END
       const generatedHash = digest(generated)
-      if (!force && previous[file] === generatedHash && !aliasProofs.has(file)) continue
+      if (!force && !audit(file) && previous[file] === generatedHash && !aliasProofs.has(file)) continue
       const target = join(dir, file), before = await sync.existingText(target)
-      let after
+      delete stamps[file]
+      let after, managed
       if (before === null) {
-        after = generated + '\n\n## 我的补充\n\n此处可自由记录。上方内容随同步整理；在上方直接修改的内容会另存为手动版本。\n'
+        after = generated + DEFAULT_SUPPLEMENT
       } else {
         const start = before.indexOf(START), end = before.lastIndexOf(END)
         if (start < 0 || end < start) throw new Error('已有同名笔记未由插件管理，已保留原文件')
         const block = before.slice(start, end + END.length)
         if (!previous[file] && block !== generated) throw new Error('已有同名笔记未由插件管理，已保留原文件')
         let suffix = before.slice(end + END.length)
+        if (start === 0 && suffix === DEFAULT_SUPPLEMENT && digest(block) === previous[file]) {
+          managed = { kind: 'reading', hash: digest(before) }
+        }
         if (digest(block) !== previous[file] && block !== generated) {
           const copy = '阅读/手动修改/' + filename(posix.basename(file, '.md'), before)
           await sync.preserve(join(dir, '阅读/手动修改'), posix.basename(copy), before)
@@ -341,8 +393,6 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
       }
       const current = sync.getConfig()
       if (sync.stopped || current.vaultPath !== config.vaultPath || current.folder !== config.folder || (config.autoSync && !current.autoSync)) throw new Error('同步设置已变化，本轮整理停止')
-      // Source changes while awaiting the filesystem must be handled next round.
-      if ((sources.get(file) ?? []).some(record => sync.store.find(record.id, [{ scope: record.scope, projectKey: record.projectKey }]) !== record)) throw new Error('来源已变化，下一轮重新整理')
       for (const { source, record } of aliasProofs.get(file) ?? []) {
         const checkedAt = Date.now()
         let currentRecord = null
@@ -365,11 +415,24 @@ export async function refreshReadingPages(sync, dir, config, result, { force = f
           }
         }
       }
-      await sync.replace(target, before, after, dir)
+      const commit = action => withKnowledgeWriter(sync.store, () => {
+        const configNow = sync.getConfig()
+        if (sync.stopped || configNow.vaultPath !== config.vaultPath || configNow.folder !== config.folder ||
+            config.autoSync && !configNow.autoSync) throw new Error('同步设置已变化，本轮整理停止')
+        const records = sources.get(file) ?? []
+        const scopes = new Map(records.map(({ scope, projectKey }) => [projectKey, scope]))
+        for (const [projectKey, scope] of scopes) sync.store.refreshScope(scope, projectKey)
+        if (records.some(record => sync.store.find(record.id, [record]) !== record)) throw new Error('来源已变化，下一轮重新整理')
+        return action()
+      })
+      await sync.replace(target, before, after, dir, commit, managed)
       previous[file] = generatedHash
+      const stamp = await sync.verifiedTextStamp(target, after, file)
+      if (stamp) stamps[file] = stamp
     } catch (error) { clean = false; result.errors.push({ file, message: error.message }) }
   }
   sync.state.readingPages = previous
+  sync.state.readingStamps = stamps
   sync.state.readingNotes = readingNotes
-  if (clean) sync.readingSignature = signature
+  if (clean) sync.state.readingInputs = inputs
 }

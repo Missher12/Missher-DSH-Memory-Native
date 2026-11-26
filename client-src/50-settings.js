@@ -257,13 +257,13 @@
           if (event.target !== null) event.target.value = ''
         }
       }
-      const backupNow = async () => {
+      const backupNow = async format => {
         if (call === null || busy) return
         setBusy(true)
         setNoticeArea('backup')
         setNotice('')
         try {
-          const result = await call('backup', {})
+          const result = await call('backup', { format })
           setNotice(t('data.backupDone', { path: String(result.path ?? '') }))
         } catch (failure) {
           setNotice(t('data.failed', { reason: messageOf(failure) }))
@@ -384,7 +384,8 @@
             h('input', { ref: fileRef, type: 'file', accept: 'application/json', className: 'dsh-memory-file-input', onChange: importAll })),
           feedbackAt('records'),
           h(SettingRow, { label: t('data.backup'), hint: t('data.backupHint') },
-            button(t('data.backupAction'), backupNow)),
+            button(t('data.backupAction'), () => backupNow('fast')),
+            button(t('data.backupCompatible'), () => backupNow('compatible'))),
           feedbackAt('backup')),
         groupSection('sharing',
           h(SettingRow, { label: t('data.localSharing'), hint: sharingUrl

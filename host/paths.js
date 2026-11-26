@@ -16,6 +16,9 @@ import { basename, join, resolve } from 'node:path'
 
 const PROJECT_KEY_PATTERN = /^[\p{L}\p{N}._-]{1,80}$/u
 
+export const SOURCE_PASSAGE_CACHE_DIR = '.derived-source-passages'
+export const SOURCE_PASSAGE_CACHE_KEY = 'terms.key'
+
 /** Resolve the DSH home directory the same way the rest of the Harness does. */
 export function resolveDshHome(configured) {
   const explicit = typeof configured === 'string' ? configured.trim() : ''

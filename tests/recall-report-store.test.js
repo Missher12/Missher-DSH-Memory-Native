@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -9,7 +10,9 @@ import { exportToObsidian } from '../host/obsidian.js'
 import { createRecallReportStore } from '../host/recall-reports.js'
 import { createPanelBackend } from '../host/remote.js'
 import { MemoryStore } from '../host/store.js'
-import { canReadSource } from '../host/capture-journal.js'
+import { openMemoryRuntime } from '../host/startup.js'
+import { canReadSource, saveSource } from '../host/capture-journal.js'
+import { grantSourceRecall, SourcePassageIndex } from '../host/source-passages.js'
 
 const PROFILE = 'a'.repeat(64)
 const PROJECT = 'b'.repeat(64)
@@ -384,6 +387,207 @@ test('an atomic delete that cannot commit to disk leaves its evidence readable',
   assert.ok(createRecallReportStore(root, PROFILE).get('session-io', PROJECT))
 })
 
+function forgetFixture(t) {
+  const root = rootFor(t)
+  const store = new MemoryStore({ root }).open()
+  const reports = createRecallReportStore(root, PROFILE)
+  store.setLifecycle({ onRecallRevoke: targets => reports.invalidateReferences(targets) })
+  const add = (name, text) => {
+    const source = saveSource(root, { sessionId: name, messageId: name, text, projectKey: PROJECT, role: 'user', sourceKind: 'user' })
+    assert.equal(grantSourceRecall(root, { ...source, text }, PROJECT), true)
+    const { record } = store.write({ kind: 'fact', scope: 'project', projectKey: PROJECT, content: text,
+      sourceRefs: [{ sourceId: source.id }], confidence: .9 })
+    reports.write(name, PROJECT, report(name, record.id, source.id))
+    return { name, id: record.id, sourceId: source.id, text }
+  }
+  const a = add('alpha', '晨弧备份定在周四清晨。')
+  const b = add('beta', '松雾部署前先执行预检。')
+  const passages = new SourcePassageIndex(root)
+  const present = (entry, index = passages) => index.search(entry.text, { projectKey: PROJECT })
+    .some(hit => hit.record.sourceRefs[0].sourceId === entry.sourceId)
+  const target = { scope: 'project', projectKey: PROJECT }
+  const panel = createPanelBackend({ root, store, index: { upsert() {}, remove() {} }, config: {} })
+  const authority = join(root, 'projects', PROJECT, 'memories.jsonl')
+  return { root, store, reports, a, b, present, passages, target, panel, authority }
+}
+
+test('a rejected single delete preserves its record, original passage and cached report', t => {
+  const { root, a, target, panel, authority, present, reports } = forgetFixture(t)
+  assert.equal(present(a), true)
+  assert.ok(reports.get(a.name, PROJECT))
+  const open = fs.openSync
+  fs.openSync = (path, flags, ...args) => {
+    if (path === authority && flags === 'a+') throw Object.assign(new Error('authority write unavailable'), { code: 'EIO' })
+    return open(path, flags, ...args)
+  }
+  syncBuiltinESMExports()
+  try { assert.throws(() => panel.removeMemory({ ...target, id: a.id }), /authority write unavailable/u) }
+  finally { fs.openSync = open; syncBuiltinESMExports() }
+  assert.equal(new MemoryStore({ root }).open().find(a.id, [target]).status, 'active')
+  assert.equal(present(a, new SourcePassageIndex(root)), true)
+  assert.ok(createRecallReportStore(root, PROFILE).get(a.name, PROJECT))
+})
+
+test('a batch with committed records conceals evidence until an interrupted revocation can be retried', async t => {
+  const { root, store, a, b, target, panel, present, reports } = forgetFixture(t)
+  const batch = { ...target, ids: [a.id], action: 'delete' }
+  assert.equal(present(a), true)
+  assert.ok(reports.get(a.name, PROJECT))
+  const rename = fs.renameSync
+  fs.renameSync = (from, to) => {
+    if (to.endsWith(`${a.sourceId}.recall-blocked`)) throw Object.assign(new Error('revocation write unavailable'), { code: 'EIO' })
+    return rename(from, to)
+  }
+  syncBuiltinESMExports()
+  try {
+    const result = panel.bulkAction(batch)
+    assert.equal(result.failedCount, 1)
+    assert.equal(result.rolledBack, false)
+    assert.equal(store.find(a.id, [target]).status, 'deleted')
+    assert.equal(present(a, new SourcePassageIndex(root)), false)
+    assert.equal(reports.get(a.name, PROJECT), null)
+    assert.equal(createRecallReportStore(root, PROFILE).get(a.name, PROJECT), null)
+    assert.equal(present(b), true)
+    assert.ok(reports.get(b.name, PROJECT))
+    await assert.rejects(store.backup(), /恢复/u)
+  } finally { fs.renameSync = rename; syncBuiltinESMExports() }
+  assert.deepEqual(panel.bulkAction(batch).updated, [a.id])
+  assert.equal(reports.get(a.name, PROJECT), null)
+  assert.equal(canReadSource(root, a.sourceId), false)
+  assert.ok(reports.get(b.name, PROJECT))
+})
+
+for (const phase of ['partial authority append', 'before revocation']) {
+  test(`reopening after process exit during ${phase} restores a consistent batch`, t => {
+    const { root, a, b, authority, target, present } = forgetFixture(t)
+    openMemoryRuntime({ root }).dispose()
+    const before = fs.readFileSync(authority)
+    const code = `
+      import fs from 'node:fs'
+      import { syncBuiltinESMExports } from 'node:module'
+      import { MemoryStore } from ${JSON.stringify(new URL('../host/store.js', import.meta.url).href)}
+      const [root, file, project, first, second, phase] = process.argv.slice(1)
+      if (phase === 'partial authority append') {
+        const inode = fs.statSync(file).ino, write = fs.writeSync
+        fs.writeSync = (fd, data, ...args) => {
+          if (fs.fstatSync(fd).ino !== inode) return write(fd, data, ...args)
+          const end = Buffer.from(data).indexOf(10, args[0] ?? 0)
+          if (end < 0) throw new Error('expected authority revision')
+          write(fd, data, args[0] ?? 0, end - (args[0] ?? 0) + 8)
+          process.exit(73)
+        }
+      } else {
+        const rename = fs.renameSync
+        fs.renameSync = (from, to) => {
+          if (to.endsWith('.recall-blocked')) process.exit(73)
+          return rename(from, to)
+        }
+      }
+      syncBuiltinESMExports()
+      new MemoryStore({ root }).open().updateBatch([first, second], 'project', project, () => ({ status: 'deleted' }))
+    `
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', code, root, authority, PROJECT, a.id, b.id, phase],
+      { encoding: 'utf8', timeout: 20_000 })
+    assert.equal(child.status, 73, child.stderr)
+    const committed = phase === 'before revocation'
+    const reopened = openMemoryRuntime({ root })
+    t.after(() => reopened.dispose())
+    assert.equal(reopened.metrics.replayedRevisions, committed ? 2 : 0)
+    const freshReports = createRecallReportStore(root, PROFILE)
+    for (const entry of [a, b]) {
+      assert.equal(reopened.store.find(entry.id, [target]).status, committed ? 'deleted' : 'active')
+      assert.equal(reopened.index.search(entry.text, { projectKey: PROJECT, statuses: ['active'] })
+        .some(hit => hit.record.id === entry.id), !committed)
+      assert.equal(present(entry, new SourcePassageIndex(root)), !committed)
+      assert.equal(freshReports.get(entry.name, PROJECT) !== null, !committed)
+    }
+    if (!committed) assert.deepEqual(fs.readFileSync(authority), before)
+  })
+}
+
+test('forgetting an original with project and global derivatives rolls back both on an authority failure', t => {
+  const { root, store, a, target, panel, present, passages, reports } = forgetFixture(t)
+  const global = store.write({ kind: 'preference', scope: 'global', content: a.text,
+    sourceRefs: [{ sourceId: a.sourceId }], confidence: .9 }).record
+  const passage = passages.search(a.text, { projectKey: PROJECT }).find(hit => hit.record.sourceRefs[0].sourceId === a.sourceId)
+  assert.ok(passage)
+  const input = { ...target, id: passage.record.id }
+  const projectFile = join(root, 'projects', PROJECT, 'memories.jsonl'), globalFile = join(root, 'global', 'memories.jsonl')
+  const projectInode = fs.statSync(projectFile).ino, globalInode = fs.statSync(globalFile).ino
+  const write = fs.writeSync
+  let authorityWrites = 0
+  fs.writeSync = (fd, data, ...args) => {
+    if ([projectInode, globalInode].includes(fs.fstatSync(fd).ino) && ++authorityWrites === 2) {
+      throw Object.assign(new Error('second authority write failed'), { code: 'EIO' })
+    }
+    return write(fd, data, ...args)
+  }
+  syncBuiltinESMExports()
+  try { assert.throws(() => panel.removeMemory(input), /second authority write failed/u) }
+  finally { fs.writeSync = write; syncBuiltinESMExports() }
+  const reopened = new MemoryStore({ root }).open()
+  assert.equal(reopened.find(global.id).status, 'active')
+  assert.equal(reopened.find(a.id, [target]).status, 'active')
+  assert.equal(present(a), true)
+  assert.ok(reports.get(a.name, PROJECT))
+  assert.equal(panel.removeMemory(input).status, 'deleted')
+  const finished = new MemoryStore({ root }).open()
+  assert.equal(finished.find(global.id).status, 'deleted')
+  assert.equal(finished.find(a.id, [target]).status, 'deleted')
+  assert.equal(present(a), false)
+  assert.equal(reports.get(a.name, PROJECT), null)
+})
+
+test('a failed permanent removal preserves the revision and its evidence', t => {
+  const { root, store, a, target, authority, present, reports } = forgetFixture(t)
+  const rename = fs.renameSync
+  fs.renameSync = (from, to) => {
+    if (to === authority) throw Object.assign(new Error('authority rename unavailable'), { code: 'EIO' })
+    return rename(from, to)
+  }
+  syncBuiltinESMExports()
+  try { assert.throws(() => store.purge(a.id, [target]), /authority rename unavailable/u) }
+  finally { fs.renameSync = rename; syncBuiltinESMExports() }
+  const reopened = new MemoryStore({ root }).open()
+  assert.equal(reopened.find(a.id, [target]).status, 'active')
+  assert.equal(reopened.purgedIds().has(a.id), false)
+  assert.equal(present(a), true)
+  assert.ok(reports.get(a.name, PROJECT))
+})
+
+test('forget retires all earlier reports of that record without touching the same id in another project', t => {
+  const root = rootFor(t)
+  const store = new MemoryStore({ root }).open()
+  const reports = createRecallReportStore(root, PROFILE)
+  const id = 'mem_shared_legacy_id', other = 'c'.repeat(64)
+  const target = { scope: 'project', projectKey: PROJECT }
+  for (const [projectKey, text] of [[PROJECT, '当前项目独立内容。'], [other, '另一项目独立内容。']]) {
+    store.write({ id, kind: 'fact', scope: 'project', projectKey, content: text, confidence: .9 })
+  }
+  const first = report('old revision', id, null)
+  reports.write('early', PROJECT, first)
+  const unrelated = { ...report('same id elsewhere', id, null), projectKey: other }
+  reports.write('other-project', other, unrelated)
+  store.update(id, { tags: ['tag'] }, [target])
+  store.remove(id, [target])
+  assert.equal(reports.get('early', PROJECT), null)
+  assert.equal(reports.write('late', PROJECT, first), false)
+  assert.deepEqual(createRecallReportStore(root, PROFILE).get('other-project', other), unrelated)
+})
+
+test('forget retires a legacy cross-client report for a global memory even without a source', t => {
+  const root = rootFor(t)
+  const store = new MemoryStore({ root }).open()
+  const reports = createRecallReportStore(root, PROFILE)
+  const id = 'mem_global_legacy'
+  store.write({ id, kind: 'preference', scope: 'global', content: '通用报告优先保留检查结果。', confidence: .9 })
+  const legacy = report('ordinary preference', id, null)
+  reports.write('legacy-hook', PROJECT, legacy)
+  store.remove(id)
+  assert.equal(createRecallReportStore(root, PROFILE).get('legacy-hook', PROJECT), null)
+  assert.equal(reports.write('late-legacy-hook', PROJECT, legacy), false)
+})
+
 test('permanent deletion removes a stale same-source report file before cold reads', t => {
   const root = rootFor(t)
   const memories = new MemoryStore({ root }).open()
@@ -393,8 +597,7 @@ test('permanent deletion removes a stale same-source report file before cold rea
   const lastReport = report('purge source', 'mem_purge', SOURCE_A)
   reports.write('session-purge', PROJECT, lastReport)
   memories.setLifecycle({ onRecallRevoke: targets => reports.invalidateReferences(targets) })
-  const backend = createPanelBackend({ root, store: memories, index: { upsert() {}, remove() {} }, config: {},
-    invalidateRecallReferences: targets => reports.invalidateReferences(targets) })
+  const backend = createPanelBackend({ root, store: memories, index: { upsert() {}, remove() {} }, config: {} })
   backend.removeMemory({ id: 'mem_purge', scope: 'project', projectKey: PROJECT })
 
   const key = createHash('sha256').update('session-purge').digest('hex')

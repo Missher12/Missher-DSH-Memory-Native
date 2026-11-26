@@ -62,6 +62,155 @@ test('semantic liveness checks score candidates in small batches and refill afte
   assert.ok(checked<records.length,`only the leading candidates should be checked, got ${checked}`)
   assert.ok(batches>1,'a second ranked batch fills slots rejected as stale in the first')
 })
+
+test('knowledge embedding gives each section a first window and keeps complete short statements', async t => {
+  const { root, key, record } = fixture(t)
+  const entries = Array.from({ length: 35 }, (_, i) =>
+    `Inventory ${i + 1} contains packing samples and a paper receipt for the next inspection.`)
+  const latest = 'Staff must contact the service desk, verify identity, and obtain replacement credentials.'
+  const other = 'Complete the monthly compliance review on its scheduled date.'
+  entries.push(other)
+  const batches = []
+  const model = engine()
+  const embed = model.embed.bind(model)
+  model.embed = (texts, kind) => {
+    if (kind === 'passage') batches.push(texts)
+    return embed(texts)
+  }
+  const index = new SemanticRecallIndex(root, { engine: model })
+  t.after(() => index.dispose())
+  const article = { ...record, id: 'note:guide.md', kind: 'knowledge', noteReferenceTimes: [null],
+    content: [...entries, latest].join('\n'),
+    semanticSections: [{ text: entries.join('\n'), datedOnly: false }, { text: latest, datedOnly: false }] }
+  await index.search(['recover login'], [article], { projectKey: key })
+  await index.settle()
+  assert.ok(batches[0]?.includes(latest), 'a short later section is already present in the first batch')
+  const statements = new Set(batches.flat().flatMap(text => text.split('\n')))
+  assert.deepEqual(statements, new Set([...entries, latest]))
+})
+
+test('semantic candidate limits apply independently after each query’s eligibility check', async t => {
+  const { root, key, record } = fixture(t)
+  const index = new SemanticRecallIndex(root, { engine: engine() })
+  t.after(() => index.dispose())
+  const records = [
+    ...Array.from({ length: 30 }, (_, i) => ({ ...record, id: `mem_current_${i}`, content: `目前的部署说明 ${i}。` })),
+    { ...record, id: 'mem_historical', content: '第一次部署使用 Node 16。', status: 'superseded' },
+    { ...record, id: 'mem_foreign', projectKey: projectIdentity('/other').key, status: 'superseded' },
+  ]
+  const queries = ['当前怎么部署', '过去怎么部署']
+  const options = { projectKey: key, eligibleForQuery: (row, position) => row.status === ['active', 'superseded'][position] }
+  await index.search(queries, records, options)
+  await index.settle()
+  const [current, history] = await index.search(queries, records, options)
+  assert.equal(current.length, 20)
+  assert.ok(current.every(hit => hit.record.status === 'active'))
+  assert.deepEqual(history.map(hit => hit.record.id), ['mem_historical'])
+  assert.equal(index.status().indexed, 31, 'date filtering leaves cached vectors available to future requests')
+})
+
+test('dated subsets reuse vectors across restart and leave complete authority reconciliation intact', async t => {
+  const { root, key, record } = fixture(t)
+  const other = { ...record, id: 'mem_later', content: 'This record applies to a different period.' }
+  const earlier = new SemanticRecallIndex(root, { engine: engine() })
+  await earlier.search(['initial'], [record, other], { projectKey: key })
+  await earlier.settle()
+  earlier.dispose()
+
+  const local = engine(), index = new SemanticRecallIndex(root, { engine: local })
+  t.after(() => index.dispose())
+  const [hits, empty] = await index.search(['matching date', 'date with no evidence'], () => [record], {
+    projectKey: key, partial: true, eligibleForQuery: (_item, position) => position === 0,
+  })
+  assert.deepEqual(hits.map(hit => hit.record.id), [record.id])
+  assert.deepEqual(empty, [])
+  assert.deepEqual(local.inputs, ['matching date'])
+  assert.deepEqual((await index.search(['current'], [record, other], { projectKey: key }))[0]
+    .map(hit => hit.record.id).sort(), [record.id, other.id].sort())
+  assert.deepEqual(local.inputs, ['matching date', 'current'])
+  await index.search(['after forget'], [other], { projectKey: key })
+  assert.equal(index.status().indexed, 1)
+  assert.deepEqual((await index.search(['after forget'], () => [], { projectKey: key, partial: true })), [[]])
+  assert.equal(local.inputs.filter(text => text === 'after forget').length, 1)
+})
+
+test('date-only sections share a note index while staying out of current search and preparation', async t => {
+  const { root, key, record } = fixture(t)
+  const at = Date.UTC(2025, 2, 2), known = [], proof = []
+  const present = 'Current handbook paragraph', historical = 'Previously approved handbook paragraph'
+  const row = { ...record, kind: 'knowledge', noteReferenceTimes: [null], semanticSections: [
+    { text: present, datedOnly: false }, { text: historical, datedOnly: true },
+  ] }
+  const vector = score => [score, Math.sqrt(1 - score ** 2), ...Array(382).fill(0)]
+  const index = new SemanticRecallIndex(root, { engine: { state: 'ready', async embed(texts, mode) {
+    if (mode === 'query') return texts.map(() => vector(1))
+    known.push(...texts)
+    return texts.map(text => vector(text === historical ? 1 : .9))
+  } }, isLiveMany(hits) { proof.push(...hits.map(hit => hit.record.noteReferenceTimes)); return hits } })
+  t.after(() => index.dispose())
+  const search = times => index.search(times.map(String), [{ ...row, noteReferenceTimes: times }], {
+    projectKey: key, partial: times.includes(at),
+    eligibleForQuery: (note, i, datedOnly) => note.noteReferenceTimes.includes(times[i]) && (!datedOnly || times[i] === at),
+    recordForQuery: (note, i) => ({ ...note, noteReferenceTimes: [times[i]] }),
+  })
+  assert.equal((await search([null]))[0][0].record.recallContent, present)
+  assert.deepEqual(known, [present])
+  await index.settle()
+  await search([null, at])
+  await index.settle()
+  const mixed = await search([null, at])
+  assert.deepEqual(mixed.map(hits => hits[0].record.recallContent), [present, historical])
+  assert.deepEqual(proof.at(-1), [at])
+  assert.deepEqual(known, [present, historical])
+  assert.equal((await search([null]))[0][0].record.recallContent, present)
+  assert.equal((await search([at]))[0][0].record.recallContent, historical)
+  assert.deepEqual(known, [present, historical])
+})
+
+test('overlapping date and current searches keep their own note reference times and candidates', async t => {
+  for (const revoke of [false, true]) await t.test(revoke ? 'revoked before ranking' : 'remains authorized', async t => {
+    const { root, key, record } = fixture(t)
+    const march = Date.UTC(2025, 2, 2), april = Date.UTC(2025, 3, 2)
+    const { promise: waiting, resolve: entered } = Promise.withResolvers()
+    const { promise: resume, resolve: release } = Promise.withResolvers()
+    const archived = { ...record, id: 'note:archived.md', kind: 'knowledge', status: 'superseded' }
+    const current = { ...record, id: 'note:current.md', kind: 'knowledge' }
+    let revoked = false
+    const index = new SemanticRecallIndex(root, { isLive: candidate => !revoked || candidate.id !== archived.id,
+      engine: { state: 'ready', async embed(texts, mode) {
+        if (mode === 'query' && texts.includes('first dated question')) { entered(); await resume }
+        return texts.map(() => [1, ...Array(383).fill(0)])
+      } },
+    })
+    t.after(() => index.dispose())
+    const lookup = (query, note, at) => index.search([query], [{ ...note, noteReferenceTimes: [at] }], {
+      projectKey: key, partial: at !== null,
+      eligibleForQuery: candidate => candidate.noteReferenceTimes.includes(at),
+      recordForQuery: candidate => ({ ...candidate, noteReferenceTimes: [at] }),
+    })
+    const older = lookup('first dated question', archived, march)
+    try {
+      await waiting
+      assert.equal((await lookup('second dated question', archived, april))[0][0].record.id, archived.id)
+      assert.deepEqual((await lookup('current question', current, null))[0].map(hit => hit.record.id), [current.id])
+      revoked = revoke
+    } finally { release() }
+    const [datedHits] = await older
+    assert.deepEqual(datedHits.map(hit => [hit.record.id, hit.record.noteReferenceTimes]), revoke ? [] : [[archived.id, [march]]])
+    await lookup('complete reconciliation after all dated searches', current, null)
+    assert.equal(index.status().total, 1)
+  })
+})
+
+test('disabled semantic search does not open the corpus', async t => {
+  const { root, key } = fixture(t)
+  const local = engine(), index = new SemanticRecallIndex(root, { engine: local, enabled: false })
+  t.after(() => index.dispose())
+  assert.deepEqual(await index.search(['query'], () => { throw new Error('corpus must remain unopened') },
+    { projectKey: key }), [[]])
+  assert.equal(local.calls, 0)
+})
+
 test('forgetting during embedding cannot resurrect the document, on disk or in another profile',async t=>{
   const {root,key,record}=fixture(t),e=engine();let release,started
   const ready=new Promise(resolve=>{started=resolve})
@@ -136,4 +285,37 @@ test('an uncached model that cannot reach the network degrades to an empty seman
     globalThis.fetch=originalFetch
     index.dispose()
   }
+})
+
+test('a deferred corpus only loads originals after local embedding preparation succeeds', async t => {
+  const { root, key, record } = fixture(t)
+  let loads = 0
+  const records = async () => { loads++; return [record] }
+  const faulty = new SemanticRecallIndex(root, { engine: {
+    ...engine(), state: 'idle', async prepare() { throw Error('model unavailable') },
+  } })
+  t.after(() => faulty.dispose())
+  assert.deepEqual(await faulty.search(['部署环境'], records, { projectKey: key, deferCorpus: true }), [[]])
+  assert.equal(loads, 0)
+
+  const model = { ...engine(), state: 'idle', async prepare() { this.state = 'ready' } }
+  const ready = new SemanticRecallIndex(root, { engine: model })
+  t.after(() => ready.dispose())
+  const first = await ready.search(['部署环境'], records, { projectKey: key, deferCorpus: true })
+  assert.equal(first[0][0]?.record.id, record.id)
+  assert.equal(loads, 1)
+
+  const cancel = new AbortController()
+  let entered, finish
+  const preparing = new Promise(resolve => { entered = resolve })
+  const blocked = new SemanticRecallIndex(root, { engine: {
+    ...engine(), state: 'idle', prepare() { entered(); return new Promise(resolve => { finish = resolve }) },
+  } })
+  t.after(() => blocked.dispose())
+  const recall = blocked.search(['部署环境'], records, { projectKey: key, deferCorpus: true, signal: cancel.signal })
+  await preparing
+  cancel.abort()
+  assert.deepEqual(await recall, [[]])
+  finish()
+  assert.equal(loads, 1)
 })

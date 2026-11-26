@@ -1,5 +1,7 @@
 /** Shared parsing for factual queries and explicit user-turn controls. */
 
+import { sourceSentenceBreaks } from './sentences.js'
+
 const SAVE_ACTION = String.raw`(?:保存|记录|提炼|写入|记入)(?:\s*(?:或|和|并且?|、)\s*(?:保存|记录|提炼|写入|记入))*`
 const TURN_SCOPE = '(?:这次|这一?轮|本次|本轮|当前|此次|这段|这条)'
 const CURRENT_NO_SAVE_PATTERN = new RegExp(
@@ -11,6 +13,11 @@ const SHORT_NO_SAVE_PATTERN = /(?:^|(?<=[，,。！？!?；;\n]))\s*(?:请\s*)?(
 const ANSWER_CONTROL_PATTERN = /^(?:(?:只|仅)?根据.{0,40}(?:记忆|已有资料|现有信息)|(?:每项|每个|每条)(?:都)?(?:用|按).{0,80}(?:回答|输出)|(?:没有|若无|如果没有|缺少)依据.{0,50}(?:不记得|不知道|写|回答)|(?:请)?(?:不要|别|请勿|不必|无需)(?:调用|使用)工具|(?:只|仅)(?:输出|回答).{0,50}|(?:回答|输出)(?:格式|要求)|工具名\s*[:：])/iu
 const ANSWER_PRESENTATION_PATTERN = /^(?:请)?(?:(?:(?:按照|按|用)(?:原话|原文|表格|列表|要点|分点|编号|JSON|Markdown)(?:(?:逐项|逐条|分别|简短|简洁|简要)\s*)*(?:格式)?(?:回答|作答|输出|列出))|(?:(?:只|仅)(?:给(?:出)?|输出|回答)(?:结论|摘要|要点|答案|结果|原话|原文|表格|列表)(?:即可|就行)?)|(?:(?:分点|逐项|逐条|分别)(?:回答|作答)))$/iu
 const VALUE_ONLY_CONTROL_PATTERN = /^(?:请)?(?:只|仅)(?:给(?:出)?|输出|回答)(?:单位|数值|数字|名称|时间|日期|版本号|结果|答案)(?:即可|就行)?$/u
+const ITEMIZED_CONTROL_PATTERN = /^(?:please\s+)?(?:list|show|give)\s+(?:each\s+(?:count|amount)|the\s+individual\s+(?:counts|amounts))\s+separately(?:\s+before\s+(?:the\s+)?(?:total|difference))?$/iu
+const MEMORY_ONLY_CONTROL_PATTERN = /^(?:请\s*)?(?:只|仅)根据(?:已有|现有|当前|此前)?记忆(?:内容)?(?:来)?\s*(?:(?:逐项|逐条|分别|简短|简洁|简要)\s*){0,2}(?:回答|作答)$/u
+const ENGLISH_MEMORY_ONLY = /^(?:please\s+)?(?:(?:answer|reply)\s+(?:using|from|based on)\s+memory\s+only|(?:answer|reply)\s+only\s+from\s+(?:the\s+)?(?:available\s+)?memory)$/iu
+const ENGLISH_FORMAT_CONTROL = /^(?:please\s+)?(?:(?:do not|don['’]t)\s+(?:use|call)\s+(?:any\s+)?tools|(?:list|show|give)\s+each\s+(?:known\s+)?(?:count|amount)\s+and\s+(?:the\s+)?total|or\s+explain\s+which\s+(?:item|count|amount)\s+is\s+missing)$/iu
+const ANSWER_LENGTH_CONTROL_PATTERN = /^(?:(?:please\s+)?(?:(?:answer|reply|respond)\s+)?in\s+(?:a(?:\s+single)?|one|two|three|\d+)\s+(?:short\s+)?sentences?(?:\s+(?:from|using|based on)\s+(?:(?:my|our|the|your)\s+)?(?:memory|notes|records))?|(?:请)?(?:用|以)(?:一|两|二|三|\d+)句(?:话)?(?:简短|简要)?(?:回答|作答))$/iu
 const CONTROL_PREFIX_PATTERNS = [
   /^(?:请)?(?:只|仅)?根据(?:已有|现有|当前|此前)?(?:记忆|资料|上下文)(?:内容)?(?:来)?\s*(?:(?:逐项|逐条|分别|简短|简洁|简要)\s*){0,2}(?:回答|作答)(?:\s*[：:]?\s*|(?=[^\s：:]))/u,
   /^(?:请)?(?:只|仅)?根据(?:已有|现有|当前|此前)?(?:记忆|资料|上下文)(?:内容)?(?:内容)?(?:来)?(?:\s*[：:]\s*|\s+|$)/u,
@@ -60,8 +67,8 @@ function stripLeadingControlPrefix(clause) {
 
 function isControlClause(clause) {
   const normalized = stripLeadingControlPrefix(clause).replace(/^[“"「『(（\s]+/u, '')
-  return /^(?:请)?(?:(?:简短|简洁|简要|逐项|分别)\s*){1,2}(?:回答|作答)/u.test(normalized) || ANSWER_CONTROL_PATTERN.test(normalized) || ANSWER_PRESENTATION_PATTERN.test(normalized) || VALUE_ONLY_CONTROL_PATTERN.test(normalized) ||
-    noSave(normalized)
+  return /^(?:请)?(?:(?:简短|简洁|简要|逐项|分别)\s*){1,2}(?:回答|作答)/u.test(normalized) || ANSWER_CONTROL_PATTERN.test(normalized) || ANSWER_PRESENTATION_PATTERN.test(normalized) || VALUE_ONLY_CONTROL_PATTERN.test(normalized) || ITEMIZED_CONTROL_PATTERN.test(normalized) ||
+    ANSWER_LENGTH_CONTROL_PATTERN.test(normalized) || ENGLISH_MEMORY_ONLY.test(normalized) || ENGLISH_FORMAT_CONTROL.test(normalized) || noSave(normalized)
 }
 
 function removeQuestionEnding(clause) {
@@ -76,15 +83,24 @@ function removeQuestionEnding(clause) {
 /** Extract search text while retaining control intent for other host stages. */
 export function analyzeUserMessageControls(value) {
   const text = String(value ?? '')
-  const clauses = text.split(/(?:[，,。！？!?；;\n]+|(?<!\d)\.(?=\s|$))/u)
+  const boundaries = [...sourceSentenceBreaks(text), ...text.matchAll(/[，,；;]/gu)]
+    .sort((left, right) => left.index - right.index)
+  const clauses = []
+  let start = 0
+  for (const boundary of boundaries) {
+    if (boundary[0] === '.' && /\d/u.test(text[boundary.index - 1] ?? '')) continue
+    clauses.push(text.slice(start, boundary.index))
+    start = boundary.index + 1
+  }
+  clauses.push(text.slice(start))
   const retrieval = clauses
     .map(stripLeadingControlPrefix)
     .filter((clause) => clause.trim() !== '' && !isControlClause(clause))
-    .map(removeQuestionEnding)
-    .filter(Boolean)
   return {
-    retrievalQuery: retrieval.join('，'),
+    questionText: retrieval.join('，'),
+    retrievalQuery: retrieval.map(removeQuestionEnding).filter(Boolean).join('，'),
     noSaveDirective: noSave(text),
+    memoryOnlyDirective: clauses.some(clause => MEMORY_ONLY_CONTROL_PATTERN.test(clause.trim()) || ENGLISH_MEMORY_ONLY.test(clause.trim())),
   }
 }
 

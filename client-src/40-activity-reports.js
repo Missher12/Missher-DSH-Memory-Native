@@ -342,7 +342,8 @@
         return h('div', { key: evidence.id },
           showInjected && evidence.text ? h('blockquote', null, evidence.text) : null,
           h('p', { className: 'dsh-memory-muted' }, [evidence.verified === false ? t('recall.answer.unverified') : null, source].filter(Boolean).join(' · ')),
-          showInjected ? null : refs.map((ref, index) => ref.excerpt ? h('blockquote', { key: index }, ref.excerpt) : null),
+          showInjected ? null : evidence.selectedQuote ? h('blockquote', null, evidence.selectedQuote)
+            : refs.map((ref, index) => ref.excerpt ? h('blockquote', { key: index }, ref.excerpt) : null),
           evidence.kind === 'source' ? h('div', { className: 'dsh-memory-danger-actions' }, h('button', {
             type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', disabled: busy,
             onClick: () => forget(evidence),
@@ -356,9 +357,12 @@
         const hiddenIds = new Set([...injectedIds, ...notInjected.map(evidence => evidence.id)])
         const additionalHits = (question.hits ?? []).filter(evidence => !hiddenIds.has(evidence.id))
         const detailSections = []
+        const projected = question.durationAtEvent?.projected === true
         if (injected.length) detailSections.push(h('div', { key: 'injected' },
           h('strong', null, t('recall.injected')),
-          h('ul', null, injected.map(evidence => h('li', { key: evidence.id }, evidenceNode(evidence, true))))))
+          projected ? h('blockquote', null, injected[0].text) : null,
+          projected ? h('strong', null, t('recall.sourceQuotes')) : null,
+          h('ul', null, injected.map((evidence, i) => h('li', { key: evidence.id + ':' + i }, evidenceNode(evidence, !projected))))))
         detailSections.push(h('div', { key: 'answer' }, h('strong', null, t('recall.answer')),
           question.answerCoverage === 'covered' && question.answerExcerpt
             ? h('blockquote', null, question.answerExcerpt)

@@ -22,6 +22,7 @@ import { CapturePipeline } from './host/capture.js'
 import { resolveConfig } from './host/config.js'
 import { prepareStorage } from './host/storage-boundary.js'
 import { createRecallReportStore } from './host/recall-reports.js'
+import { scrubRecallSelectionReceipts } from './host/recall-journal.js'
 import { memoryHealth, probeStorage, storageIssue } from './host/health.js'
 import { SourceCandidateIndex } from './host/source-index.js'
 import { SourcePassageIndex } from './host/source-passages.js'
@@ -76,7 +77,8 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
       ctx.logger?.warn?.(`[dsh-memory] ${error.message}`)
     }
     config = resolveConfig(mergeConfigObjects(rawConfig, settingsToConfig(storedSettings)))
-    runtime = openMemoryRuntime({ root, onRecallRevoke: targets => recallFlow?.invalidateReferences(targets) })
+    runtime = openMemoryRuntime({ root, onRecallRevoke: targets => recallFlow
+      ? recallFlow.invalidateReferences(targets) : recallReportStore.invalidateReferences(targets) })
     store = runtime.store
     index = runtime.index
     ctx.logger?.debug?.(`[dsh-memory] startup metrics ${JSON.stringify(runtime.metrics)}`)
@@ -90,9 +92,11 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   ctx.effect(() => () => runtime.dispose(), 'dsh-memory.startup-cache')
   void probeStorage(root).then(result => { storageHealth.state = result.state; storageHealth.issue = result.issue ?? null })
 
-  const knowledgeIndex = new KnowledgeRecallIndex(root, store)
+  const knowledgeIndex = new KnowledgeRecallIndex(root, store, { background: true })
+  ctx.effect(() => () => knowledgeIndex.dispose(), 'dsh-memory.knowledge-directory')
   const sourceIndex = new SourceCandidateIndex(store)
   passageIndex = new SourcePassageIndex(root)
+  ctx.effect(() => () => passageIndex.clear(), 'dsh-memory.original-index')
   const semanticOptions = testOptions?.semantic ?? {}
   const customSemanticLive = semanticOptions.isLive
   const semanticLive = customSemanticLive ?? ((record, projectKey) => {
@@ -227,13 +231,17 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   // Self-maintenance: archive stale low-confidence episodes, write a daily
   // backup, prune old backups and record the run for the panel. Timers are
   // unref'd so they never keep the process alive.
+  let maintenanceRunning = false
   const runSelfMaintenance = async () => {
-    if (settingsIssue) return
+    if (settingsIssue || maintenanceRunning) return
+    maintenanceRunning = true
     try {
       await runMaintenance({ store, config, logger: ctx.logger })
-      capture.maintain()
+      await capture.maintainInBackground()
     } catch (error) {
       ctx.logger?.warn?.(`[dsh-memory] maintenance failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      maintenanceRunning = false
     }
   }
   const initialMaintenance = setTimeout(runSelfMaintenance, 4000)
@@ -247,9 +255,17 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
 
   // Resume capture tasks that were journaled before a restart. Tasks whose
   // request was already sent stay `unknown` and are never retried automatically.
-  const resume = () => capture.resume().catch((error) => {
-    ctx.logger?.warn?.(`[dsh-memory] capture resume failed: ${error instanceof Error ? error.message : String(error)}`)
-  })
+  const receiptCleanupAbort = new AbortController()
+  let receiptCleanup = null
+  const resume = () => {
+    receiptCleanup ??= scrubRecallSelectionReceipts(root, receiptCleanupAbort.signal).catch((error) => {
+      receiptCleanup = null
+      ctx.logger?.warn?.(`[dsh-memory] recall receipt cleanup will retry: ${error?.code ?? 'storage error'}`)
+    })
+    return capture.resume().catch((error) => {
+      ctx.logger?.warn?.(`[dsh-memory] capture resume failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
   const resumeTimer = setTimeout(resume, 2000)
   resumeTimer.unref?.()
   // Next-day budget rollover and settings changes have no turn event to wake
@@ -259,6 +275,7 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
   ctx.effect(() => () => {
     clearTimeout(resumeTimer)
     clearInterval(resumeInterval)
+    receiptCleanupAbort.abort()
   }, 'dsh-memory.capture-resume')
 
   wirePanel(ctx, {
@@ -279,10 +296,6 @@ export function apply(ctx, rawConfig, testOptions = undefined) {
     getLastExtraction: () => lastExtraction,
     getSessionProjectKey: sessionId => hostSessionProjectKey(ctx, sessionId),
     getLastRecallAsync: (input, resolvedProjectKey = undefined) => recallFlow.getLastRecallAsync(input, resolvedProjectKey),
-    invalidateRecallReferences: targets => recallFlow.invalidateReferences(targets),
-    invalidateRecall: () => {
-      passageIndex.clear()
-    },
     getSemanticStatus: () => semanticIndex.status(),
     prepareSemantic: (input) => semanticIndex.prepare(input),
     getHealthChecks: (captureSnapshot) => {

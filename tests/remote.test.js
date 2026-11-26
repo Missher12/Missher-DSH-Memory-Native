@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -781,6 +781,47 @@ test('knowledgeSync exports notes to the vault and imports them back', (t) => {
   assert.equal(imported.skipped, 1)
   assert.equal(imported.conflicts, 0)
   assert.throws(() => backend.knowledgeSync({ direction: 'sideways' }), PanelInputError)
+})
+
+test('forgotten knowledge is withheld from the editor and manual sync across writers', t => {
+  const { backend, root, store, index } = setup(t)
+  const vault = join(root, 'vault')
+  mkdirSync(vault)
+  backend.config.obsidian = { vaultPath: vault, folder: 'KB' }
+  const scope = { scope: 'project', projectKey: KEY }
+  const other = { scope: 'project', projectKey: OTHER_KEY }
+  const record = seed(store, index, { ...scope, content: '后来撤销的项目编号 RIVER-324。' })
+  const unrelated = seed(store, index, { ...other, content: '另一项目的知识仍然可读。' })
+  const promoted = backend.knowledgePromote({ ...scope, id: record.id })
+  const file = record.id + '.md'
+  backend.knowledgePromote({ ...other, id: unrelated.id })
+  const original = readFileSync(promoted.path, 'utf8')
+  const edited = original + '\n## 手写补充\n独立的审批备忘。\n'
+  writeFileSync(promoted.path, edited)
+  const stand = '---\ndsh_knowledge: true\nscope: global\n---\n# 独立手记\n\n这份笔记由作者自己记录。\n'
+  writeFileSync(join(root, 'knowledge', 'standalone.md'), stand)
+  const source = join(vault, 'KB', 'knowledge')
+  mkdirSync(source, { recursive: true })
+  writeFileSync(join(source, 'renamed-old.md'), original)
+  const otherFile = unrelated.id + '.md'
+  const liveOtherText = readFileSync(join(root, 'knowledge', otherFile), 'utf8')
+  writeFileSync(join(source, 'widened.md'), liveOtherText.replace(/^scope: .+$/mu, 'scope: global')
+    .replace(/^projectKey: .+$/mu, 'projectKey: null'))
+  const stale = backend.knowledgeNote({ file })
+  const writer = new MemoryStore({ root }).open()
+  assert.equal(writer.remove(record.id, [scope]).status, 'deleted')
+
+  assert.throws(() => backend.knowledgeNote({ file }), PanelInputError)
+  assert.throws(() => backend.knowledgeSave({ ...stale, title: '过期编辑' }), PanelInputError)
+  assert.deepEqual(backend.knowledgeList().notes.map(note => note.file).sort(), [unrelated.id + '.md', 'standalone.md'].sort())
+  assert.doesNotMatch(JSON.stringify(backend.knowledgeGraph({ scope: 'all' })), /RIVER-324|renamed-old/u)
+  assert.equal(backend.knowledgeSync({ direction: 'export' }).written, 2)
+  assert.equal(existsSync(join(source, file)), false)
+  assert.equal(backend.knowledgeSync({ direction: 'import' }).imported, 0)
+  assert.equal(existsSync(join(root, 'knowledge', 'renamed-old.md')), false)
+  assert.equal(existsSync(join(root, 'knowledge', 'widened.md')), false)
+  assert.equal(readFileSync(promoted.path, 'utf8'), edited, 'retain the hand-edited original in place')
+  assert.equal(readFileSync(join(source, 'standalone.md'), 'utf8'), stand)
 })
 
 test('stats exposes capture queue counts and retry reports the original reason', (t) => {

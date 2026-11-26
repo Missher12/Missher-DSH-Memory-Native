@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, unlinkSync 
 import { join } from 'node:path'
 import { atomicWritePrivate } from './persistence.js'
 import { isValidProjectKey } from './paths.js'
+import { normalizeClientTimeZone, sourceEventTime } from './source-time.js'
 
 const hash = value => createHash('sha256').update(value).digest('hex')
 const directory = root => join(root, '.local-sharing', 'last-user')
@@ -22,11 +23,12 @@ export function readLastUser(root, client, sessionId, projectKey) {
     if (value.version !== 1 || value.client !== client || value.sessionId !== sessionId || value.sessionId.length > 160 || value.projectKey !== projectKey ||
         typeof value.text !== 'string' || value.text.length > MAX_EVENT_TEXT_CHARS || typeof value.messageId !== 'string' || value.messageId === '' || value.messageId.length > 200 ||
         value.sourceId !== undefined && value.sourceId !== null && !sourcePattern.test(value.sourceId)) return null
-    return value
+    const eventTime = sourceEventTime(value.eventTime)
+    return { ...value, eventTime, timeZone: eventTime === undefined ? undefined : normalizeClientTimeZone(value.timeZone) }
   } catch { return null }
 }
 
-export function writeLastUser(root, { client, sessionId, projectKey, messageId, text, sourceId = null }) {
+export function writeLastUser(root, { client, sessionId, projectKey, messageId, text, eventTime, timeZone, sourceId = null }) {
   if (typeof client !== 'string' || client.length > 40 || !/^[a-z0-9._-]+$/iu.test(client) ||
       typeof sessionId !== 'string' || sessionId === '' || sessionId.length > 160 || !isValidProjectKey(projectKey) ||
       typeof messageId !== 'string' || messageId === '' || messageId.length > 200 ||
@@ -34,7 +36,9 @@ export function writeLastUser(root, { client, sessionId, projectKey, messageId, 
   const dir = directory(root)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   chmodSync(dir, 0o700)
-  atomicWritePrivate(fileFor(root, client, sessionId), `${JSON.stringify({ version: 1, client, sessionId, projectKey, messageId, text, sourceId })}\n`)
+  const submitted = sourceEventTime(eventTime)
+  atomicWritePrivate(fileFor(root, client, sessionId), `${JSON.stringify({ version: 1, client, sessionId, projectKey, messageId, text,
+    sourceId, eventTime: submitted, timeZone: submitted === undefined ? undefined : normalizeClientTimeZone(timeZone) })}\n`)
   return true
 }
 

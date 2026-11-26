@@ -17,11 +17,13 @@
 
 import { statSync } from 'node:fs'
 
+import { isBackupFormat } from './backup.js'
 import { hotRecord } from './cache-records.js'
 import { isValidProjectKey, scopePaths } from './paths.js'
 import { deriveProfile } from './profile.js'
 import { memoryHealth } from './health.js'
-import { buildKnowledgeGraph, knowledgeScopeWithinMemory, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
+import { buildKnowledgeGraph, listKnowledgeNotes, promoteMemoryToKnowledge, readKnowledgeNote, saveKnowledgeNote } from './knowledge.js'
+import { knowledgeAuthority, withKnowledgeWriter } from './knowledge-authority.js'
 import { deriveProjectBrief } from './project-brief.js'
 import { readMaintenance } from './maintenance.js'
 import { mergeConfigObjects, settingsToConfig } from './settings.js'
@@ -378,6 +380,7 @@ export function computeStats(backend, raw, trustedSessionProjectKey = null) {
     capture: captureState?.counts ?? null,
     captureBudget: captureState?.budget ?? null,
     captureStorage: captureState?.storage ?? null,
+    captureStorageState: captureState?.storageState ?? null,
     captureEnabled: backend.config?.capture?.enabled === true,
     injectEnabled: backend.config?.inject?.enabled === true,
     injectMaxTokens: backend.config?.inject?.maxTokens ?? null,
@@ -570,8 +573,10 @@ export function importData(backend, raw) {
 }
 
 /** Write a timestamped backup next to the authority and return its path. */
-export async function createBackup(backend) {
-  return { path: await backend.store.backup() }
+export async function createBackup(backend, input) {
+  const format = input?.format ?? 'compatible'
+  if (!isBackupFormat(format)) throw new PanelInputError('请选择快速备份或兼容备份。')
+  return { path: await backend.store.backup(format) }
 }
 
 /** Restore a tombstoned record to active. */
@@ -695,10 +700,10 @@ export function bulkAction(backend, raw) {
       try {
         const result = backend.store.updateBatch([...ids], scope, projectKey, patch, { restore: action === 'restore' })
         for (const record of result.records) reflect(record)
-        if (result.revocationError) failed.push({ id: [...ids][0], reason: '记录已更新，但原文权限更新失败。请检查存储权限。' })
+        if (result.revocationError) failed.push({ id: [...ids][0], reason: result.revocationError.message })
       } catch (error) {
         failed.push({ id: error.memoryId ?? [...ids][0], reason: error.message })
-        if (error.rollbackFailed) rollbackFailed = [...ids]
+        if (error.rollbackFailed || error.committed) rollbackFailed = [...ids]
       }
     }
     rolledBack = failed.length > 0 && updated.length === 0 && rollbackFailed.length === 0
@@ -872,24 +877,26 @@ export function resolveObsidianConflict(backend, raw) {
 export function knowledgeGraph(backend, raw) {
   const input = asObject(raw)
   let records
-  let totalRecords
+  let project = null
   if (input.scope === 'all') {
     records = backend.store.listAll()
   } else {
     const { scope, projectKey } = normalizeScope(input)
-    const resolvedProjectKey = scope === 'project' ? (projectKey ?? currentProjectKey(backend.store)) : null
+    project = scope === 'project' ? (projectKey ?? currentProjectKey(backend.store)) : null
     records = scope === 'global'
       ? backend.store.list('global', null)
-      : resolvedProjectKey === null ? [] : backend.store.list('project', resolvedProjectKey)
+      : project === null ? [] : backend.store.list('project', project)
   }
   const limit = Number.isInteger(input.limit) ? Math.min(1000, Math.max(10, input.limit)) : 400
-  const localNotes = backend.root === null ? [] : listKnowledgeNotes(backend.root)
+  const check = knowledgeAuthority(backend.store)
+  const permits = note => check(note).allowed
+  const localNotes = backend.root === null ? [] : listKnowledgeNotes(backend.root, { permits })
   const localFiles = new Set(localNotes.map((note) => note.file))
   const vaultPath = backend.config?.obsidian?.vaultPath ?? null
   const folder = backend.config?.obsidian?.folder ?? 'DSH Memory'
   const vaultNotes = vaultPath === null
     ? []
-    : listVaultKnowledgeNotes(vaultPath, folder).filter((note) => !localFiles.has(note.file))
+    : listVaultKnowledgeNotes(vaultPath, folder, permits, { root: backend.root, authority: check }).filter((note) => !localFiles.has(note.file))
   const notes = [
     ...localNotes.map((note) => ({ ...note, source: 'knowledge' })),
     ...vaultNotes,
@@ -897,21 +904,25 @@ export function knowledgeGraph(backend, raw) {
   const profile = input.scope === 'all' && typeof backend.getProfile === 'function'
     ? backend.getProfile(12, Date.now())
     : deriveProfile(records, { limit: 12 })
-  const visibleIds = new Set(records.map(r => r.id))
-  const scopedNotes = input.scope === 'all' ? notes : notes.filter(n => n.memoryId ? visibleIds.has(n.memoryId) : input.scope === 'global')
+  const scopedNotes = input.scope === 'all' ? notes : notes.filter(note =>
+    project !== null ? note.scope === 'project' && note.projectKey === project
+      : input.scope === 'global' && note.scope !== 'project')
   return buildKnowledgeGraph(records, { maxNodes: limit, notes: scopedNotes, traits: profile.traits, query: input.query, topic: input.topic, offset: input.offset, focus: input.focus })
 }
 
 /** Promote one memory into a long-term Markdown knowledge note. */
 export function knowledgePromote(backend, raw) {
   const target = normalizeTarget(raw)
-  const record = backend.store.find(target.id, target.scopes)
-  if (record === undefined) throw new PanelInputError('memory not found in the requested scope')
-  if (record.status === 'deleted') throw new PanelInputError('cannot promote a deleted memory')
   if (backend.root === null) throw new PanelInputError('memory root is unavailable')
   try {
-    const path = promoteMemoryToKnowledge(backend.root, record)
-    return { ok: true, path, id: record.id }
+    return withKnowledgeWriter(backend.store, check => {
+      const scope = target.scopes[0]
+      const { allowed, parent } = check({ memoryId: target.id, memoryScope: scope.scope,
+        memoryProjectKey: scope.projectKey ?? null, scope: scope.scope, projectKey: scope.projectKey ?? null })
+      if (!allowed) throw new Error('关联记忆已撤权或无法核实，不能生成笔记。')
+      const path = promoteMemoryToKnowledge(backend.root, parent)
+      return { ok: true, path, id: parent.id }
+    })
   } catch (error) {
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }
@@ -923,7 +934,8 @@ export function knowledgeNote(backend, raw) {
   const input = asObject(raw)
   const file = typeof input.file === 'string' ? input.file : ''
   try {
-    return readKnowledgeNote(backend.root, file)
+    const check = knowledgeAuthority(backend.store)
+    return readKnowledgeNote(backend.root, file, note => check(note).allowed)
   } catch (error) {
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
   }
@@ -934,16 +946,7 @@ export function knowledgeSave(backend, raw) {
   if (backend.root === null) throw new PanelInputError('memory root is unavailable')
   const input = asObject(raw)
   try {
-    const current = readKnowledgeNote(backend.root, typeof input.file === 'string' ? input.file : '')
-    if (current.memoryId !== null && (input.scope !== undefined || input.projectKey !== undefined)) {
-      const linked = backend.store.listAll({ includeDeleted: true }).find(record => record.id === current.memoryId)
-      const targetScope = input.scope === undefined ? current.scope : input.scope
-      const targetProject = input.projectKey === undefined ? current.projectKey : input.projectKey
-      if (linked === undefined || !knowledgeScopeWithinMemory(targetScope, targetProject, linked.scope, linked.projectKey)) {
-        throw new PanelInputError('与记忆关联的笔记不能扩大或移动其召回范围')
-      }
-    }
-    return saveKnowledgeNote(backend.root, input)
+    return withKnowledgeWriter(backend.store, check => saveKnowledgeNote(backend.root, input, check))
   } catch (error) {
     if (error instanceof PanelInputError) throw error
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
@@ -960,8 +963,8 @@ export function knowledgeSync(backend, raw) {
   const { vaultPath, folder } = obsidianTargetFrom(backend, input)
   try {
     const summary = direction === 'export'
-      ? exportKnowledgeToVault({ root: backend.root, vaultPath, folder })
-      : importKnowledgeFromVault({ root: backend.root, vaultPath, folder })
+      ? exportKnowledgeToVault({ root: backend.root, store: backend.store, vaultPath, folder })
+      : importKnowledgeFromVault({ root: backend.root, store: backend.store, vaultPath, folder })
     return { direction, ...summary }
   } catch (error) {
     throw new PanelInputError(error instanceof Error ? error.message : String(error))
@@ -970,7 +973,8 @@ export function knowledgeSync(backend, raw) {
 
 /** List promoted long-term knowledge notes for the knowledge base tab. */
 export function knowledgeList(backend) {
-  const notes = backend.root === null ? [] : listKnowledgeNotes(backend.root)
+  const check = knowledgeAuthority(backend.store)
+  const notes = backend.root === null ? [] : listKnowledgeNotes(backend.root, { permits: note => check(note).allowed })
   return {
     notes: notes.map((note) => ({
       file: note.file,
@@ -1077,7 +1081,7 @@ export function applyRemove(backend, raw) {
   if (target.id.startsWith('source:')) {
     const scope = target.scopes[0]
     const removed = scope.scope === 'project' && forgetSourcePassage(backend.root ?? backend.store.root,
-      target.id, scope.projectKey, backend.store, backend.index, backend.invalidateRecallReferences)
+      target.id, scope.projectKey, backend.store, backend.index)
     if (!removed) throw new PanelInputError('原文不存在、已遗忘或不属于此项目')
     return removed
   }

@@ -62,19 +62,21 @@
 
     function ActivityTrends({ stats, activity, locale, t }) {
       const storage = stats.captureStorage
+      const storageNotice = stats.captureStorageState === 'checking' ? 'settings.captureStorageChecking'
+        : stats.captureStorageState === 'unavailable' ? 'settings.captureStorageUnavailable' : null
       const [open, setOpen] = React.useState(true)
       return h('details', { className: 'dsh-memory-trends-section dsh-memory-disclosure', open, onToggle: event => setOpen(event.currentTarget.open) },
         h('summary', { className: 'dsh-memory-disclosure-head dsh-memory-section-title' }, t('activity.trends')),
         open ? h('div', { className: 'dsh-memory-trends-body' },
           h(ActivityHeatmap, { activity, t, locale }),
           h(TokenTrend, { usage: stats.usage, t }),
-          stats.captureBudget || storage ? h('div', { className: 'dsh-memory-trend-facts' },
+          stats.captureBudget || storage || storageNotice ? h('div', { className: 'dsh-memory-trend-facts' },
             stats.captureBudget ? h('span', null, t('settings.captureAllowance', stats.captureBudget)) : null,
             storage ? h('span', null, t('settings.captureStorage', {
               sources: String(storage.sources?.count ?? 0),
               size: ((storage.bytes ?? 0) / 1024 / 1024).toFixed(1) + ' MB',
               tasks: String(storage.tasks ?? 0),
-            })) : null) : null) : null)
+            })) : storageNotice ? h('span', { role: 'status' }, t(storageNotice)) : null) : null) : null)
     }
 
     function HealthStatus({ health, capture, t, onRepair }) {

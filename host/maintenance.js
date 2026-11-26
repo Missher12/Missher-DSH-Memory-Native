@@ -11,68 +11,67 @@
 
 import { readdirSync, readFileSync, rmSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
-import { verifyBackup } from './backup.js'
+import { hasBackupCheckpoint, readBackupManifest, verifyBackup } from './backup.js'
 import { atomicWritePrivate } from './persistence.js'
 
 const DAY_MS = 86_400_000
 const BACKUP_PATTERN = /^memories-.*\.(?:json|backup)$/u
 
-/** Newest backup mtime under `<root>/backups`, or null when there is none. */
-async function newestCompleteBackup(root) {
+function listBackups(root) {
   const dir = join(root, 'backups')
-  const candidates = []
-  try {
-    for (const name of readdirSync(dir)) {
-      if (!BACKUP_PATTERN.test(name) || !name.endsWith('.backup')) continue
-      try {
-        const stat = lstatSync(join(dir, name))
-        if (stat.isDirectory()) candidates.push({ path: join(dir, name), time: stat.mtimeMs })
-      } catch {
-        // A vanished backup is not an error.
-      }
+  let names
+  try { names = readdirSync(dir) } catch { return [] }
+  const entries = []
+  for (const name of names) {
+    if (!BACKUP_PATTERN.test(name)) continue
+    const path = join(dir, name)
+    try {
+      const stat = lstatSync(path)
+      if (!stat.isSymbolicLink()) entries.push({ path, time: stat.mtimeMs, directory: stat.isDirectory() })
+    } catch {
+      // The file may have been moved or removed.
     }
-  } catch {
-    // No backups directory yet.
   }
-  candidates.sort((a, b) => b.time - a.time)
-  for (const candidate of candidates) {
-    try { const manifest = await verifyBackup(candidate.path); return { ...candidate, time: manifest.createdAt } } catch { /* A broken snapshot is not recovery coverage. */ }
+  return entries.sort((a, b) => b.time - a.time)
+}
+
+async function* verifiedBackupsByFormat(entries) {
+  const found = new Set()
+  for (const { path, directory } of entries) {
+    if (!directory || !path.endsWith('.backup')) continue
+    try {
+      const version = readBackupManifest(path).version
+      const compatible = version !== 4
+      if (found.has(compatible)) continue
+      const manifest = await verifyBackup(path)
+      if (manifest.version !== version) continue
+      found.add(compatible)
+      yield { path, time: manifest.createdAt, compatible }
+      if (found.size === 2) return
+    } catch {
+      // A damaged or unreadable snapshot cannot establish recovery coverage.
+    }
   }
+}
+
+export async function newestBackupTime(root) {
+  for await (const backup of verifiedBackupsByFormat(listBackups(root))) return backup.time
   return null
 }
 
-export async function newestBackupTime(root) { return (await newestCompleteBackup(root))?.time ?? null }
-
-/** Keep the newest `keep` backups, delete the rest, return the deleted count. */
-export function pruneBackups(root, keep, preserve = null) {
-  const dir = join(root, 'backups')
-  let files
-  try {
-    files = readdirSync(dir).filter((name) => BACKUP_PATTERN.test(name))
-  } catch {
-    return 0
-  }
-  const entries = []
-  for (const name of files) {
-    try {
-      const stat = lstatSync(join(dir, name))
-      if (stat.isSymbolicLink()) continue
-      entries.push({ name, time: stat.mtimeMs, directory: stat.isDirectory() })
-    } catch {
-      // Ignore races with the filesystem.
-    }
-  }
-  entries.sort((left, right) => right.time - left.time)
-  const retained = new Set(preserve ? [preserve] : [])
+/** Keep protected recovery points, then fill the remaining slots by recency. */
+export function pruneBackups(root, keep, ...preserve) {
+  const entries = listBackups(root)
+  const retained = new Set(preserve.filter(Boolean))
   for (const entry of entries) {
     if (retained.size >= keep) break
-    retained.add(join(dir, entry.name))
+    retained.add(entry.path)
   }
   let removed = 0
   for (const entry of entries) {
-    if (retained.has(join(dir, entry.name))) continue
+    if (retained.has(entry.path)) continue
     try {
-      rmSync(join(dir, entry.name), { recursive: entry.directory })
+      rmSync(entry.path, { recursive: entry.directory })
       removed += 1
     } catch {
       // Best effort.
@@ -120,15 +119,28 @@ export async function runMaintenance(options) {
     }
   }
 
-  const newest = await newestCompleteBackup(store.root)
-  if (newest === null || now < newest.time || now - newest.time > DAY_MS) {
+  const recoveryPoints = []
+  for await (const backup of verifiedBackupsByFormat(listBackups(store.root))) recoveryPoints.push(backup)
+  const compatible = recoveryPoints.find(backup => backup.compatible)
+  let newest = recoveryPoints[0]
+  const pendingFormat = hasBackupCheckpoint(store.root) ? 'compatible'
+    : hasBackupCheckpoint(store.root, 'fast') ? 'fast' : null
+  if (pendingFormat !== null || !compatible || now < compatible.time || now - compatible.time > DAY_MS) {
     try {
-      summary.backedUp = await store.backup()
-    } catch {
-      summary.backupError = { code: 'backup-failed', message: '完整备份未完成，已有备份保留。请稍后重试或检查磁盘与文件权限。' }
+      const path = await store.backup(pendingFormat ?? 'compatible')
+      newest = { path, compatible: readBackupManifest(path).version !== 4 }
+      summary.backedUp = path
+    } catch (error) {
+      summary.backupError = error?.code === 'backup-source-changed'
+        ? { code: 'backup-source-changed', message: '记忆在备份期间有更新，稍后会复用已核验的文件继续备份。' }
+        : { code: 'backup-failed', message: '完整备份未完成，已有备份保留。请稍后重试或检查磁盘与文件权限。' }
     }
   }
-  if (!summary.backupError) summary.pruned = pruneBackups(store.root, config?.maintenance?.backupKeep ?? 7, summary.backedUp ?? newest?.path)
+  if (!summary.backupError) {
+    const keep = config?.maintenance?.backupKeep ?? 7
+    const fallback = keep > 1 && newest && recoveryPoints.find(backup => backup.compatible !== newest.compatible)
+    summary.pruned = pruneBackups(store.root, keep, newest?.path, fallback?.path)
+  }
   writeSummary(store.root, summary)
   options.logger?.info?.(`[dsh-memory] maintenance: archived=${summary.archived} backup=${summary.backedUp === null ? 'skip' : 'ok'} pruned=${summary.pruned}`)
   return summary

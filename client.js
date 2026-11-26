@@ -166,6 +166,8 @@ window.__ModuleLoader__.load({
         'settings.captureResume': '{count} waiting · resumes {time} local. Manual recovery uses extra calls.',
         'settings.capturePaused': '{count} waiting · automatic capture or its allowance is off.',
         'settings.captureStorage': 'Capture storage: {sources} sources · {size} · {tasks} tasks',
+        'settings.captureStorageChecking': 'Checking capture storage…',
+        'settings.captureStorageUnavailable': 'Capture storage unavailable',
         'settings.captureRetry': 'Recover next task',
         'settings.captureUnknownConfirm': 'The previous request has no confirmed result. Retrying may charge again. Send a new request?',
         'settings.captureNothing': 'No recoverable leaf remains. Check any in-flight or unresolved child task.',
@@ -233,8 +235,9 @@ window.__ModuleLoader__.load({
         'data.importConfirm': 'Preview: import {imported} records and skip {skipped}. Continue?',
         'data.importCanceled': 'Import canceled; no records were changed.',
         'data.backup': 'Full backup',
-        'data.backupAction': 'Create backup',
-        'data.backupHint': 'Export saves current records. Full backups also retain sources, history, settings and receipts.',
+        'data.backupAction': 'Fast backup',
+        'data.backupCompatible': 'Compatible backup',
+        'data.backupHint': 'Includes sources, history and settings. Compatible backup uses the previous format.',
         'data.localSharing': 'Share this profile locally',
         'data.openSharing': 'Open local sharing',
         'data.stopSharing': 'Stop sharing',
@@ -440,6 +443,7 @@ window.__ModuleLoader__.load({
         'recall.missing': 'Still missing evidence',
         'recall.hits': 'Retrieved hits',
         'recall.injected': 'Text actually injected',
+        'recall.sourceQuotes': 'Source quotes',
         'recall.notInjected': 'Found but omitted by the context budget',
         'recall.answer': 'Final answer',
         'recall.answer.pending': 'Waiting for the turn to finish',
@@ -585,6 +589,8 @@ window.__ModuleLoader__.load({
         'settings.captureResume': '{count} 项等额度 · {time} 自动续跑。手动恢复会额外调用。',
         'settings.capturePaused': '{count} 项暂停 · 捕获关闭或额度为 0。',
         'settings.captureStorage': '原文 {sources} 条 · {size} · 任务 {tasks} 项',
+        'settings.captureStorageChecking': '正在核验原文占用…',
+        'settings.captureStorageUnavailable': '暂时无法核验原文占用',
         'settings.captureRetry': '恢复下一项',
         'settings.captureUnknownConfirm': '上一次请求结果未知，重新发送可能再次计费。确认发送新请求？',
         'settings.captureNothing': '没有可恢复的末级任务，请检查正在运行或结果未知的子任务。',
@@ -700,8 +706,9 @@ window.__ModuleLoader__.load({
         'health.capture-incomplete': '部分提炼任务需恢复。',
         'health.capture-unknown': '待核实任务暂停重发，避免重复计费。',
         'data.backup': '完整备份',
-        'data.backupAction': '立即备份',
-        'data.backupHint': '导出保存当前记录，完整备份另含原文、历史、设置和调用记录。',
+        'data.backupAction': '快速备份',
+        'data.backupCompatible': '兼容备份',
+        'data.backupHint': '含原文、历史和设置。兼容备份沿用此前格式。',
         'data.localSharing': '\u672c\u673a\u5171\u4eab\u8bb0\u5fc6',
         'data.openSharing': '\u6253\u5f00\u672c\u673a\u5171\u4eab',
         'data.stopSharing': '\u505c\u6b62\u5171\u4eab',
@@ -859,6 +866,7 @@ window.__ModuleLoader__.load({
         'recall.missing': '仍缺少证据',
         'recall.hits': '检索命中',
         'recall.injected': '实际注入文字',
+        'recall.sourceQuotes': '原话',
         'recall.notInjected': '已找到，但受上下文预算限制未注入',
         'recall.answer': '最终回答',
         'recall.answer.pending': '等待本轮结束',
@@ -2095,7 +2103,8 @@ window.__ModuleLoader__.load({
         return h('div', { key: evidence.id },
           showInjected && evidence.text ? h('blockquote', null, evidence.text) : null,
           h('p', { className: 'dsh-memory-muted' }, [evidence.verified === false ? t('recall.answer.unverified') : null, source].filter(Boolean).join(' · ')),
-          showInjected ? null : refs.map((ref, index) => ref.excerpt ? h('blockquote', { key: index }, ref.excerpt) : null),
+          showInjected ? null : evidence.selectedQuote ? h('blockquote', null, evidence.selectedQuote)
+            : refs.map((ref, index) => ref.excerpt ? h('blockquote', { key: index }, ref.excerpt) : null),
           evidence.kind === 'source' ? h('div', { className: 'dsh-memory-danger-actions' }, h('button', {
             type: 'button', className: 'dsh-memory-button', 'data-danger': 'true', disabled: busy,
             onClick: () => forget(evidence),
@@ -2109,9 +2118,12 @@ window.__ModuleLoader__.load({
         const hiddenIds = new Set([...injectedIds, ...notInjected.map(evidence => evidence.id)])
         const additionalHits = (question.hits ?? []).filter(evidence => !hiddenIds.has(evidence.id))
         const detailSections = []
+        const projected = question.durationAtEvent?.projected === true
         if (injected.length) detailSections.push(h('div', { key: 'injected' },
           h('strong', null, t('recall.injected')),
-          h('ul', null, injected.map(evidence => h('li', { key: evidence.id }, evidenceNode(evidence, true))))))
+          projected ? h('blockquote', null, injected[0].text) : null,
+          projected ? h('strong', null, t('recall.sourceQuotes')) : null,
+          h('ul', null, injected.map((evidence, i) => h('li', { key: evidence.id + ':' + i }, evidenceNode(evidence, !projected))))))
         detailSections.push(h('div', { key: 'answer' }, h('strong', null, t('recall.answer')),
           question.answerCoverage === 'covered' && question.answerExcerpt
             ? h('blockquote', null, question.answerExcerpt)
@@ -2548,13 +2560,13 @@ window.__ModuleLoader__.load({
           if (event.target !== null) event.target.value = ''
         }
       }
-      const backupNow = async () => {
+      const backupNow = async format => {
         if (call === null || busy) return
         setBusy(true)
         setNoticeArea('backup')
         setNotice('')
         try {
-          const result = await call('backup', {})
+          const result = await call('backup', { format })
           setNotice(t('data.backupDone', { path: String(result.path ?? '') }))
         } catch (failure) {
           setNotice(t('data.failed', { reason: messageOf(failure) }))
@@ -2675,7 +2687,8 @@ window.__ModuleLoader__.load({
             h('input', { ref: fileRef, type: 'file', accept: 'application/json', className: 'dsh-memory-file-input', onChange: importAll })),
           feedbackAt('records'),
           h(SettingRow, { label: t('data.backup'), hint: t('data.backupHint') },
-            button(t('data.backupAction'), backupNow)),
+            button(t('data.backupAction'), () => backupNow('fast')),
+            button(t('data.backupCompatible'), () => backupNow('compatible'))),
           feedbackAt('backup')),
         groupSection('sharing',
           h(SettingRow, { label: t('data.localSharing'), hint: sharingUrl
@@ -3020,19 +3033,21 @@ window.__ModuleLoader__.load({
 
     function ActivityTrends({ stats, activity, locale, t }) {
       const storage = stats.captureStorage
+      const storageNotice = stats.captureStorageState === 'checking' ? 'settings.captureStorageChecking'
+        : stats.captureStorageState === 'unavailable' ? 'settings.captureStorageUnavailable' : null
       const [open, setOpen] = React.useState(true)
       return h('details', { className: 'dsh-memory-trends-section dsh-memory-disclosure', open, onToggle: event => setOpen(event.currentTarget.open) },
         h('summary', { className: 'dsh-memory-disclosure-head dsh-memory-section-title' }, t('activity.trends')),
         open ? h('div', { className: 'dsh-memory-trends-body' },
           h(ActivityHeatmap, { activity, t, locale }),
           h(TokenTrend, { usage: stats.usage, t }),
-          stats.captureBudget || storage ? h('div', { className: 'dsh-memory-trend-facts' },
+          stats.captureBudget || storage || storageNotice ? h('div', { className: 'dsh-memory-trend-facts' },
             stats.captureBudget ? h('span', null, t('settings.captureAllowance', stats.captureBudget)) : null,
             storage ? h('span', null, t('settings.captureStorage', {
               sources: String(storage.sources?.count ?? 0),
               size: ((storage.bytes ?? 0) / 1024 / 1024).toFixed(1) + ' MB',
               tasks: String(storage.tasks ?? 0),
-            })) : null) : null) : null)
+            })) : storageNotice ? h('span', { role: 'status' }, t(storageNotice)) : null) : null) : null)
     }
 
     function HealthStatus({ health, capture, t, onRepair }) {
@@ -3245,6 +3260,10 @@ window.__ModuleLoader__.load({
           if (request !== sessionRequestGeneration.current) return
           setSessionPanel({ sessionId: requestedSessionId, usage: stats?.contextUsage,
             report: stats?.lastRecall ?? null, injectEnabled: stats?.injectEnabled })
+          setData(current => current?.stats && current.scope === scope && current.sessionId === requestedSessionId
+            ? { ...current, stats: { ...current.stats,
+              captureStorage: stats?.captureStorage, captureStorageState: stats?.captureStorageState } }
+            : current)
         } catch (failure) {
           if (request === sessionRequestGeneration.current) setError(messageOf(failure))
         }

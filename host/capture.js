@@ -15,12 +15,16 @@
  * @module dsh-memory/host/capture
  */
 
+import { join } from 'node:path'
 import { MAX_MEMORIES_PER_PASS, buildExtractionPrompt, parseExtraction } from './extract.js'
 import {
+  CAPTURE_DIR,
+  SOURCE_DIR,
   discardTurnSources,
   captureJournalHealth,
   captureStorageStatus,
   compressCaptureSources,
+  compressCaptureSourcesInBatches,
   captureTaskIdOf,
   compactCaptureLedgers,
   countCaptureTasks,
@@ -43,17 +47,26 @@ import { projectIdentity } from './paths.js'
 import { estimateTokens } from './recall.js'
 import { looksSensitive } from './records.js'
 import { analyzeUserMessageControls, explicitRememberText, isBareRemember } from './user-controls.js'
-import { grantSourceRecall } from './source-passages.js'
+import { grantSourceRecall, hasSourceRecallGrant } from './source-passages.js'
 import { readRecallSelection, readRecallSelections, recallSelectionId, writeRecallSelection } from './recall-journal.js'
-import { buildRecallSelectionPrompt } from './recall-selection.js'
+import { buildRecallSelectionPrompt, parseRecallSelectionResult, recallSelectionKey, recallSelectionSlotDigest } from './recall-selection.js'
 import { MIN_CONTINUATION_CHARS, MAX_CONTINUATION_DEPTH, MAX_COMPLETION_ROUNDS, RECOVERY_OUTPUT_TOKENS,
   emptyCapacityResult, sameRoute, dayKey, nextDayStart, receiptDay, combineSignals, automaticBudget,
   normalizeUsage, splitRanges } from './capture-budget.js'
 import { EXPLICIT_MEMORY_PATTERN, isOrdinaryDecision, memoryOptOut, sourceLabel, isDirectUserSource, isModelEvidenceSource, sourceIdLine } from './capture-evidence.js'
 import { CaptureApplyCoordinator } from './capture-apply.js'
+import { CaptureSourceFootprint } from './capture-source-footprint.js'
+import { sourceEventTime } from './source-time.js'
 
 const SENSITIVE_REASON = '本轮含疑似凭据，未保存原文或请求提炼'
 const LOW_EFFORT_ORDER = ['off', 'none', 'minimal', 'low']
+const MODEL_FINISHES = new Set(['stop', 'max-tokens', 'length', 'tool-calls'])
+const CONFIRMED_REJECTIONS = new Set([
+  'NO_ADAPTER', 'MISSING_CREDENTIAL', 'INVALID_CREDENTIAL',
+  'AUTH', 'ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_TOKEN_INVALID',
+  'ACCOUNT_QUOTA', 'QUOTA', 'RATE_LIMIT', 'CONTEXT_WINDOW_EXCEEDED',
+  'UNKNOWN_MODEL', 'MODEL_UNSUPPORTED', 'CONTENT_REFUSED', 'EMPTY_RESPONSE',
+])
 
 function textOfContent(content) {
   if (typeof content === 'string') return content
@@ -67,6 +80,29 @@ function textOfContent(content) {
 
 const isNativeUserInput = message => message?.role === 'user' && message.source?.kind === 'user' &&
   typeof message.id === 'string' && message.id !== ''
+
+/** Resolve the immediate admitted user message using the authoritative session order. */
+export function precedingUserSourceId(session, ref) {
+  const { sessionId, messageId, eventSeq, sourceId } = ref
+  const boundary = session.inheritedEventCount
+  if (session.id !== sessionId || typeof session.eventAt !== 'function' || !Number.isSafeInteger(boundary) ||
+      !Number.isSafeInteger(eventSeq) || eventSeq <= boundary) return null
+  const idFor = message => sourceIdOf({ sessionId, messageId: message.id, role: 'user', text: textOfContent(message.content) })
+  const current = session.eventAt(eventSeq)
+  if (current?.type !== 'user/message' || current.seq !== eventSeq || !isNativeUserInput(current.data) ||
+      current.data.id !== messageId || idFor(current.data) !== sourceId) return null
+  // Count native events, including user turns the memory layer never saved.
+  for (let seq = eventSeq - 1; seq >= Math.max(boundary, eventSeq - 4096); seq--) {
+    const event = session.eventAt(seq)
+    if (!event || event.seq !== seq) return null
+    if (event.type !== 'user/message') continue
+    if (isNativeUserInput(event.data)) return idFor(event.data)
+    // The host commits these context messages using the user role. Only
+    // skip known synthetic kinds; a real omitted user input is a boundary.
+    if (event.data?.source?.kind !== 'runtime-context' && event.data?.source?.kind !== 'memory') return null
+  }
+  return null
+}
 
 function previousUserInput(observation, event, command) {
   const events = observation.events
@@ -155,8 +191,10 @@ export class CapturePipeline {
   #onExtraction
   #onUsage
   #applyCoordinator
+  #sourceFootprint
   #buffers = new Map()
   #remembering = new WeakMap()
+  #queuedUserTimes = new WeakMap()
   #queue = Promise.resolve()
   #draining = null
   #resuming = null
@@ -182,6 +220,7 @@ export class CapturePipeline {
       config: this.#config, clock: this.#clock, logger: this.#logger })
     const root = this.#store?.root
     if (typeof root === 'string' && root !== '') {
+      this.#sourceFootprint = new CaptureSourceFootprint(join(root, CAPTURE_DIR, SOURCE_DIR))
       recoverCaptureTasks(root)
       const reconciled = reconcileReplacements(root, this.#store, this.#clock())
       for (const record of reconciled) this.#index.upsert(record)
@@ -234,16 +273,12 @@ export class CapturePipeline {
   }
 
   async #selectRecallOnce(root, id, input) {
+    const reuse = previous => !previous || previous.callState === 'requested'
+      ? { ...previous, state: 'unknown', callState: 'unknown', reused: true,
+        reason: '上次选择请求已发送但没有可用回执；不会自动重试' }
+      : { ...previous, state: previous.state ?? previous.callState, reused: true }
     const previous = readRecallSelection(root, id)
-    if (previous !== null) {
-      if (previous.callState === 'requested') {
-        const unknown = { ...previous, state: 'unknown', callState: 'unknown', updatedAt: this.#clock(),
-          reason: '上次选择请求已发送但没有可用回执；不会自动重试' }
-        writeRecallSelection(root, unknown)
-        return { ...unknown, reused: true }
-      }
-      return { ...previous, state: previous.state ?? previous.callState, reused: true }
-    }
+    if (previous !== null) return reuse(previous)
 
     if (input.signal?.aborted === true) {
       return { state: 'not-sent', callState: 'not-sent', route: null, usage: null, resultText: '' }
@@ -280,11 +315,14 @@ export class CapturePipeline {
       id, state: 'requested', callState: 'requested', route, requestedAt: this.#clock(),
       promptTokens: built.promptTokens, maxTokens,
       budgetReservation: { ...reservation, state: 'reserved' },
-      slotKeys: built.slots,
-      candidateRefs: built.candidates.map(candidate => ({ id: candidate.id, revision: candidate.revision })),
+      slotDigest: recallSelectionSlotDigest(built.slots),
+      candidateRefs: [...new Map(built.candidates.map(({ id, revision }) => [id, { id, revision }])).values()],
     }
     try {
-      writeRecallSelection(root, requested)
+      if (!writeRecallSelection(root, requested, { createOnly: true })) {
+        this.#releaseCall(reservation)
+        return reuse(readRecallSelection(root, id))
+      }
     } catch (error) {
       this.#releaseCall(reservation)
       return { state: 'not-sent', callState: 'not-sent', route, usage: null, resultText: '',
@@ -293,21 +331,34 @@ export class CapturePipeline {
     if (input.signal?.aborted === true) {
       this.#releaseCall(reservation)
       const receipt = {
-        ...requested, state: 'not-sent', callState: 'not-sent', completedAt: this.#clock(), resultText: '', usage: null,
+        ...requested, state: 'not-sent', callState: 'not-sent', completedAt: this.#clock(), usage: null,
         budgetReservation: { ...requested.budgetReservation, state: 'released', calls: 0 },
         reason: '请求发送前，本轮已取消',
       }
       writeRecallSelection(root, receipt)
       return receipt
     }
+    const recordsById = new Map(input.candidates.filter(Boolean).map(item => {
+      const record = item.record ?? item
+      return [record.id, record]
+    }))
+    const selectionRefs = (text, state) => state === 'completed'
+      ? parseRecallSelectionResult(text, built.slots, built.candidates).flatMap(selection => {
+        const { slot, id, revision, quote } = selection
+        const record = recordsById.get(id)
+        const start = String(record?.content ?? '').indexOf(quote)
+        return start < 0 ? [] : [{ slot, id, revision, scope: record.scope, projectKey: record.projectKey ?? null,
+          start, length: quote.length, digest: recallSelectionKey(selection) }]
+      }) : []
     let result = null
     try {
       result = await this.#collect(route, built.prompt, maxTokens, input.signal)
       const state = result.finishKind === 'stop' && result.truncated !== true ? 'completed' : 'failed'
       const completedAt = this.#clock()
       const usage = normalizeUsage(result.usage)
+      const resultText = String(result.text ?? '').slice(0, 16000)
       const receipt = {
-        ...requested, state, callState: 'completed', resultText: String(result.text ?? '').slice(0, 16000),
+        ...requested, state, callState: 'completed', selectionRefs: selectionRefs(resultText, state),
         finishKind: result.finishKind ?? null, usage,
         budgetReservation: this.#settledReservation(reservation, usage),
         completedAt, reason: state === 'completed' ? null : '模型选择输出未完整结束；不会自动重试',
@@ -319,7 +370,7 @@ export class CapturePipeline {
       if (error?.notSent === true) {
         this.#releaseCall(reservation)
         const receipt = {
-          ...requested, state: 'not-sent', callState: 'not-sent', completedAt: this.#clock(), resultText: '', usage: null,
+          ...requested, state: 'not-sent', callState: 'not-sent', completedAt: this.#clock(), usage: null,
           budgetReservation: { ...requested.budgetReservation, state: 'released', calls: 0 },
           reason: '请求发送前，本轮已取消',
         }
@@ -331,14 +382,15 @@ export class CapturePipeline {
       const selectionCompleted = result?.finishKind === 'stop' && result?.truncated !== true
       const state = selectionCompleted ? 'completed' : completed ? 'failed' : 'unknown'
       const completedAt = completed ? this.#clock() : null
+      const resultText = String(result?.text ?? '').slice(0, 16000)
       const receipt = {
         ...requested, state, callState: completed ? 'completed' : 'unknown',
-        resultText: String(result?.text ?? '').slice(0, 16000),
+        selectionRefs: selectionRefs(resultText, state),
         finishKind: result?.finishKind ?? error?.finishKind ?? null, usage,
         budgetReservation: completed ? this.#settledReservation(reservation, usage) : requested.budgetReservation,
         completedAt,
-        reason: selectionCompleted ? null : completed ? `模型已结束但选择输出不可用：${error instanceof Error ? error.message : String(error)}`
-          : `模型选择回执未知：${error instanceof Error ? error.message : String(error)}；不会自动重试`,
+        reason: selectionCompleted ? null : completed ? '模型已结束但选择输出不可用；不会自动重试'
+          : '模型选择回执未知；不会自动重试',
       }
       writeRecallSelection(root, receipt)
       this.#recordUsage({ at: completedAt ?? this.#clock(), promptTokens: built.promptTokens, usage, outcome: state })
@@ -356,19 +408,31 @@ export class CapturePipeline {
       const messages = (event.data?.inserted ?? []).filter(isNativeUserInput)
         .map(message => ({ message, text: textOfContent(message.content) }))
       if (messages.some(({ text }) => looksSensitive(text) || analyzeUserMessageControls(text).noSaveDirective)) return
+      const eventTime = sourceEventTime(event.time)
+      if (eventTime !== undefined && messages.length) {
+        const times = this.#queuedUserTimes.get(session) ?? new Map()
+        for (const { message } of messages) {
+          if (!times.has(message.id)) times.set(message.id, { eventTime, timeZone: message.source.clientTimeZone })
+        }
+        while (times.size > 64) times.delete(times.keys().next().value)
+        this.#queuedUserTimes.set(session, times)
+      }
       for (const { message, text } of messages) {
         if (isBareRemember(text)) this.#startRemembering(session, event, message)
-        else if (explicitRememberText(text) !== null) this.#persistMessage(this.#messageInput(session, { data: message }, 'user', text))
+        else if (explicitRememberText(text) !== null) this.#persistMessage(this.#messageInput(session, { ...event, data: message }, 'user', text))
       }
       return
     }
     if (event.type === 'user/message') {
       const text = textOfContent(event.data?.content)
+      const times = this.#queuedUserTimes.get(session), messageId = event.data?.id
+      const submission = times?.get(messageId)
+      times?.delete(messageId)
       if (this.#config.capture.enabled && !this.#buffers.get(sessionId)?.privacy &&
           isNativeUserInput(event.data) && isBareRemember(text)) {
         this.#startRemembering(session, event, event.data)
       }
-      if (text !== '') this.#push(session, event, 'user', text)
+      if (text !== '') this.#push(session, event, 'user', text, submission)
       return
     }
     if (event.type === 'assistant/message') {
@@ -447,6 +511,7 @@ export class CapturePipeline {
   /** Abort the in-flight request; journaled sources and tasks survive. */
   dispose() {
     this.#disposed = true
+    this.#sourceFootprint?.dispose()
     clearTimeout(this.#budgetTimer)
     this.#budgetTimer = null
     this.#budgetWakeAt = null
@@ -497,13 +562,15 @@ export class CapturePipeline {
     }))
     const intakes = readTurnIntakes(root)
     const health = captureJournalHealth(root)
+    const footprint = this.#sourceFootprint?.read()
     return {
       counts: countCaptureTasks(allTasks),
       tasks,
       budget: this.#budgetStatus(allTasks),
       health,
       degraded: health.corruptTasks > 0 || intakes.corrupt > 0,
-      storage: captureStorageStatus(root),
+      storageState: footprint?.state ?? 'unavailable',
+      storage: footprint?.sources ? captureStorageStatus(root, footprint.sources) : null,
       intakes: {
         total: intakes.intakes.length,
         pending: intakes.intakes.filter((intake) => intake.status === 'pending').length,
@@ -523,12 +590,21 @@ export class CapturePipeline {
     return { pruned: null, compressed: { ...compressed, compacted }, storage: captureStorageStatus(root) }
   }
 
+  async maintainInBackground() {
+    const root = this.#store?.root
+    if (typeof root !== 'string') return
+    const shouldContinue = () => !this.#disposed && this.#config.maintenance.enabled
+    await compressCaptureSourcesInBatches(root, shouldContinue)
+    if (shouldContinue()) compactCaptureLedgers(root)
+  }
+
   /** Explicit retry for an unknown/failed task; never called automatically. */
   retry(taskId, options = {}) {
     const root = this.#store?.root
     if (typeof root !== 'string') return { ok: false, reason: 'storage unavailable' }
     const task = readCaptureTasks(root).find((entry) => entry.id === taskId)
     if (task === undefined) return { ok: false, reason: 'task not found' }
+    if (task.revokedOnRestore === true) return { ok: false, reason: '来源受禁存凭据保护，不能重新提炼' }
     if (task.status === 'running') return { ok: false, reason: 'task is still running' }
     if (task.status === 'done') return { ok: false, reason: 'task already finished' }
     if (task.status === 'unknown' && options.confirmUnknown !== true) {
@@ -608,7 +684,8 @@ export class CapturePipeline {
       resumeAt: null,
       completion: partial,
       ...(clearStoredResult
-        ? { resultText: undefined, resultTruncated: undefined, resultUsage: undefined, resultParseFailed: undefined, replay: false }
+        ? { resultText: undefined, resultTruncated: undefined, resultUsage: undefined, resultParseFailed: undefined,
+            resultFinishKind: undefined, resultFailureCode: undefined, replay: false }
         : { replay: true }),
     })
     this.#scheduleDrain()
@@ -703,7 +780,7 @@ export class CapturePipeline {
     return touched
   }
 
-  #messageInput(session, event, role, text) {
+  #messageInput(session, event, role, text, submission) {
     const message = role === 'user' ? event.data : event.data?.message
     const messageId = typeof message?.id === 'string' ? message.id : null
     const sourceKind = typeof message?.source?.kind === 'string' ? message.source.kind : 'unknown'
@@ -716,12 +793,21 @@ export class CapturePipeline {
       sourceKind,
       sourceForm,
       eventSeq: event.seq,
-      eventTime: event.time,
+      eventTime: submission?.eventTime ?? event.time,
+      // Admission can occur long after submission, including after restart.
+      timeZone: submission?.timeZone ?? (event.type === 'agent/inbox/spliced' ? message?.source?.clientTimeZone : undefined),
       role,
       at: this.#clock(),
       text,
     }
-    return { ...input, id: sourceIdOf(input) }
+    const id = sourceIdOf(input)
+    if (role === 'user' && sourceKind === 'user' && event.type === 'user/message' && this.#store?.root && projectKey) {
+      const previous = precedingUserSourceId(session, { ...input, sourceId: id })
+      if (previous && hasSourceRecallGrant(this.#store.root, previous, projectKey)) {
+        return { ...input, id, previousUserSourceId: previous }
+      }
+    }
+    return { ...input, id }
   }
 
   #persistMessage(input) {
@@ -743,9 +829,9 @@ export class CapturePipeline {
     return source
   }
 
-  #push(session, event, role, text) {
+  #push(session, event, role, text, submission) {
     if (!this.#config.capture.enabled) return
-    const source = this.#messageInput(session, event, role, text)
+    const source = this.#messageInput(session, event, role, text, submission)
     let buffer = this.#buffers.get(session.id)
     if (buffer === undefined) {
       buffer = { sources: [], privacy: null }
@@ -1128,10 +1214,10 @@ export class CapturePipeline {
     try {
       result = await this.#collect(route, prompt, maxTokens)
     } catch (error) {
-      // A stream that ended with a terminal but unusable reason is a known
-      // failure; a transport drop after the request was sent is unknown.
+      // Only a provider outcome, not a host-side stream failure, settles the call.
       if (error?.completed === true) {
         const receipt = { resultFinishKind: error.finishKind, resultUsage: error.usage ?? null,
+          ...(error.failureCode === undefined ? {} : { resultFailureCode: error.failureCode }),
           reasoningChars: error.reasoningChars ?? 0, promptTokens, transcriptChars: transcript.length, completedAt: this.#clock(),
           ...(automaticReservation === null ? {} : {
             budgetReservation: this.#settledReservation(automaticReservation, normalizeUsage(error.usage)),
@@ -1161,6 +1247,7 @@ export class CapturePipeline {
       updateCaptureTask(root, task.id, {
         status: 'unknown',
         callState: 'unknown',
+        resultFinishKind: error?.finishKind,
         reason: `模型提取结果未知：${error instanceof Error ? error.message : String(error)}；请确认后手动重试`,
       })
       this.#logger?.warn?.('[dsh-memory] extraction result unknown; task left for explicit retry')
@@ -1617,34 +1704,39 @@ export class CapturePipeline {
     let finish
     let usage = null
     let reasoningChars = 0
-    for await (const chunk of llm.stream({
-      provider: route.provider,
-      model: route.model,
-      ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-      maxTokens: maxTokens ?? this.#config.extraction.maxOutputTokens,
-      signal,
-    })) {
-      if (chunk.type === 'text-delta') text += chunk.text
-      else if (chunk.type === 'reasoning-delta') reasoningChars += String(chunk.text ?? '').length
-      else if (chunk.type === 'finish') {
-        finish = chunk.reason
-        usage = normalizeUsage(chunk.usage) ?? usage
-      } else if (chunk.type === 'usage') {
-        usage = normalizeUsage(chunk.usage ?? chunk) ?? usage
+    try {
+      for await (const chunk of llm.stream({
+        provider: route.provider,
+        model: route.model,
+        ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+        messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+        maxTokens: maxTokens ?? this.#config.extraction.maxOutputTokens,
+        signal,
+      })) {
+        // DSH may emit a second finish for a failure in adapter cleanup. Keep
+        // the model's first terminal result and continue reading accounting.
+        if (!MODEL_FINISHES.has(finish?.kind)) {
+          if (chunk.type === 'text-delta') text += chunk.text
+          else if (chunk.type === 'reasoning-delta') reasoningChars += String(chunk.text ?? '').length
+          else if (chunk.type === 'finish') finish = chunk.reason
+        }
+        if (chunk.type === 'usage') usage = normalizeUsage(chunk.usage ?? chunk) ?? usage
+        else if (chunk.usage !== undefined) usage = normalizeUsage(chunk.usage) ?? usage
       }
-      if (chunk.usage !== undefined && chunk.type !== 'usage') usage = normalizeUsage(chunk.usage) ?? usage
+    } catch (error) {
+      if (!MODEL_FINISHES.has(finish?.kind)) throw error
     }
     if ((finish?.kind === 'length' || finish?.kind === 'max-tokens') && text.trim() !== '') {
       return { text, truncated: true, usage, finishKind: finish.kind, reasoningChars }
     }
     if (finish?.kind !== 'stop') {
+      const code = finish?.failure?.code
+      const refused = finish?.kind === 'error' && usage === null && text === '' && reasoningChars === 0 &&
+        CONFIRMED_REJECTIONS.has(code)
       const error = new Error(`extraction stream ended with ${finish?.kind ?? 'missing-finish'}`)
-      error.uncertain = true
       error.finishKind = finish?.kind ?? 'missing-finish'
-      // A missing finish means the transport may still be in flight; any
-      // terminal finish receipt (including length/max-tokens) is a known end.
-      error.completed = finish !== undefined
+      error.completed = MODEL_FINISHES.has(finish?.kind) || refused
+      if (refused) error.failureCode = code
       error.usage = usage
       error.reasoningChars = reasoningChars
       throw error

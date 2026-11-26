@@ -1,6 +1,6 @@
 /** Bind a data root to the native profileContext service supplied by DSH. */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, basename, isAbsolute, join, resolve } from 'node:path'
 import { atomicWritePrivate, withFileLock } from './persistence.js'
 
@@ -11,6 +11,18 @@ function canonical(path) {
     if (error.code !== 'ENOENT') throw error
     return join(canonical(dirname(path)), basename(path))
   }
+}
+
+export function readDataOwner(root) {
+  const file = join(root, 'data-owner.json')
+  const stat = lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('memory profile owner marker is not a regular file')
+  const owner = JSON.parse(readFileSync(file, 'utf8'))
+  if (owner?.version !== 1 || !['profile', 'explicit'].includes(owner.kind) ||
+      typeof owner.identity !== 'string' || !/^[a-f0-9]{64}$/u.test(owner.identity)) {
+    throw new Error('memory profile owner marker is invalid; service refused to open this data root')
+  }
+  return owner
 }
 
 export function prepareStorage(ctx, config) {

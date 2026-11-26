@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import test from 'node:test'
 
 import { resolveConfig } from '../host/config.js'
+import { createCompleteBackup, verifyBackup } from '../host/backup.js'
 import { pruneBackups, runMaintenance } from '../host/maintenance.js'
 import { MemoryStore } from '../host/store.js'
 
@@ -95,4 +96,51 @@ test('pruneBackups keeps the newest files', (t) => {
   const removed = pruneBackups(root, 7)
   assert.equal(removed, 2)
   assert.equal(readdirSync(dir).filter((name) => name.startsWith('memories-')).length, 7)
+})
+
+function seedSmallNotes(root) {
+  const notes = join(root, 'knowledge')
+  mkdirSync(notes, { recursive: true })
+  for (let i = 0; i < 128; i++) writeFileSync(join(notes, `note-${i}.md`), `# Knowledge note ${i}\n`)
+}
+
+test('automatic maintenance keeps one verified backup of each format within its retention limit', async t => {
+  const { root, store } = setup(t)
+  seedSmallNotes(root)
+  const compatible = await createCompleteBackup(root, NOW, 'compatible')
+  const olderFast = await createCompleteBackup(root, NOW + 1000, 'fast')
+  const newestFast = await createCompleteBackup(root, NOW + 2000, 'fast')
+  const corruptFast = await createCompleteBackup(root, NOW + 3000, 'fast')
+  for (const [index, path] of [compatible, olderFast, newestFast, corruptFast].entries()) {
+    const date = new Date(NOW + index * 1000)
+    utimesSync(path, date, date)
+  }
+  const payloads = join(corruptFast, 'payloads')
+  writeFileSync(join(payloads, readdirSync(payloads)[0]), 'broken')
+
+  const config = resolveConfig({ maintenance: { backupKeep: 2 } })
+  const result = await runMaintenance({ store, config, now: NOW + 4000 })
+  assert.equal(result.backedUp, null)
+  assert.equal(result.pruned, 2)
+  assert.deepEqual(readdirSync(join(root, 'backups')).sort(), [basename(compatible), basename(newestFast)].sort())
+  assert.equal((await verifyBackup(compatible)).version, 2)
+  assert.equal((await verifyBackup(newestFast)).version, 4)
+
+  const one = resolveConfig({ maintenance: { backupKeep: 1 } })
+  assert.equal((await runMaintenance({ store, config: one, now: NOW + 5000 })).pruned, 1)
+  assert.deepEqual(readdirSync(join(root, 'backups')), [basename(newestFast)])
+})
+
+test('a recent packed knowledge backup does not postpone the daily compatible backup', async t => {
+  const { root, store } = setup(t)
+  seedSmallNotes(root)
+  const fast = await createCompleteBackup(root, NOW, 'fast')
+  assert.equal((await verifyBackup(fast)).version, 4)
+
+  const config = resolveConfig({ maintenance: { backupKeep: 2 } })
+  const result = await runMaintenance({ store, config, now: NOW + 1000 })
+  assert.equal(result.backupError, null)
+  assert.ok(result.backedUp)
+  assert.equal((await verifyBackup(result.backedUp)).version, 2)
+  assert.deepEqual(readdirSync(join(root, 'backups')).sort(), [basename(fast), basename(result.backedUp)].sort())
 })

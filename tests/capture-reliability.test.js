@@ -36,7 +36,8 @@ function fakeLlm(reply, options = {}) {
     }
     const text = typeof reply === 'function' ? reply(calls, input) : reply
     yield { type: 'text-delta', text }
-    yield { type: 'finish', reason: { kind: options.finishKind ?? 'stop' }, usage: options.usage }
+    yield { type: 'finish', reason: options.finishReason ?? { kind: options.finishKind ?? 'stop' }, usage: options.usage }
+    if (options.trailingError) throw options.trailingError
   }
   return {
     calls: () => calls,
@@ -439,7 +440,7 @@ test('a negation replaces the earlier statement and keeps both revisions', async
 test('a terminal but unusable model response is a known failure, not unknown', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-capture-known-failure-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  const llm = fakeLlm(() => replyFor([]), { finishKind: 'error' })
+  const llm = fakeLlm(() => replyFor([]), { finishKind: 'tool-calls' })
   const { pipeline } = makePipeline(root, t, { llm })
   feed(pipeline, sessionFor(), '这个仓库用 pnpm 管理依赖。')
   await pipeline.flush()
@@ -450,6 +451,88 @@ test('a terminal but unusable model response is a known failure, not unknown', a
   assert.equal(llm.calls(), 1)
 })
 
+
+test('host transport and cancellation finishes require confirmation before sending again', async t => {
+  const cases = [['error', 'TRANSPORT'], ['aborted', 'ABORTED'], ['error', 'UNKNOWN']]
+  for (const [kind, code] of cases) await t.test(code, async child => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-capture-host-failure-'))
+    child.after(() => rmSync(root, { recursive: true, force: true }))
+    const llm = fakeLlm('{"memories":[', { finishReason: { kind, failure: { code, message: 'stream closed before provider finish' } } })
+    const { pipeline } = makePipeline(root, child, { llm })
+    feed(pipeline, sessionFor(), '这个仓库用 pnpm 管理依赖。')
+    await pipeline.flush()
+    const task = readCaptureTasks(root)[0]
+    assert.equal(task.status, 'unknown')
+    assert.equal(task.callState, 'unknown')
+    assert.equal(task.budgetReservation.state, 'reserved')
+    assert.equal(pipeline.retry(task.id).ok, false)
+    pipeline.dispose()
+    const restarted = makePipeline(root, child, { llm }).pipeline
+    await restarted.resume()
+    assert.equal(restarted.retry(task.id).ok, false)
+    assert.equal(llm.calls(), 1)
+    restarted.dispose()
+  })
+})
+
+test('an explicit provider refusal stays a known failure after restart', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-capture-refusal-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const llm = fakeLlm('', { finishReason: { kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, message: 'request refused' } } })
+  const { pipeline } = makePipeline(root, t, { llm })
+  feed(pipeline, sessionFor(), '这个仓库用 pnpm 管理依赖。')
+  await pipeline.flush()
+  pipeline.dispose()
+  const restarted = makePipeline(root, t, { llm }).pipeline
+  await restarted.resume()
+  const task = readCaptureTasks(root)[0]
+  assert.equal(task.status, 'failed')
+  assert.equal(task.callState, 'completed')
+  assert.equal(task.budgetReservation.state, 'settled')
+  assert.equal(llm.calls(), 1)
+  restarted.dispose()
+})
+
+test('a legacy host error without a confirmed rejection cannot be resent without confirmation', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-capture-legacy-host-error-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const id = captureTaskIdOf({ sessionId: 'session-a', turnKey: 'old-error', segmentIndex: 0, sourceIds: [], total: 1 })
+  writeCaptureTask(root, { id, sessionId: 'session-a', turnKey: 'old-error', sourceIds: [], status: 'failed',
+    callState: 'completed', resultFinishKind: 'error', attempts: 1, automaticCallDay: '2023-11-14',
+    automaticCalls: 1, automaticCallAt: NOW, lastCallAt: NOW })
+  const { pipeline, llm } = makePipeline(root, t)
+  await pipeline.resume()
+  const task = readCaptureTasks(root)[0]
+  assert.equal(task.status, 'unknown')
+  assert.equal(task.resultFinishKind, 'error')
+  assert.equal(task.attempts, 1)
+  assert.equal(task.automaticCalls, 1)
+  assert.equal(pipeline.retry(id).ok, false)
+  assert.equal(llm.calls(), 0)
+  pipeline.dispose()
+})
+
+test('a provider stop and usage survive an exception during stream cleanup', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-capture-cleanup-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const fact = '桦木构建使用 pnpm 管理依赖。'
+  const llm = fakeLlm(JSON.stringify({ complete: true, memories: [{ op: 'ADD', content: fact, kind: 'fact',
+    scope: 'project', confidence: .93 }] }), {
+    usage: { inputTokens: 12, outputTokens: 6, totalTokens: 18 }, trailingError: Error('adapter cleanup failed')
+  })
+  const { pipeline, store } = makePipeline(root, t, { llm })
+  feed(pipeline, sessionFor(), fact)
+  await pipeline.flush()
+  const task = readCaptureTasks(root)[0]
+  assert.equal(task.status, 'done')
+  assert.equal(task.callState, 'completed')
+  assert.equal(task.resultFinishKind, 'stop')
+  assert.equal(task.resultUsage.totalTokens, 18)
+  assert.equal(store.list('project', projectIdentity(CWD).key)[0]?.content, fact)
+  assert.equal(pipeline.retry(task.id).ok, false)
+  assert.equal(llm.calls(), 1)
+  pipeline.dispose()
+})
 
 test('capture.minTurnChars is enforced and explicit short turns still pass', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-capture-min-chars-'))

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { buildKnowledgeGraph, promoteMemoryToKnowledge, readKnowledgeNote } from '../host/knowledge.js'
+import { MemoryStore } from '../host/store.js'
 import {
   exportKnowledgeToVault,
   importKnowledgeFromVault,
@@ -32,7 +33,9 @@ function setup(t) {
     rmSync(root, { recursive: true, force: true })
     rmSync(vault, { recursive: true, force: true })
   })
-  const local = promoteMemoryToKnowledge(root, RECORD)
+  const result = new MemoryStore({ root }).open().write(RECORD)
+  assert.equal(result.ok, true)
+  const local = promoteMemoryToKnowledge(root, result.record)
   return { root, vault, local, folder: 'DSH Memory' }
 }
 

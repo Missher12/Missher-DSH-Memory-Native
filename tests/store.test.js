@@ -45,6 +45,24 @@ test('write persists a record that a fresh store loads', (t) => {
   assert.equal(records[0].content, '该仓库使用 pnpm 并要求 Node 22 以上')
 })
 
+test('listAll returns every record even when a single cached project exceeds the argument limit', (t) => {
+  const store = makeStore(tempRoot(t))
+  assert.ok(store.write({ scope: 'global', kind: 'fact', content: '全局配置约定', confidence: .9 }, { id: 'global' }).ok)
+  assert.ok(writeFact(store).ok)
+  const state = store.snapshot().get(`project:${KEY}`)
+  const count = 160_000
+  state.records = new Map()
+  for (let index = 0; index < count; index++) {
+    const id = `memory-${index}`
+    state.records.set(id, { id, status: 'active', updatedAt: NOW + index })
+  }
+  const all = store.listAll()
+  assert.equal(all.length, count + 1)
+  assert.equal(all[0].id, 'global')
+  assert.equal(all[1].id, `memory-${count - 1}`)
+  assert.equal(all.at(-1).id, 'memory-0')
+})
+
 test('update appends a revision and keeps only the latest', (t) => {
   const root = tempRoot(t)
   const store = makeStore(root)
@@ -245,4 +263,18 @@ test('history lists every revision and purge removes all of them', (t) => {
   assert.deepEqual(store.history(created.id, scopes), [])
   const raw = readJsonl(join(root, 'projects', KEY, 'memories.jsonl'))
   assert.equal(raw.records.length, 0)
+})
+
+test('targeted history includes an escaped legacy ID and excludes mentions by another record', t => {
+  const root = tempRoot(t), store = makeStore(root)
+  const scope = [{ scope: 'global', projectKey: null }]
+  const id = 'mem_escaped'
+  const first = store.write({ kind:'fact', scope:'global', content:'早期修订。' }, { id }).record
+  const later = store.update(id, { content:'当前修订。' }, scope)
+  store.write({ kind:'fact', scope:'global', content:'文本里提及 "mem_escaped" 的另一条记忆。' })
+  const file = join(root,'global','memories.jsonl')
+  const older = readFileSync(file,'utf8').replace('"id":"mem_escaped"','"\\u0069d":"mem_\\u0065scaped"')
+  assert.match(older,/\\u0069d/u)
+  writeFileSync(file,older + '\ncorrupt line\n')
+  assert.deepEqual(makeStore(root).history(id,scope),[later,first])
 })
